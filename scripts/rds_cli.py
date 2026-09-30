@@ -427,14 +427,18 @@ def cmd_plan(args, rds, advisory=False):
             require(digest(plan) == existing["binding"]["plan_sha256"], "Plan ID reused with changed contents")
             return {"plan_id": plan["id"], "run_status": existing["run_status"], "idempotent": True}
         binding = validate_plan(plan, state, rds, admission=binding)
+        branch_id = state.get("active_branch", "main")
+        require(branch_id in state["branches"], "Unknown planning branch")
         state["plans"][plan["id"]] = {"spec": plan, "binding": binding, "run_status": "RESERVED",
-                                       "run_id": "RUN-" + uuid.uuid4().hex, "assessment": None}
+                                       "run_id": "RUN-" + uuid.uuid4().hex, "assessment": None,
+                                       "branch_id": branch_id}
         for key, value in plan["resources"].items():
             state["budget"]["reserved"][key] += value
         if plan["purpose"] == "confirm":
             state["final_plan"] = plan["id"]
         rds.artifact(db, binding["source"].encode("utf-8"))
-        rds.event(db, "PLAN_RESERVED", plan_id=plan["id"], binding=binding, resources=plan["resources"])
+        rds.event(db, "PLAN_RESERVED", plan_id=plan["id"], branch_id=branch_id,
+                  binding=binding, resources=plan["resources"])
     return {"plan_id": plan["id"], "run_status": "RESERVED", "binding": binding}
 
 
@@ -601,6 +605,15 @@ def assess(result, contract, purpose, clean, formal):
     return outcome
 
 
+def plan_branch(state, plan):
+    """Use locked ownership; older plans need a unique recorded hypothesis owner."""
+    if "branch_id" in plan:
+        return plan["branch_id"]
+    owners = [bid for bid, branch in state.get("branches", {}).items()
+              if plan["spec"]["hypothesis_id"] in branch.get("hypotheses", [])]
+    return owners[0] if len(owners) == 1 else None
+
+
 def cmd_decide(args, rds):
     with rds.transaction() as (db, state):
         require(engine_id() == state["engine_sha256"], "Verifier changed; old receipts require versioned review")
@@ -621,15 +634,15 @@ def cmd_decide(args, rds):
         require(receipt["run_status"] == "SUCCEEDED" and plan["run_status"] == "SUCCEEDED",
                 "Execution failure is not scientific refutation")
         if plan["assessment"] is not None:
-            active_b = state.get("active_branch", "main")
-            branch_info = state.get("branches", {}).get(active_b, {})
+            active_b = plan_branch(state, plan)
+            branch_info = state.get("branches", {}).get(active_b)
             stagnation_report = {
                 "branch_id": active_b,
                 "stagnation_count": branch_info.get("stagnation_count", 0),
                 "stagnated": branch_info.get("stagnation_count", 0) >= 3,
                 "threshold": 3,
                 "recommendation": "IDEMPOTENT_DECISION"
-            }
+            } if branch_info is not None else None
             return {"assessment": plan["assessment"], "idempotent": True,
                     "stagnation": stagnation_report,
                     "current_task_gain": state["hypotheses"][plan["spec"]["hypothesis_id"]]["task_gain"]}
@@ -645,7 +658,7 @@ def cmd_decide(args, rds):
         rds.event(db, "ASSESSMENT_RECORDED", **plan["assessment"])
 
         # Policy RSI: Stagnation tracking (FML-Bench v2)
-        active_b = state.get("active_branch", "main")
+        active_b = plan_branch(state, plan)
         branch_info = state.get("branches", {}).get(active_b)
         stagnation_report = None
         if branch_info is not None:

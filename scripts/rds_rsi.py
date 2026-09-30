@@ -127,8 +127,8 @@ def _grade(output, expected):
     for row in rows:
         aid = row.get("action", {}).get("id") or row.get("action_id")
         if aid:
-            actions[aid] = row["status"]
-    ready = {aid for aid, status in actions.items() if status == "READY"}
+            actions.setdefault(aid, set()).add(row["status"])
+    ready = {aid for aid, statuses in actions.items() if "READY" in statuses}
     ready.update(c["id"] for c in output.get("candidates", []) if c.get("status") == "READY" and "interventions" in c)
     blocked = {c.get("rule_id") for c in output.get("blocked_candidates", [])}
     queries = {q.get("fact") for q in output.get("queries", [])}
@@ -136,14 +136,17 @@ def _grade(output, expected):
     interventions = {_json(i) for c in output.get("candidates", []) for i in c.get("interventions", [])}
     errors = []
     for aid, status in expected.get("required_actions", {}).items():
-        if actions.get(aid) != status:
-            errors.append(f"action {aid}: expected {status}, observed {actions.get(aid, 'ABSENT')}")
+        # Presence is existential; ready-action constraints apply to every rule.
+        if status not in actions.get(aid, set()):
+            observed = sorted(actions[aid]) if aid in actions else "ABSENT"
+            errors.append(f"action {aid}: expected {status}, observed {observed}")
     if not set(expected.get("required_blocked_rules", [])) <= blocked:
         errors.append("required blocked rule absent")
-    if set(expected.get("forbidden_ready_actions", [])) & ready:
-        errors.append("forbidden action became READY")
+    forbidden = set(expected.get("forbidden_ready_actions", [])) & ready
+    if forbidden:
+        errors.append("forbidden action became READY: " + ", ".join(sorted(forbidden)))
     if "allowed_ready_actions" in expected and not ready <= set(expected["allowed_ready_actions"]):
-        errors.append("undeclared action became READY")
+        errors.append("undeclared action became READY: " + ", ".join(sorted(ready - set(expected["allowed_ready_actions"]))))
     if not set(expected.get("required_queries", [])) <= queries:
         errors.append("required evidence query absent")
     if not {_json(i) for i in expected.get("required_interventions", [])} <= interventions:
@@ -154,8 +157,9 @@ def _grade(output, expected):
     if count < expected.get("minimum_candidates", 0) or count > expected.get("maximum_candidates", 64):
         errors.append("candidate count outside expected range")
     if expected.get("no_ready") and ready:
-        errors.append("unexpected READY candidate")
-    return {"passed": not errors, "errors": errors}
+        errors.append("unexpected READY candidate: " + ", ".join(sorted(ready)))
+    return {"passed": not errors, "errors": errors,
+            "action_statuses": {aid: sorted(actions[aid]) for aid in sorted(actions)}}
 
 
 def _run(graph, case, budget):

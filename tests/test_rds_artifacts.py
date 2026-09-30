@@ -177,6 +177,68 @@ class ImportTests(unittest.TestCase):
         self.assertEqual(result["facts"]["loss"]["kind"], "UNKNOWN")
         self.assertEqual(result["context"]["costs"]["inspect"]["value"], None)
 
+    def test_empty_fact_receipt_conflict_keeps_raw_cost_and_other_runs_usable(self):
+        receipt = {"run_id": "r1", "run_status": "SUCCEEDED", "binding": self.binding,
+                   "resources": {"wall_seconds": {"measured": 2, "unit": "seconds"}}}
+        receipt["sha256"] = digest(receipt)
+        disputed = deepcopy(self.binding)
+        disputed["data_split"] = "holdout"
+        bad = self.source("bad-receipt.json", "receipt", receipt, [], binding=disputed)
+        other = deepcopy(self.binding)
+        other["run_id"] = "r2"
+        clean_receipt = {"run_id": "r2", "run_status": "SUCCEEDED", "binding": other,
+                         "resources": {"wall_seconds": {"measured": 3, "unit": "seconds"}}}
+        clean_receipt["sha256"] = digest(clean_receipt)
+        clean = self.source("clean-receipt.json", "receipt", clean_receipt, [], binding=other)
+        costs = [{"action_id": action, "run_id": run, "resource": "wall_seconds", "comparison_group": "same-protocol"}
+                 for action, run in (("disputed", "r1"), ("clean", "r2"))]
+        result = self.run_import([bad, clean], cost_bindings=costs)
+        self.assertEqual(result["status"], "CONFLICT")
+        self.assertEqual(result["facts"], {})
+        self.assertEqual(result["conflicts"][0]["fields"], ["data_split"])
+        disputed_cost, clean_cost = (result["context"]["costs"][key] for key in ("disputed", "clean"))
+        self.assertEqual((disputed_cost["value"], disputed_cost["kind"], disputed_cost.provenance_status),
+                         (None, "UNKNOWN", "UNKNOWN"))
+        self.assertFalse(disputed_cost["reliable"])
+        self.assertEqual(disputed_cost["declared_value"], 2)
+        self.assertEqual(disputed_cost["source"]["sha256"], receipt["sha256"])
+        self.assertIn("identity conflict", disputed_cost["reason"])
+        self.assertEqual((clean_cost["value"], clean_cost["kind"], clean_cost.provenance_status),
+                         (3, "OBSERVED", "ARTIFACT_OBSERVED"))
+        self.assertEqual([row["value"] for row in result["cost_report"]["measurements"]], [2, 3])
+
+    def test_empty_fact_sources_conflict_with_receipt_or_store_receipt(self):
+        metric = self.source("metric.json", "metric", {"loss": 0.2}, [])
+        other = deepcopy(self.binding)
+        other["data_split"] = "holdout"
+        receipt = {"run_id": "r1", "run_status": "SUCCEEDED", "binding": other,
+                   "resources": {"wall_seconds": {"measured": 2, "unit": "seconds"}}}
+        receipt["sha256"] = digest(receipt)
+        source = self.source("receipt.json", "receipt", receipt, [], binding=other)
+        costs = [{"action_id": "inspect", "run_id": "r1", "resource": "wall_seconds", "comparison_group": "same-protocol"}]
+        for sources, receipts in (([metric, source], None), ([source, metric], None), ([metric], [receipt])):
+            with self.subTest(sources=[s["id"] for s in sources], store_receipt=receipts is not None):
+                result = self.run_import(sources, receipts=receipts, cost_bindings=costs)
+                cost = result["context"]["costs"]["inspect"]
+                self.assertEqual(result["status"], "CONFLICT")
+                self.assertEqual(result["facts"], {})
+                self.assertEqual((cost["value"], cost["kind"]), (None, "UNKNOWN"))
+                self.assertEqual(cost["declared_value"], 2)
+
+    def test_conflicting_declared_run_id_cannot_leave_actual_receipt_cost_usable(self):
+        receipt = {"run_id": "r1", "run_status": "SUCCEEDED", "binding": self.binding,
+                   "resources": {"wall_seconds": {"measured": 2, "unit": "seconds"}}}
+        receipt["sha256"] = digest(receipt)
+        wrong_run = deepcopy(self.binding)
+        wrong_run["run_id"] = "different-run"
+        source = self.source("receipt.json", "receipt", receipt, [], binding=wrong_run)
+        costs = [{"action_id": "inspect", "run_id": "r1", "resource": "wall_seconds", "comparison_group": "same-protocol"}]
+        result = self.run_import([source], cost_bindings=costs)
+        self.assertEqual(result["conflicts"][0]["fields"], ["run_id"])
+        cost = result["context"]["costs"]["inspect"]
+        self.assertEqual((cost["value"], cost["kind"]), (None, "UNKNOWN"))
+        self.assertEqual(cost["declared_value"], 2)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
