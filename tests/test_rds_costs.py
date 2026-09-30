@@ -45,8 +45,12 @@ class CostsTests(unittest.TestCase):
         (base / "protocol").write_bytes(raw)
         inputs.append({"role": "protocol", "path": "protocol", "sha256": digest(raw)})
         (base / "out").write_bytes(b"ok")
+        argv = [sys.executable, "-B", "code", "--arm", "control"]
+        operation = {"arm": "control", "argv": argv, "cwd": str(base)}
+        operation.update(extra)
         return receipt(protocol=identity, bindings_before=inputs, bindings_after=deepcopy(inputs),
-                       artifacts=[{"path": "out", "sha256": digest(b"ok")}], **extra), {"protocol": identity}
+                       artifacts=[{"path": "out", "sha256": digest(b"ok")}], **operation), {
+                           "protocol": identity, "arm": "control", "argv": argv}
 
     def test_empty_receipts_leave_cost_unknown(self):
         result = summarize_costs([])
@@ -126,6 +130,65 @@ class CostsTests(unittest.TestCase):
             result = check_control_reuse(control, current, base)
             self.assertFalse(result["reusable"])
             self.assertTrue(any("code" in r and "hash" in r for r in result["reasons"]))
+
+    def test_treatment_or_different_argv_is_not_the_same_control(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            control, current = self.make_control(base)
+            for arm in ("control", "treatment"):
+                candidate = deepcopy(control)
+                candidate["arm"] = arm
+                candidate["argv"][-1] = "treatment"
+                result = check_control_reuse(rehash(candidate), current, base)
+                self.assertFalse(result["reusable"])
+                self.assertEqual(result["operation_identity"]["status"], "MISMATCH")
+                self.assertIn("control operation mismatch: argv", result["reasons"])
+                if arm == "treatment":
+                    self.assertIn("candidate arm is not control", result["reasons"])
+                    self.assertIsNone(result["control_run_id"])
+            changed_current = deepcopy(current)
+            changed_current["arm"] = "treatment"
+            self.assertFalse(check_control_reuse(control, changed_current, base)["reusable"])
+
+    def test_missing_operation_identity_cannot_reuse_a_bare_protocol(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            control, current = self.make_control(base)
+            for candidate_key in ("arm", "argv", "cwd"):
+                candidate = deepcopy(control)
+                candidate.pop(candidate_key)
+                result = check_control_reuse(rehash(candidate), current, base)
+                self.assertFalse(result["reusable"])
+                self.assertEqual(result["operation_identity"]["status"], "UNKNOWN")
+            for expected in (current["protocol"], {"protocol": current["protocol"]},
+                             {**current, "argv": []}, {**current, "argv": "python code"}):
+                result = check_control_reuse(control, expected, base)
+                self.assertFalse(result["reusable"])
+                self.assertEqual(result["operation_identity"]["status"], "UNKNOWN")
+
+    def test_registered_control_run_has_complete_current_operation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            control, current = self.make_control(base)
+            run = {"protocol": current["protocol"], "manifest": {
+                "arm": "control", "argv": current["argv"]}}
+            result = check_control_reuse(control, run, base)
+            self.assertTrue(result["reusable"])
+            self.assertEqual(result["operation_identity"]["status"], "MATCHED")
+            conflicting = {**run, "argv": [sys.executable, "different.py"]}
+            result = check_control_reuse(control, conflicting, base)
+            self.assertFalse(result["reusable"])
+            self.assertEqual(result["operation_identity"]["status"], "UNKNOWN")
+
+    def test_control_working_directory_must_match_the_actual_project(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            control, current = self.make_control(base)
+            for candidate, expected in ((rehash({**control, "cwd": str(base / "other")}), current),
+                                        (control, {**current, "cwd": str(base / "other")})):
+                result = check_control_reuse(candidate, expected, base)
+                self.assertFalse(result["reusable"])
+                self.assertEqual(result["operation_identity"]["status"], "MISMATCH")
 
     def test_nested_unknown_protocol_is_not_complete_identity(self):
         with tempfile.TemporaryDirectory() as directory:

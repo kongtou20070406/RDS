@@ -829,12 +829,27 @@ def cmd_meta(args, rds):
 def cmd_advise(args, rds):
     from rds_advisor import RDSAdvisor
     from rds_meta import load_judgment_graph
+    has_train = getattr(args, "train_loss", None) is not None
+    has_val = getattr(args, "val_loss", None) is not None
+    require(has_train == has_val, "Provide both --train-loss and --val-loss for fit diagnosis")
+    require(not (getattr(args, "fit_telemetry", None) or getattr(args, "baseline_loss", None) is not None)
+            or (has_train and has_val), "--fit-telemetry and --baseline-loss require --train-loss and --val-loss")
+    modes = [bool(getattr(args, name, None)) for name in ("literature", "telemetry", "doc", "plan")]
+    require(sum(modes) + int(has_train) <= 1, "Choose one Advisor mode per call")
+    has_context = bool(getattr(args, "research_context", None) or getattr(args, "artifacts", None))
+    require(not getattr(args, "templates", None) or has_context,
+            "--templates requires --research-context or --artifacts with a decision")
+    require(not (any(modes) or has_train) or not (has_context or getattr(args, "templates", None) or getattr(args, "graph", None)),
+            "Research context, artifacts, templates and graph require the direction-search mode")
+    require(not getattr(args, "topic", None) or getattr(args, "doc", None), "--topic requires --doc")
     advisor = RDSAdvisor(Path(args.root))
 
     if getattr(args, "literature", None):
         principles = advisor.query_literature_principles(args.literature)
         return {"advisor_type": "LITERATURE_PRINCIPLES_SURVEY", "query": args.literature,
                 "matches_count": len(principles), "principles": principles,
+                "status": "UNAVAILABLE" if advisor.literature_load_errors else "LOADED",
+                "literature_load_errors": advisor.literature_load_errors,
                 "assurance": "HEURISTIC_ONLY"}
     
     # These branches do not read research state. In particular, a solver must
@@ -932,6 +947,55 @@ def cmd_project(args):
     return store.snapshot()
 
 
+def _reference_binding_check(rds, snapshot):
+    """Check continuation bindings, reading each named input once at this boundary."""
+    files, errors, contents, hashes = [], [], {}, {}
+    def read(path, limit):
+        path = Path(path)
+        path = (rds.root / path).resolve() if not path.is_absolute() else path.resolve()
+        if path not in contents:
+            try:
+                contents[path] = read_bounded(path, limit)
+            except (ValueError, OSError) as exc:
+                contents[path] = exc
+        if isinstance(contents[path], Exception):
+            raise contents[path]
+        require(len(contents[path]) <= limit, "Bound input exceeds byte limit")
+        return path, contents[path]
+
+    def compare(path, expected, role, limit):
+        try:
+            path, raw = read(path, limit)
+            if path not in hashes:
+                hashes[path] = digest(raw)
+            require(hashes[path] == expected, f"Binding changed: {role}: {path}")
+            files.append({"path": str(path), "role": role, "status": "UNCHANGED"})
+        except (ValueError, KeyError, OSError, UnicodeError) as exc:
+            errors.append(f"{role}: {exc}")
+
+    contract = snapshot["contract"]
+    try:
+        path, raw = read(contract["baseline_source"], 8192)
+        control = ast.dump(parse_source(raw.decode("utf-8-sig"))["control"])
+        require(control == contract["baseline_control_ast"], f"Baseline computation changed: {path}")
+        files.append({"path": str(path), "role": "baseline_control", "status": "UNCHANGED"})
+    except (ValueError, KeyError, OSError, UnicodeError, SyntaxError) as exc:
+        errors.append(f"baseline_control: {exc}")
+    for split_id, split in contract["splits"].items():
+        compare(split["path"], split["sha256"], "split:" + split_id, 2_000_000)
+    for plan_id, plan in snapshot.get("plans", {}).items():
+        if plan.get("run_status") in {"RESERVED", "RUNNING", "RECOVERY_REQUIRED"}:
+            binding = plan.get("binding", {})
+            if "source_path" not in binding or "source_sha256" not in binding:
+                errors.append("Missing source binding for pending plan " + plan_id)
+            else:
+                compare(binding["source_path"], binding["source_sha256"], "pending_source:" + plan_id, 8192)
+    current_engine = engine_id()
+    if current_engine != snapshot.get("engine_sha256"):
+        errors.append("Reference engine changed; initialize a new contract before execution")
+    return {"files": files, "engine_sha256": current_engine, "errors": errors}
+
+
 def cmd_checkpoint(args, rds):
     from rds_checkpoints import restore_checkpoint, save_checkpoint
     kind = args.kind
@@ -943,6 +1007,8 @@ def cmd_checkpoint(args, rds):
     else:
         with rds.snapshot() as (_, snapshot):
             snapshot = dict(snapshot)
+        if args.action == "restore":
+            snapshot["binding_check"] = _reference_binding_check(rds, snapshot)
     if args.action == "save":
         return save_checkpoint(args.root, args.id, snapshot, kind=kind,
                                decision=load_spec(args.decision) if args.decision else None)
@@ -1150,7 +1216,7 @@ def main():
         else:
             result = cmd_status(args, rds)
         print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
-        if args.command == "project" and args.action in {"execute", "recover"} and result.get("run_status") in {"FAILED", "INTERRUPTED", "TIMED_OUT"}:
+        if args.command in {"project", "run"} and args.action in {"execute", "recover"} and result.get("run_status") in {"FAILED", "INTERRUPTED", "TIMED_OUT"}:
             return 1
         if args.command == "meta" and args.action == "evaluate-rule" and not result.get("adoption_eligible"):
             return 1

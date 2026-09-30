@@ -22,6 +22,8 @@ The example copies the current programs and real regression cases into that work
 
 Each CLI invocation is retained under `out/`. The raw execution logs are under `.rds/project-artifacts/`. A failing software check still consumes budget and retains its output. Repair that concrete failure in the source checkout, then start the next iteration in another empty workspace. Do not rerun unchanged passing workloads merely to obtain a better number.
 
+For the complete public regression suite, add `--all-tests`. This includes benchmark-backed test modules and copies their support package into the isolated workspace.
+
 ## Check identity at meaningful boundaries
 
 Hash checks serve artifact identity, execution admission/completion, control reuse, and rule adoption/rollback. Ordinary status, advice display and checkpoint saving read the operational ledger without hashing the whole project. Checkpoint restoration explicitly checks current input bindings because it is a continuation boundary. During artifact import, each unique file is read and hashed once; facts reuse its hash and original location rather than adding an unused hash to every value. Template equality uses ordinary canonical values; only the intervention fingerprint needs a compact hash for deduplication. A hash is not a research score.
@@ -57,12 +59,12 @@ New model proposals enter this finite template format and undergo the same check
 
 ```text
 python -B scripts/rds_cli.py --root <project> project costs
-python -B scripts/rds_cli.py --root <project> project control-check --candidate <completed-receipt.json> --current <current-protocol.json>
+python -B scripts/rds_cli.py --root <project> project control-check --candidate <completed-control-receipt.json> --current <expected-control.json>
 ```
 
 Cost reports include failed attempts, preserve each resource/unit separately, and distinguish measured resources from charged estimates. Wall time is not CPU or GPU time. Unknown cost is not zero. A manifest's explicit `cost_bindings` can associate an action with a checked historical receipt/resource for Advisor; a historical measurement is not a guarantee of the next run's cost.
 
-Control reuse requires a successful completed receipt, matching code/configuration/data/partition, initial state, seed, checkpoint, schedule, sample-work and numerical protocol, plus reread artifacts. Equal seeds alone do not establish equal random paths. No additional seeds are scheduled by these tools.
+Control reuse requires a successful completed control receipt, matching code/configuration/data/partition, initial state, seed, checkpoint, schedule, sample-work and numerical protocol, plus reread artifacts. The current request also specifies the expected control arm and exact argv; a treatment or a bare protocol cannot establish control identity. Equal seeds alone do not establish equal random paths. No additional seeds are scheduled by these tools.
 
 ## Execute a locked project command — M04
 

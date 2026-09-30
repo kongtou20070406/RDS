@@ -173,14 +173,69 @@ def summarize_costs(receipts, bindings=None):
     return report
 
 
+def _operation_identity(record):
+    """Accept a receipt/explicit operation or an existing registered project run."""
+    result, conflicts = {}, []
+    for origin in (record, record.get("manifest", {})):
+        if not isinstance(origin, dict):
+            conflicts.append("manifest")
+            continue
+        for key in ("arm", "argv", "cwd"):
+            if key not in origin:
+                continue
+            if key in result and result[key] != origin[key]:
+                conflicts.append(key)
+            else:
+                result[key] = origin[key]
+    return result, sorted(set(conflicts))
+
+
 def check_control_reuse(candidate, current, root=None):
-    """Validate this control against this protocol, with every identity explicit."""
+    """Match a real control's protocol and exact operation in the project root.
+
+    A bare protocol cannot identify which allowed command/arm was executed.
+    Current must also declare arm=control and its complete expected argv, or
+    supply a registered run with those fields in its manifest.
+    """
     if not isinstance(candidate, dict) or not isinstance(current, dict):
         return {"schema": "rds-control-reuse-v1", "reusable": False, "reasons": ["control/current must be objects"]}
     reasons = receipt_issues(candidate)
     previous, conflicts = receipt_identity(candidate)
     expected, current_conflicts = receipt_identity(current)
     reasons.extend("conflicting current identity: " + k for k in current_conflicts)
+    operation_reasons, operation_unknown = [], False
+    actual, actual_conflicts = _operation_identity(candidate)
+    intended, intended_conflicts = _operation_identity(current)
+    for label, operation, conflicts in (("candidate", actual, actual_conflicts),
+                                        ("current", intended, intended_conflicts)):
+        if conflicts:
+            operation_reasons.extend("conflicting " + label + " operation: " + key for key in conflicts)
+            operation_unknown = True
+        if not _known(operation.get("arm")):
+            operation_reasons.append("missing " + label + " control arm")
+            operation_unknown = True
+        elif operation["arm"] != "control":
+            operation_reasons.append(label + " arm is not control")
+        argv = operation.get("argv")
+        if not isinstance(argv, list) or not argv or not isinstance(argv[0], str) or not argv[0] or any(
+                not isinstance(arg, str) or "\0" in arg for arg in argv):
+            operation_reasons.append("missing or invalid " + label + " control argv")
+            operation_unknown = True
+    if actual.get("argv") != intended.get("argv"):
+        operation_reasons.append("control operation mismatch: argv")
+    base, hashes = Path(root or ".").resolve(), {}
+    for label, operation in (("candidate", actual), ("current", intended)):
+        # The actual root argument supplies current cwd; a receipt must record
+        # its original cwd. An explicit current cwd must agree with that root.
+        if label == "current" and "cwd" not in operation:
+            continue
+        cwd = operation.get("cwd")
+        if not isinstance(cwd, str) or not cwd or not Path(cwd).is_absolute():
+            operation_reasons.append("missing or invalid " + label + " control cwd")
+            operation_unknown = True
+        elif Path(cwd).resolve() != base:
+            operation_reasons.append(label + " control cwd differs from project root")
+    reasons.extend(operation_reasons)
     if candidate.get("run_status") != "SUCCEEDED":
         reasons.append("control did not finish SUCCEEDED")
     for key in IDENTITY_FIELDS:
@@ -200,7 +255,6 @@ def check_control_reuse(candidate, current, root=None):
     if not isinstance(artifacts, list) or not artifacts or len(artifacts) > 128:
         reasons.append("control needs a bounded artifact inventory with paths and hashes")
         artifacts = []
-    base, hashes = Path(root or ".").resolve(), {}
     for artifact in before + artifacts:
         if not isinstance(artifact, dict) or not isinstance(artifact.get("path"), str) or not sha256(artifact.get("sha256")):
             reasons.append("invalid control artifact entry")
@@ -217,5 +271,9 @@ def check_control_reuse(candidate, current, root=None):
         except (OSError, ValueError):
             reasons.append("control artifact missing or outside root: " + artifact["path"])
     return {"schema": "rds-control-reuse-v1", "reusable": not reasons, "reasons": sorted(set(reasons)),
-            "identity_fields": list(IDENTITY_FIELDS), "control_run_id": candidate.get("run_id"),
+            "identity_fields": list(IDENTITY_FIELDS), "candidate_run_id": candidate.get("run_id"),
+            "control_run_id": candidate.get("run_id") if actual.get("arm") == "control" else None,
+            "operation_identity": {"status": "UNKNOWN" if operation_unknown else
+                                   "MISMATCH" if operation_reasons else "MATCHED",
+                                   "fields": ["arm", "argv", "cwd"]},
             "scientific_assessment": "UNKNOWN"}

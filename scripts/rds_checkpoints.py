@@ -65,9 +65,15 @@ def save_checkpoint(root, checkpoint_id, snapshot, *, kind, decision=None):
 
 
 def _runs(snapshot):
-    runs = snapshot.get("runs", snapshot.get("plans", {}))
+    if "runs" not in snapshot:
+        # Reference plans carry a separate execution identity minted at reservation.
+        plans = snapshot.get("plans", {})
+        return {plan.get("run_id") or "plan:" + plan_id:
+                {**plan, "run_id": plan.get("run_id"), "plan_id": plan_id}
+                for plan_id, plan in plans.items() if isinstance(plan, dict)} if isinstance(plans, dict) else {}
+    runs = snapshot["runs"]
     if isinstance(runs, list):
-        return {r.get("id", r.get("run_id")): r for r in runs if isinstance(r, dict)}
+        return {r.get("run_id", r.get("id")): r for r in runs if isinstance(r, dict)}
     return runs if isinstance(runs, dict) else {}
 
 
@@ -106,14 +112,17 @@ def restore_checkpoint(root, checkpoint_id, live_snapshot, *, kind):
         conflicts.append({"field": "runs", "run_id": run_id, "reason": "Previously recorded run is missing from live state"})
     ongoing, completed, interrupted = [], [], []
     for run_id, run in live_runs.items():
+        identity = {"run_id": run.get("run_id", run_id)}
+        if "plan_id" in run:
+            identity["plan_id"] = run["plan_id"]
         status = run.get("run_status", run.get("status", "UNKNOWN"))
         if status in {"RESERVED", "RUNNING"}:
-            ongoing.append({"run_id": run_id, "status": status, "next_action": "Inspect or reconcile this existing run; do not launch a duplicate"})
+            ongoing.append({**identity, "status": status, "next_action": "Inspect or reconcile this existing run; do not launch a duplicate"})
         elif status in {"COMPLETED", "SUCCEEDED"}:
-            completed.append({"run_id": run_id, "status": status, "assessment": run.get("assessment"),
+            completed.append({**identity, "status": status, "assessment": run.get("assessment"),
                               "next_action": "Read the existing receipt and assess its evidence; do not repeat the execution"})
-        elif status in {"FAILED", "INTERRUPTED", "TIMED_OUT"}:
-            interrupted.append({"run_id": run_id, "status": status, "next_action": "Diagnose the preserved failure before creating any new attempt"})
+        elif status in {"FAILED", "INTERRUPTED", "TIMED_OUT", "RECOVERY_REQUIRED"}:
+            interrupted.append({**identity, "status": status, "next_action": "Diagnose the preserved failure before creating any new attempt"})
     return {"schema": SCHEMA, "status": "CONFLICT" if conflicts else "RESUMABLE_HANDOFF", "id": checkpoint_id,
             "kind": kind, "checkpoint_sha256": row[0], "decision": record["decision"],
             "decision_assurance": record["decision_assurance"], "conflicts": conflicts, "updates": updates,
