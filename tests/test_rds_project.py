@@ -2,6 +2,7 @@ import concurrent.futures
 import json
 import os
 from pathlib import Path
+import shutil
 import sqlite3
 import sys
 import tempfile
@@ -64,6 +65,27 @@ class ProjectTests(unittest.TestCase):
     def run_spec(self, spec):
         self.store.register(spec)
         return self.store.execute(spec["id"])
+
+    def new_store(self, budget=None, commands=()):
+        root = self.root / "other-project"
+        root.mkdir()
+        for binding in self.contract["bindings"]:
+            shutil.copyfile(self.root / binding["path"], root / binding["path"])
+        contract = json.loads(canonical(self.contract))
+        if budget is not None:
+            contract["budget"] = budget
+        contract["allowed_commands"].extend(commands)
+        store = ProjectStore(root)
+        store.initialize(contract)
+        return store
+
+    def reserve_overrun_pair(self):
+        store = self.new_store({"wall_seconds": 0.002, "cpu_seconds": 2, "gpu_seconds": 0})
+        for rid in ("r1", "r2"):
+            spec = self.spec(rid, "timeout", 0.001)
+            spec["resource_estimates"]["wall_seconds"] = 0.001
+            store.register(spec)
+        return store
 
     def test_real_success_receipt_and_distinct_costs(self):
         receipt = self.run_spec(self.spec())
@@ -294,6 +316,154 @@ class ProjectTests(unittest.TestCase):
         other["resource_estimates"]["gpu_seconds"] = 0.01
         with self.assertRaises(ValueError):
             self.store.register(other)
+
+    def test_start_uses_existing_reservation_without_double_counting(self):
+        store = self.new_store({"wall_seconds": 4.4, "cpu_seconds": 2, "gpu_seconds": 0})
+        store.register(self.spec("r1"))
+        store.register(self.spec("r2"))
+        self.assertAlmostEqual(store.snapshot()["budget"]["wall_seconds"]["remaining"], 0)
+        self.assertEqual(store.execute("r1")["run_status"], "SUCCEEDED")
+        self.assertEqual(store.execute("r2")["run_status"], "SUCCEEDED")
+
+    def test_real_overrun_blocks_reserved_dispatch_and_preserves_charges(self):
+        store = self.reserve_overrun_pair()
+        receipt = store.execute("r1")
+        self.assertTrue(receipt["process_started"])
+        self.assertTrue(receipt["timeout"])
+        self.assertGreater(receipt["resources"]["wall_seconds"]["measured"], 0.002)
+        before = store.snapshot()
+        self.assertLess(before["budget"]["wall_seconds"]["remaining"], 0)
+        for background in ([False, True] if os.name == "nt" else [False]):
+            with self.subTest(background=background), patch.object(store, "_schedule") as schedule:
+                with self.assertRaisesRegex(ValueError, "Insufficient wall_seconds budget before start"):
+                    store.execute("r2", background=background)
+                schedule.assert_not_called()
+        after = store.snapshot()
+        self.assertEqual(before["budget"], after["budget"])
+        self.assertEqual(before["receipts"], after["receipts"])
+        pending = next(run for run in after["runs"] if run["id"] == "r2")
+        self.assertEqual(pending["status"], "RESERVED")
+        self.assertIsNone(pending["attempt_id"])
+        self.assertFalse((store.root / "outputs/r2.json").exists())
+
+    def test_queued_worker_rechecks_budget_after_another_run_overruns(self):
+        store = self.reserve_overrun_pair()
+        with store._db() as db:
+            run = store._run(db, "r2")
+            run["attempt_id"] = "queued-attempt"
+            run["scheduler"] = {"task_id": "RDS-Project-queued", "status": "REGISTERED"}
+            store._save(db, run)
+        store.execute("r1")
+        before = store.snapshot()
+        with self.assertRaisesRegex(ValueError, "Insufficient wall_seconds budget before start"):
+            store._execute_claim("r2", "queued-attempt")
+        self.assertEqual(before, store.snapshot())
+        self.assertEqual(store.recover("r2")["status"], "RESERVED")
+        with self.assertRaises(ValueError):
+            store.execute("r2")
+
+    def test_overrun_during_preflight_blocks_popen_and_retains_failure_cost(self):
+        store = self.reserve_overrun_pair()
+        preflight, resume = threading.Event(), threading.Event()
+        bindings = store._bindings
+
+        def pause_bindings(contract):
+            if threading.current_thread().name.startswith("pending") and not preflight.is_set():
+                preflight.set()
+                self.assertTrue(resume.wait(5))
+            return bindings(contract)
+
+        with patch.object(store, "_bindings", side_effect=pause_bindings), \
+                concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="pending") as pool:
+            execution = pool.submit(store.execute, "r2")
+            try:
+                self.assertTrue(preflight.wait(5))
+                first = store.execute("r1")
+                self.assertTrue(first["process_started"])
+                self.assertLess(store.snapshot()["budget"]["wall_seconds"]["remaining"], 0)
+            finally:
+                resume.set()
+            receipt = execution.result(timeout=5)
+        self.assertFalse(receipt["process_started"])
+        self.assertEqual(receipt["run_status"], "FAILED")
+        self.assertTrue(any("Insufficient wall_seconds budget before start" in error for error in receipt["errors"]))
+        self.assertFalse((store.root / "outputs/r2.json").exists())
+        budget = store.snapshot()["budget"]
+        self.assertEqual(budget["cpu_seconds"]["charged_estimate"], 2)
+        self.assertEqual(budget["cpu_seconds"]["reserved"], 0)
+        with self.assertRaises(ValueError):
+            store.execute("r2")
+
+    def test_legacy_relative_output_claim_is_same_as_absolute_claim(self):
+        self.store.register(self.spec())
+        with self.store._db() as db:
+            db.execute("UPDATE output_claims SET path='outputs/./r1.json' WHERE run_id='r1'")
+        self.assertEqual(self.store._output_key("outputs/./r1.json"),
+                         self.store._output_key(self.root / "outputs/r1.json"))
+        self.assertEqual(self.store.execute("r1")["run_status"], "SUCCEEDED")
+
+    @unittest.skipUnless(os.name == "nt", "Windows physical output aliases")
+    def test_windows_output_alias_cannot_claim_legacy_absolute_path(self):
+        argv = [sys.executable, "-B", "code.py", "ok", "outputs/R1.json"]
+        store = self.new_store(commands=[argv])
+        store.register(self.spec("r1"))
+        with store._db() as db:
+            db.execute("UPDATE output_claims SET path=? WHERE run_id='r1'",
+                       (str(store.root / "outputs/r1.json"),))
+        spec = self.spec("r2")
+        spec.update(argv=argv, outpaths=["outputs/./R1.json"])
+        before = store.snapshot()
+        with self.assertRaisesRegex(ValueError, "Output is already claimed"):
+            store.register(spec)
+        self.assertEqual(before, store.snapshot())
+        self.assertEqual(store.execute("r1")["run_status"], "SUCCEEDED")
+        self.assertTrue((store.root / "outputs/R1.json").samefile(store.root / "outputs/r1.json"))
+
+    @unittest.skipUnless(os.name == "nt", "Existing Windows ledger aliases")
+    def test_legacy_conflicting_windows_claims_block_controller_and_worker(self):
+        argv = [sys.executable, "-B", "code.py", "ok", "outputs/R1.json"]
+        store = self.new_store(commands=[argv])
+        store.register(self.spec("r1"))
+        store.register(self.spec("r2"))
+        # Reproduce the two raw, case-distinct keys admitted by the old runner.
+        with store._db() as db:
+            run = store._run(db, "r2")
+            run["manifest"].update(argv=argv, outpaths=["outputs/R1.json"])
+            run["manifest_sha256"] = digest(run["manifest"])
+            store._save(db, run)
+            db.execute("UPDATE output_claims SET path=? WHERE run_id='r1'",
+                       (str(store.root / "outputs/r1.json"),))
+            db.execute("UPDATE output_claims SET path=? WHERE run_id='r2'",
+                       (str(store.root / "outputs/R1.json"),))
+        before = store.snapshot()
+        with self.assertRaisesRegex(ValueError, "not exclusively claimed"):
+            store.execute("r1")
+        with patch.object(store, "_schedule") as schedule:
+            with self.assertRaisesRegex(ValueError, "not exclusively claimed"):
+                store.execute("r2", background=True)
+            schedule.assert_not_called()
+        self.assertEqual(before, store.snapshot())
+        with store._db() as db:
+            run = store._run(db, "r2")
+            run["attempt_id"] = "legacy-queued"
+            run["scheduler"] = {"task_id": "RDS-Project-legacy", "status": "REGISTERED"}
+            store._save(db, run)
+        before = store.snapshot()
+        with self.assertRaisesRegex(ValueError, "not exclusively claimed"):
+            store._execute_claim("r2", "legacy-queued")
+        self.assertEqual(before, store.snapshot())
+
+    @unittest.skipUnless(os.name != "nt", "Native case-distinct output paths")
+    def test_case_distinct_outputs_remain_independent_on_posix(self):
+        argv = [sys.executable, "-B", "code.py", "ok", "outputs/R1.json"]
+        store = self.new_store(commands=[argv])
+        store.register(self.spec("r1"))
+        spec = self.spec("r2")
+        spec.update(argv=argv, outpaths=["outputs/R1.json"])
+        store.register(spec)
+        self.assertEqual(store.execute("r1")["run_status"], "SUCCEEDED")
+        self.assertEqual(store.execute("r2")["run_status"], "SUCCEEDED")
+        self.assertFalse((store.root / "outputs/R1.json").samefile(store.root / "outputs/r1.json"))
 
     def test_paths_commands_and_handwritten_verification_rejected(self):
         for edit in ({"outpaths": ["../escape.json"]}, {"outpaths": [str(self.root.parent / "escape.json")]},

@@ -168,6 +168,31 @@ class ProjectStore:
             require(path not in {(self.root / b["path"]).resolve() for b in contract["bindings"]}, "Output overwrites bound input")
         return path
 
+    def _output_key(self, path):
+        return os.path.normcase(str((self.root / path).resolve()))
+
+    def _output_claims(self, db):
+        # Older ledgers stored absolute paths without native case normalization.
+        claims = {}
+        for row in db.execute("SELECT path,run_id FROM output_claims"):
+            claims.setdefault(self._output_key(row["path"]), set()).add(row["run_id"])
+        return claims
+
+    def _check_start(self, db, run):
+        # This run is already reserved. Do not charge its estimate a second time,
+        # but do not let that reservation override costs settled since admission.
+        for resource, amount in run["resource_estimates"].items():
+            row = db.execute("SELECT * FROM budget WHERE resource=?", (resource,)).fetchone()
+            require(row is not None and row["reserved"] + 1e-9 >= amount,
+                    f"Missing {resource} reservation")
+            require(row["spent"] + row["charged"] + row["reserved"] <= row["cap"] + 1e-9,
+                    f"Insufficient {resource} budget before start")
+        contract = self._contract(db)
+        claims = self._output_claims(db)
+        for path in run["manifest"]["outpaths"]:
+            key = self._output_key(self._path(path, True, contract))
+            require(claims.get(key) == {run["id"]}, "Output is not exclusively claimed by this run")
+
     @contextmanager
     def _db(self, readonly=False):
         if readonly:
@@ -329,8 +354,11 @@ class ProjectStore:
             for resource, amount in estimates.items():
                 row = db.execute("SELECT * FROM budget WHERE resource=?", (resource,)).fetchone()
                 require(row["spent"] + row["charged"] + row["reserved"] + amount <= row["cap"] + 1e-9, f"Insufficient {resource} budget")
-            for p in outpaths:
-                db.execute("INSERT INTO output_claims VALUES (?,?)", (str(self._path(p, True, contract)), run_id))
+            claims = self._output_claims(db)
+            for path in outputs:
+                key = self._output_key(path)
+                require(key not in claims, "Output is already claimed by another run")
+                db.execute("INSERT INTO output_claims VALUES (?,?)", (key, run_id))
             for resource, amount in estimates.items():
                 db.execute("UPDATE budget SET reserved=reserved+? WHERE resource=?", (amount, resource))
             db.execute("INSERT INTO runs VALUES (?,?,?)", (run_id, "RESERVED", canonical(run)))
@@ -357,6 +385,7 @@ class ProjectStore:
             db.execute("BEGIN IMMEDIATE")
             run = self._run(db, run_id)
             require(run["status"] == "RESERVED" and run["attempt_id"] is None, "Run already dispatched or started; recover never reruns it")
+            self._check_start(db, run)
             run["attempt_id"] = uuid.uuid4().hex
             if background:
                 run["scheduler"] = {"task_id": "RDS-Project-" + run["attempt_id"], "status": "REGISTERING"}
@@ -388,6 +417,7 @@ class ProjectStore:
             db.execute("BEGIN IMMEDIATE")
             run = self._run(db, run_id)
             require(run["status"] == "RESERVED" and run["attempt_id"] == attempt_id, "Run cannot be started twice")
+            self._check_start(db, run)
             run.update(status="RUNNING", worker_pid=os.getpid(), started_at=time.time())
             if run["scheduler"]:
                 run["scheduler"]["status"] = "RUNNING"
@@ -426,12 +456,16 @@ class ProjectStore:
             with (work / "stdout.bin").open("xb") as out, (work / "stderr.bin").open("xb") as err:
                 flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
                 argv = [run["executor"], *run["manifest"]["argv"][1:]]
-                process = subprocess.Popen(argv, cwd=self.root, shell=False, stdin=subprocess.DEVNULL,
-                                           stdout=out, stderr=err, creationflags=flags, start_new_session=os.name != "nt")
-                started = True
-                job = _Job(process)
                 with self._db() as db:
+                    db.execute("BEGIN IMMEDIATE")
                     current = self._run(db, run_id)
+                    require(current["status"] == "RUNNING" and current["attempt_id"] == attempt_id
+                            and current["pid"] is None, "Run cannot be started twice")
+                    self._check_start(db, current)
+                    process = subprocess.Popen(argv, cwd=self.root, shell=False, stdin=subprocess.DEVNULL,
+                                               stdout=out, stderr=err, creationflags=flags, start_new_session=os.name != "nt")
+                    started = True
+                    job = _Job(process)
                     current["pid"] = process.pid
                     self._save(db, current)
                 while process.poll() is None:

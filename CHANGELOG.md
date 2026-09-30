@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Recheck settled costs, reservations and output ownership at dispatch, worker claim and immediately before process launch. A pending experiment cannot use an earlier reservation to start after another run exhausts its resource budget; failed attempts retain their costs.
+- Normalize output claims with native path semantics and check existing ledger keys. On Windows, case aliases cannot let two runs overwrite the same output and receive independent success receipts; case-distinct POSIX outputs remain supported.
 - Preserve manual-only costs and embedded experiment templates when Advisor merges `--research-context` with `--artifacts`. Keep compatible imported cost provenance; conflicting values, resource identities, units, comparison groups or reliability produce unknown costs instead of choosing a cheaper declaration.
 - Detect contradictory run/split/metric bindings even when manual and imported fact values are equal. Preserve the original value and source, mark the disputed fact unknown, and keep Boolean declarations distinct from numeric observations.
 - Reject blank, placeholder or malformed source bindings as unknown evidence before they can satisfy research rules. Validate existing hash strings without rehashing unrelated files, and retain a missing-evidence report for non-string run IDs instead of crashing.
