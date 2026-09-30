@@ -515,7 +515,9 @@ class ProjectStore:
                    "exit_code": exit_code, "timeout": timeout, "process_started": started,
                    "resources": resources, "artifacts": artifacts,
                    "assessment": {"task_gain": "UNKNOWN", "mechanism": "UNKNOWN"},
-                   "errors": errors, "scheduler": run["scheduler"]}
+                   # RDS attempt lifecycle, not a query of the OS task's current state.
+                   "errors": errors, "scheduler": ({**run["scheduler"], "status": status}
+                                                     if run["scheduler"] else None)}
         receipt["sha256"] = digest(receipt)
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -534,7 +536,7 @@ class ProjectStore:
             for key, resource in resources.items():
                 db.execute("UPDATE budget SET reserved=reserved-?,spent=spent+?,charged=charged+? WHERE resource=?",
                            (run["resource_estimates"][key], resource["measured"] or 0.0, resource["charged_estimate"], key))
-            current.update(status=status, finished_at=receipt["ended_at"])
+            current.update(status=status, finished_at=receipt["ended_at"], scheduler=receipt["scheduler"])
             self._save(db, current)
             db.execute("INSERT INTO receipts VALUES (?,?,?)", (run_id, receipt["sha256"], canonical(receipt)))
             db.execute("INSERT INTO events(body) VALUES (?)", (canonical({"kind": "ATTEMPT_FINISHED", "run_id": run_id, "sha256": receipt["sha256"]}),))

@@ -4,7 +4,7 @@ import hashlib
 from itertools import combinations
 import json
 
-from rds_advisor_search import TRUE, FALSE, UNKNOWN, evaluate_condition, search_directions, _finite, _cost, _reported
+from rds_advisor_search import TRUE, FALSE, UNKNOWN, evaluate_condition, search_directions, _finite, _cost, _cost_identity, _reported
 
 
 def _token(value):
@@ -235,7 +235,7 @@ def compose_experiments(graph, context, templates, *, max_candidates=12,
             candidate["budget_status"] = UNKNOWN
             budget = context.get("budget", {})
             if cost["status"] != UNKNOWN and _reported(budget) and _finite(budget.get("value")) and budget["value"] >= 0:
-                if (budget.get("unit"), budget.get("comparison_group")) == (cost["unit"], cost["comparison_group"]):
+                if _cost_identity(budget) == _cost_identity(cost):
                     candidate["budget_status"] = "WITHIN_REPORTED_BUDGET" if cost["value"] <= budget["value"] else "OVER_REPORTED_BUDGET"
                     if candidate["budget_status"] == "OVER_REPORTED_BUDGET":
                         candidate["status"] = "BLOCKED_BUDGET"
