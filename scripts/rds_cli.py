@@ -732,6 +732,48 @@ def cmd_meta(args, rds):
         raise ValueError(f"Unknown meta action: {args.action}")
 
 
+def cmd_advise(args, rds):
+    from rds_advisor import RDSAdvisor
+    from rds_meta import load_judgment_graph
+    advisor = RDSAdvisor(Path(args.root))
+    
+    with rds.transaction() as (db, state):
+        _, graph = load_judgment_graph(getattr(args, "graph", None))
+        
+        # Scenario A: Telemetry diagnosis
+        if getattr(args, "telemetry", None):
+            telemetry = load_spec(args.telemetry)
+            return advisor.advise_on_loss_dynamics(telemetry)
+            
+        # Scenario B: Plan advice (pre-check simulation)
+        if getattr(args, "plan", None):
+            plan = load_spec(args.plan)
+            # Check gate advisory
+            try:
+                # Run lightweight gate check in memory
+                cmd_plan(argparse.Namespace(plan=args.plan, action="check"), rds, advisory=True)
+                gate_err = None
+            except Exception as e:
+                gate_err = str(e)
+                
+            if gate_err:
+                return advisor.advise_on_rejection(gate_err, plan)
+            return {
+                "advisor_type": "PLAN_COMPLIANCE_PASS",
+                "status": "APPROVED",
+                "actionable_suggestion": "方案通过门禁安全检查。空白对照将自动复用已验证缓存，可安全提交执行。"
+            }
+            
+        # Scenario C: Global strategic directions
+        recommendations = advisor.recommend_next_directions(state, graph)
+        return {
+            "advisor_type": "STRATEGIC_RESEARCH_ADVICE",
+            "active_branch": state.get("active_branch", "main"),
+            "recommendations_count": len(recommendations),
+            "recommendations": recommendations
+        }
+
+
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--root", default=".")
@@ -799,6 +841,11 @@ def parser():
     prepare.add_argument("--raw-offset", type=int, default=0)
     prepare.add_argument("--output", required=True)
     actions.add_parser("query").add_argument("--query", required=True)
+
+    adv = commands.add_parser("advise", help="Get programmatic mathematical and strategic advice for models")
+    adv.add_argument("--plan", default=None)
+    adv.add_argument("--telemetry", default=None)
+    adv.add_argument("--graph", default=None)
     return p
 
 
@@ -810,7 +857,9 @@ def main():
             from rds_obelisk import history_command
             history_command(args)
             return 0
-        if args.command == "branch":
+        if args.command == "advise":
+            result = cmd_advise(args, rds)
+        elif args.command == "branch":
             result = cmd_branch(args, rds)
         elif args.command == "meta":
             result = cmd_meta(args, rds)

@@ -354,6 +354,19 @@ class KernelTests(unittest.TestCase):
         self.assertIn("status", repair_res)
         self.assertTrue(repair_res["dry_run"])
 
+    def test_advisor_engine(self):
+        """Active Programmatic Advisor: Program gives analytical & diagnostic advice to LLM."""
+        project = self.project().init()
+        # 1. Global strategic advice
+        adv_global = project.call("advise")
+        self.assertEqual(adv_global["advisor_type"], "STRATEGIC_RESEARCH_ADVICE")
+
+        # 2. Telemetry dynamics advice on NaN anomaly
+        telemetry = {"nan_or_inf": True, "peak_grad_norm": 95.0, "loss_trend": "EXPLODING"}
+        adv_dyn = project.call("advise", spec=telemetry, flag="--telemetry")
+        self.assertEqual(adv_dyn["status"], "CRITICAL_ANOMALY")
+        self.assertTrue(any("eps=1e-7" in a for a in adv_dyn["action_items"]))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
