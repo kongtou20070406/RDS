@@ -14,6 +14,8 @@ Keep one concrete purpose per PR. Explain what the researcher gains and why exis
 
 Fork [the repository](https://github.com/kongtou20070406/research-direction-selector/fork), make a branch from the intended base, and commit only your changed files. Describe the final problem and behavior, verification actually run, and material limits. Distinguish behavior already on the base ref, behavior introduced by the PR, and development candidates. Shared commands and evidence boundaries should agree across the READMEs and both contribution guides; a wording-only fix may affect just one language.
 
+Keep future README edits within the established layout: static banner, the two sides of the research loop, five components, Skill/install, kernel, mathematical checks, Advisor, history, tests, repository layout and license. Keep the main README in English and translations in their own files. Put detailed implementation and test reports in the linked guides rather than expanding the homepage.
+
 ## Six checks that make a change reviewable
 
 1. **Reach the behavior through the user's entry point.** If the PR advertises a CLI option, run it with real inputs and the correct project root. A helper test does not show that parsing, state selection, input files and output handling work together. For a packaged release, check the downloaded package and its required resources. Keep the exact command and output, including failures.
