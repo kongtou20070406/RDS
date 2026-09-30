@@ -33,7 +33,7 @@ python -B scripts/rds_dashboard.py --demo --output dist\dashboard-demo.html
 
 `project init/create/execute` 项目读取 `.rds/project.sqlite3` 的现有 `ProjectStore.snapshot`：展示原 `runs`、资源预算向量和实际收据；参考 runner 项目读取 `.rds/state.sqlite3`。两种账本不会混合，页面与导出 JSON 标明 `PROJECT` / `REFERENCE`；同时存在时优先项目账本。没有假设或研究分支的项目保持这些页面为空。
 
-项目预算分别展示实测用量、预估记账、预留和剩余，保留原单位。收据里未知的 CPU/GPU 用量保持未知，墙钟不会换算成 CPU 时间。收据原件定位指向实际数据库的 `receipts` 表与 `run_id`，产物路径来自该收据，不生成额外收据镜像。
+项目预算分别展示已记录测量、预估记账、预留和剩余，保留原单位，并标明该资源尚未测量的运行数；已记录测量为 0 不表示所有运行的总用量为 0。项目收据直接展示各资源的测量值、未知状态和预估记账，墙钟时长使用收据中的秒数；参考收据保留毫秒时长与原计费分配。未知的 CPU/GPU 用量保持未知，墙钟不会换算成 CPU 时间。收据原件定位指向实际数据库的 `receipts` 表与 `run_id`；项目产物列表显示原路径，参考产物的哈希映射标为产物身份，不生成额外收据镜像。
 
 运行成功、任务收益和机制支持是不同判断。收据里的 `gain` 仅按原记录展示，不会自动升级成确认结论。未记录字段显示 `—` 或“未记录”；缺少预算时没有资源进度。Lean / mathlib 是适用于数学子任务的协作能力。
 
@@ -56,6 +56,8 @@ python -B scripts/rds_dashboard.py --root C:\research\project --advisor advice.j
   "next_if_negative": "修订机制解释"
 }
 ```
+
+正常 `advise` 输出中的 `recommendations` 会分别展示理由。有界搜索与有限实验候选按原字段展示状态、行动或干预、竞争解释、待补证据、所需观测、结果对应的下一决策、成本与单位、来源和停止条件；未知成本保持 `UNKNOWN`。完整原 JSON 保留在折叠详情中，其他诊断类型仍保留原字段。
 
 这些内容不会写回账本，不会生成计划或执行收据。界面保留来源和不确定性；没有已有 seed 不稳定性的证据时，不主动要求多 seed 实验。
 
