@@ -263,18 +263,21 @@ def reflect_from_state(state, receipts, obelisk_evidence=None):
     # 2. Check for repeated INCONCLUSIVE runs (parameter tuning without causal separation)
     inconclusive_count = 0
     for r in receipts:
-        res = r.get("result", {})
-        if res and res.get("gain") and node.get("task_gain") == "INCONCLUSIVE":
+        plan = state.get("plans", {}).get(r.get("plan_id"), {})
+        assessment = plan.get("assessment") or {}
+        if (r.get("run_id") and r.get("run_status") == "SUCCEEDED"
+                and assessment.get("run_id") == r.get("run_id")
+                and assessment.get("task_gain") == "INCONCLUSIVE"):
             inconclusive_count += 1
             
     if inconclusive_count >= 2:
         proposals.append({
             "id": "parameter-tuning-without-causal-gain",
             "scope": state.get("contract", {}).get("project_id", "exploration"),
-            "trigger": "Consecutive micro-parameter tweaks fail to exceed minimum useful delta",
-            "correction": "Marginal hyperparameter shifts within the same computation graph rarely yield qualitative mechanism breakthroughs",
+            "trigger": "At least two assessed runs fail to exceed the predeclared minimum useful delta",
+            "correction": "Repeated sub-threshold results motivate review; they do not establish a causal failure or rule out parameter tuning",
             "alternatives": ["subtle quantitative tuning gain", "stagnation requiring orthogonal mechanism branch"],
-            "discriminator": "Check stagnation counter; trigger orthogonal branching (FML-Bench v2) after 3 consecutive sub-threshold runs",
+            "discriminator": "Inspect per-run assessments and branch stagnation counters before comparing alternative interventions",
             "primary_gate": "Predeclared minimum useful delta must be exceeded on held-out development set",
             "falsifier": "If micro-tuning independently demonstrates reproducible large primary metric leap, retain parameter search",
             "sources": ["FML-Bench v2 Stagnation Evidence", "RDS State Ledger"]

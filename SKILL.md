@@ -2,8 +2,8 @@
 name: research-direction-selector
 description: Select and audit metric-driven research directions using scoped hypotheses, falsifiable interventions, budgets and human instructions. Use for choosing the next experiment or evaluating research proposals; includes a bounded L3 reference runner and Obelisk history retrieval, not a general GPU experiment service.
 metadata:
-  version: v5.3.0
-  engine: rds-cli-v5.3
+  version: v5.4.0
+  engine: rds-cli-v5.4
 ---
 
 # Research Direction Selector — RDS-L3
@@ -177,12 +177,12 @@ python -B scripts/rds_cli.py branch fork --spec branch.json
 python -B scripts/rds_cli.py branch switch --id branch_id
 python -B scripts/rds_cli.py branch list
 
-# 9. RSI Step 3: Adversarial Mutation, Alignment Evaluation & Auto-Repair
+# 9. Adversarial proposals, heuristic rule linting and repair candidates
 python -B scripts/rds_cli.py meta fuzz --plan plan.json
 python -B scripts/rds_cli.py meta evaluate-alignment --rule rule.json
 python -B scripts/rds_cli.py meta auto-repair [--dry-run]
 
-# 10. Deep Learning Token Compressor (<50 tokens per run, 90%+ reduction)
+# 10. Compact training telemetry (no tokenizer-specific compression guarantee)
 python -c "from rds_compress import compress_training_log; print(compress_training_log(open('train.log').read()))"
 ```
 
@@ -190,7 +190,26 @@ python -c "from rds_compress import compress_training_log; print(compress_traini
 
 Declare `hypothesis.formal` only when the hypothesis claims a strict algebraic threshold, contraction boundary or dynamical property. Ordinary parameter comparisons and routine experiments omit it and take the lightweight AST path; a numeric hyperparameter or PSNR target is not a formal claim. Do not omit a real mathematical claim to bypass its gate.
 
-The implemented symbolic adapter checks a declared scalar threshold on a bounded real domain. A successful admission proves model-level feasibility only; execution must also observe the crossing. Missing dependencies, singularities, timeouts and unsupported dynamics yield `UNKNOWN`, never a proof. SymPy output is `SYMBOLIC_CHECKED`, not a Lean certificate or a general neural-network stability proof.
+The exact adapter separates certificate generation from checking for bounded
+affine-rational scalar expressions. The checker validates original denominator
+obligations, the universal control bound and an exact treatment crossing witness;
+it reports `CERTIFICATE_CHECKED`. Other supported scalar expressions may fall back
+to SymPy and remain `SYMBOLIC_CHECKED`. Neither result is a Lean certificate or a
+general neural-network stability proof. Unsupported dynamics, singularities,
+resource limits and unavailable required solvers return `UNKNOWN`.
+
+Use `formal.statement: threshold_necessity` only for the explicit scalar necessity
+model. The default `threshold_separation` establishes feasibility and cannot
+refute an unrelated proposition. Execution still has to observe a crossing; a
+feasible mathematical witness is not an experimental result. Proof replay binds
+the source, formal specification and engine version and checks the certificate
+again, while atomic budget and exposure checks remain mandatory.
+
+Advisor output and rule linting are `HEURISTIC_ONLY`. Do not present a scalar-loss
+heuristic as a capacity, optimization or generalization diagnosis. Rule lint has
+no measured precision or false-positive rate. `meta auto-repair` returns reviewable
+candidates from the current ledger; it does not automatically validate or apply
+scientific rules. Preserve raw telemetry and original evidence behind summaries.
 
 ## Historical evaluation
 

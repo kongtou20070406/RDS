@@ -8,6 +8,7 @@ JSON cannot certify manipulation, metric gain, final authorization or success.
 import argparse
 import ast
 from contextlib import contextmanager
+from fractions import Fraction
 import hashlib
 import importlib.metadata
 import json
@@ -20,8 +21,9 @@ import time
 import uuid
 
 from rds_probe import parse_source, rational, read_rows, formal_requirement
+from rds_formal_kernel import bounded
 
-VERSION = "5.2.0"
+VERSION = "5.4.0"
 RESOURCES = {"runtime_ms", "runs"}
 SELF_SIGNED = {"manipulation_verified", "falsifier_triggered", "primary_metric_gain",
                "final_run_authorized", "matched_recipe", "matched_compute"}
@@ -102,6 +104,7 @@ def engine_id():
     here = Path(__file__).resolve().parent
     return digest({"cli": digest((here / "rds_cli.py").read_bytes()),
                    "probe": digest((here / "rds_probe.py").read_bytes()),
+                   "formal_kernel": digest((here / "rds_formal_kernel.py").read_bytes()),
                    "python": sys.version, "sympy": sympy_version})
 
 
@@ -121,21 +124,44 @@ def formal_gate(hypothesis, source):
     return probe
 
 
+def cached_admission(state, binding, hypothesis, source):
+    """Existing admitted certificates are an optional, independently checked cache."""
+    from rds_formal_kernel import check_certificate
+
+    formal = formal_requirement(hypothesis)
+    if formal is None:
+        return None
+    identity_keys = ("source_sha256", "hypothesis_sha256", "engine_sha256")
+    for plan in state["plans"].values():
+        old = plan["binding"]
+        if not all(old.get(key) == binding[key] for key in identity_keys):
+            continue
+        probe = old.get("admission_probe", {})
+        certificate = probe.get("certificate")
+        if (probe.get("status") == "PASS" and isinstance(certificate, dict)
+                and certificate.get("verdict") == "PASS"
+                and check_certificate(parse_source(source), formal, certificate)):
+            return probe
+    return None
+
+
 class RDSState:
     def __init__(self, root_dir):
         self.root = Path(root_dir).resolve()
         self.directory = self.root / ".rds"
         self.db_path = self.directory / "state.sqlite3"
 
-    def connect(self, create=False):
+    def connect(self, create=False, readonly=False):
         if create:
             require(not (self.directory / "contract.json").exists(),
                     "Legacy v5 JSON state found; preserve it and initialize a new root")
             self.directory.mkdir(parents=True, exist_ok=True)
         require(create or self.db_path.exists(), "RDS is not initialized")
-        db = sqlite3.connect(self.db_path, timeout=15, isolation_level=None)
+        target = self.db_path.as_uri() + "?mode=ro" if readonly else self.db_path
+        db = sqlite3.connect(target, uri=readonly, timeout=15, isolation_level=None)
         db.execute("PRAGMA foreign_keys=ON")
-        db.execute("PRAGMA synchronous=FULL")
+        if not readonly:
+            db.execute("PRAGMA synchronous=FULL")
         if create:
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS state (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL);
@@ -157,29 +183,43 @@ class RDSState:
             """)
         return db
 
+    @staticmethod
+    def read_state(db):
+        row = db.execute("SELECT body FROM state WHERE id=1").fetchone()
+        state = strict_json(row[0]) if row else {}
+        if state:
+            require(state["version"] in {VERSION, "5.1.0", "5.2.0", "5.3.0"},
+                    "Incompatible state version")
+            require(digest(state["contract"]) == state["contract_sha256"], "Contract integrity failure")
+            if "branches" not in state:
+                state["branches"] = {
+                    "main": {
+                        "id": "main", "parent_id": None, "orthogonal_dimension": "baseline",
+                        "rationale": "Initial primary exploration branch", "status": "ACTIVE",
+                        "stagnation_count": 0, "created_ns": 0,
+                        "hypotheses": list(state.get("hypotheses", {}).keys())
+                    }
+                }
+            state.setdefault("active_branch", "main")
+            state.setdefault("baseline_cache", {})
+        return state
+
+    @contextmanager
+    def snapshot(self):
+        """Read a consistent state without taking a writer lock or rewriting it."""
+        db = self.connect(readonly=True)
+        try:
+            db.execute("BEGIN")
+            yield db, self.read_state(db)
+        finally:
+            db.close()
+
     @contextmanager
     def transaction(self, create=False):
         db = self.connect(create)
         try:
             db.execute("BEGIN IMMEDIATE")
-            row = db.execute("SELECT body FROM state WHERE id=1").fetchone()
-            state = strict_json(row[0]) if row else {}
-            if state:
-                require(state["version"] in {VERSION, "5.1.0"}, "Incompatible state version")
-                require(digest(state["contract"]) == state["contract_sha256"], "Contract integrity failure")
-                if "branches" not in state:
-                    state["branches"] = {
-                        "main": {
-                            "id": "main", "parent_id": None, "orthogonal_dimension": "baseline",
-                            "rationale": "Initial primary exploration branch", "status": "ACTIVE",
-                            "stagnation_count": 0, "created_ns": 0,
-                            "hypotheses": list(state.get("hypotheses", {}).keys())
-                        }
-                    }
-                if "active_branch" not in state:
-                    state["active_branch"] = "main"
-                if "baseline_cache" not in state:
-                    state["baseline_cache"] = {}
+            state = self.read_state(db)
             yield db, state
             if state:
                 self.invariants(state)
@@ -314,7 +354,7 @@ def clean_confirmation(state, split_id, own_run=None):
                    for e in state["exposures"])
 
 
-def validate_plan(plan, state, rds):
+def validate_plan(plan, state, rds, admission=None):
     reject_self_signatures(plan)
     require(set(plan) == {"id", "hypothesis_id", "split_id", "purpose", "source", "resources"},
             "Plan fields: id, hypothesis_id, split_id, purpose, source, resources; no imported permits")
@@ -345,26 +385,42 @@ def validate_plan(plan, state, rds):
     require(ast.dump(functions["control"]) == state["contract"]["baseline_control_ast"],
             "Baseline computation changed from the locked contract")
     require(engine_id() == state["engine_sha256"], "Verifier version changed; a new contract is required")
-    probe = formal_gate(state["hypotheses"][plan["hypothesis_id"]]["spec"], source.decode("utf-8-sig"))
-    return {"source_path": str(path), "source_sha256": digest(source), "source": source.decode("utf-8-sig"),
-            "admission_probe": probe,
-            "engine_sha256": state["engine_sha256"], "contract_sha256": state["contract_sha256"],
-            "hypothesis_sha256": state["hypotheses"][plan["hypothesis_id"]]["sha256"],
-            "dataset_sha256": split["sha256"], "plan_sha256": digest(plan)}
+    binding = {"source_path": str(path), "source_sha256": digest(source), "source": source.decode("utf-8-sig"),
+               "engine_sha256": state["engine_sha256"], "contract_sha256": state["contract_sha256"],
+               "hypothesis_sha256": state["hypotheses"][plan["hypothesis_id"]]["sha256"],
+               "dataset_sha256": split["sha256"], "plan_sha256": digest(plan)}
+    if admission is not None:
+        require(all(admission.get(key) == value for key, value in binding.items()),
+                "Admission binding changed while formal verification was running")
+        probe = admission["admission_probe"]
+    else:
+        hypothesis = state["hypotheses"][plan["hypothesis_id"]]["spec"]
+        probe = cached_admission(state, binding, hypothesis, binding["source"])
+        if probe is None:
+            probe = formal_gate(hypothesis, binding["source"])
+    return {**binding, "admission_probe": probe}
 
 
 def cmd_plan(args, rds, advisory=False):
     plan = load_spec(args.plan if advisory else args.spec)
+    # Solver work is deliberately outside the reservation transaction. The
+    # committing transaction rechecks every resource and source binding.
+    with rds.snapshot() as (_, state):
+        existing = state["plans"].get(plan.get("id"))
+        if existing:
+            require(digest(plan) == existing["binding"]["plan_sha256"], "Plan ID reused with changed contents")
+            return {"plan_id": plan["id"], "run_status": existing["run_status"], "idempotent": True}
+    binding = validate_plan(plan, state, rds)
+    if advisory:
+        return {"status": "ADMISSIBLE_NOW", "reserved": False,
+                "probe": binding["admission_probe"],
+                "note": "Admission is rechecked atomically by plan create"}
     with rds.transaction() as (db, state):
         existing = state["plans"].get(plan.get("id"))
         if existing:
             require(digest(plan) == existing["binding"]["plan_sha256"], "Plan ID reused with changed contents")
             return {"plan_id": plan["id"], "run_status": existing["run_status"], "idempotent": True}
-        binding = validate_plan(plan, state, rds)
-        if advisory:
-            return {"status": "ADMISSIBLE_NOW", "reserved": False,
-                    "probe": binding["admission_probe"],
-                    "note": "Admission is rechecked atomically by plan create"}
+        binding = validate_plan(plan, state, rds, admission=binding)
         state["plans"][plan["id"]] = {"spec": plan, "binding": binding, "run_status": "RESERVED",
                                        "run_id": "RUN-" + uuid.uuid4().hex, "assessment": None}
         for key, value in plan["resources"].items():
@@ -447,7 +503,8 @@ def cmd_run(args, rds):
     try:
         data_raw = read_bounded(dataset_path, 2_000_000)
         require(digest(data_raw) == binding["dataset_sha256"], "Dataset changed after contract lock")
-        payload = {"source": binding["source"], "data": data_raw.decode("utf-8-sig"), "hypothesis": hypothesis}
+        payload = {"source": binding["source"], "data": data_raw.decode("utf-8-sig"), "hypothesis": hypothesis,
+                   "admission_probe": binding["admission_probe"]}
         if cached_control:
             payload["cached_control"] = cached_control
         worker = Path(__file__).resolve().with_name("rds_probe.py")
@@ -513,7 +570,7 @@ def merge_axis(old, new):
 
 
 def assess(result, contract, purpose, clean, formal):
-    gain = rational(result["gain"])
+    gain = bounded(Fraction(result["gain"]))
     useful = gain > rational(contract["primary_metric"]["min_useful_delta"])
     final = purpose == "confirm" and clean and contract["evaluation_scope"] == "finite_locked_dataset"
     task = ("CONFIRMED" if useful else "REFUTED") if final else ("EXPLORATORY" if useful else "INCONCLUSIVE")
@@ -522,7 +579,8 @@ def assess(result, contract, purpose, clean, formal):
         mechanism = "NOT_TESTED" if probe["status"] == "FAIL" else "INCONCLUSIVE"
         # Passing manipulation never supports causality. This adapter can refute
         # ONLY its typed necessity claim with an executed exact counterexample.
-        if probe["status"] == "PASS" and probe["necessity_counterexamples"]:
+        necessity = formal_requirement({"formal": formal}).get("statement") == "threshold_necessity"
+        if necessity and probe["status"] == "PASS" and probe.get("necessity_counterexamples"):
             mechanism = "REFUTED"
     return {"task_gain": task, "mechanism": mechanism, "search_policy": "UNTESTED",
             "scope": contract["evaluation_scope"], "gain": result["gain"], "manipulation": probe["status"],
@@ -577,7 +635,7 @@ def cmd_decide(args, rds):
         branch_info = state.get("branches", {}).get(active_b)
         stagnation_report = None
         if branch_info is not None:
-            gain_val = rational(receipt["result"]["gain"])
+            gain_val = bounded(Fraction(receipt["result"]["gain"]))
             min_delta = rational(state["contract"]["primary_metric"]["min_useful_delta"])
             useful = gain_val > min_delta
             if useful and outcome["task_gain"] in {"CONFIRMED", "EXPLORATORY"}:
@@ -605,7 +663,7 @@ def cmd_decide(args, rds):
 
 
 def cmd_status(args, rds):
-    with rds.transaction() as (db, state):
+    with rds.snapshot() as (db, state):
         result = dict(state)
         result["receipts"] = [strict_json(r[0]) for r in db.execute("SELECT body FROM receipts ORDER BY run_id")]
         result["event_count"] = db.execute("SELECT COUNT(*) FROM events").fetchone()[0]
@@ -737,50 +795,36 @@ def cmd_advise(args, rds):
     from rds_meta import load_judgment_graph
     advisor = RDSAdvisor(Path(args.root))
     
-    with rds.transaction() as (db, state):
-        _, graph = load_judgment_graph(getattr(args, "graph", None))
-        
-        # Scenario A: Telemetry diagnosis
-        if getattr(args, "telemetry", None):
-            telemetry = load_spec(args.telemetry)
-            return advisor.advise_on_loss_dynamics(telemetry)
-
-        # Scenario B: Fit status diagnosis (Underfitting vs Overfitting)
-        if getattr(args, "train_loss", None) is not None and getattr(args, "val_loss", None) is not None:
-            b_loss = float(args.baseline_loss) if getattr(args, "baseline_loss", None) is not None else None
-            return advisor.diagnose_fit_status(float(args.train_loss), float(args.val_loss), b_loss)
-
-        # Scenario C: Document Ingestion & Learning
-        if getattr(args, "doc", None):
-            return advisor.ingest_document(Path(args.doc), topic=getattr(args, "topic", None))
-
-        # Scenario D: Plan advice (pre-check simulation)
-        if getattr(args, "plan", None):
-            plan = load_spec(args.plan)
-            # Check gate advisory
-            try:
-                # Run lightweight gate check in memory
-                cmd_plan(argparse.Namespace(plan=args.plan, action="check"), rds, advisory=True)
-                gate_err = None
-            except Exception as e:
-                gate_err = str(e)
-
-            if gate_err:
-                return advisor.advise_on_rejection(gate_err, plan)
-            return {
-                "advisor_type": "PLAN_COMPLIANCE_PASS",
-                "status": "APPROVED",
-                "actionable_suggestion": "方案通过门禁安全检查。空白对照将自动复用已验证缓存，可安全提交执行。"
-            }
-
-        # Scenario E: Global strategic directions
-        recommendations = advisor.recommend_next_directions(state, graph)
+    # These branches do not read research state. In particular, a solver must
+    # not inherit an outer SQLite reader that would block another writer's commit.
+    if getattr(args, "telemetry", None):
+        return advisor.advise_on_loss_dynamics(load_spec(args.telemetry))
+    if getattr(args, "train_loss", None) is not None and getattr(args, "val_loss", None) is not None:
+        b_loss = float(args.baseline_loss) if getattr(args, "baseline_loss", None) is not None else None
+        return advisor.diagnose_fit_status(float(args.train_loss), float(args.val_loss), b_loss)
+    if getattr(args, "doc", None):
+        return advisor.ingest_document(Path(args.doc), topic=getattr(args, "topic", None))
+    if getattr(args, "plan", None):
+        plan = load_spec(args.plan)
+        try:
+            cmd_plan(argparse.Namespace(plan=args.plan, action="check"), rds, advisory=True)
+        except Exception as exc:
+            return advisor.advise_on_rejection(str(exc), plan)
         return {
-            "advisor_type": "STRATEGIC_RESEARCH_ADVICE",
-            "active_branch": state.get("active_branch", "main"),
-            "recommendations_count": len(recommendations),
-            "recommendations": recommendations
+            "advisor_type": "PLAN_COMPLIANCE_PASS",
+            "status": "APPROVED",
+            "actionable_suggestion": "方案通过门禁安全检查，可提交计划；正式提交时将重新核验预算和数据暴露。"
         }
+    with rds.snapshot() as (_, snapshot):
+        state = snapshot
+    _, graph = load_judgment_graph(getattr(args, "graph", None))
+    recommendations = advisor.recommend_next_directions(state, graph)
+    return {
+        "advisor_type": "STRATEGIC_RESEARCH_ADVICE",
+        "active_branch": state.get("active_branch", "main"),
+        "recommendations_count": len(recommendations),
+        "recommendations": recommendations
+    }
 
 
 def parser():

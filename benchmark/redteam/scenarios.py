@@ -1,9 +1,8 @@
 """Adversarial Red-Blue Benchmark Scenarios for RDS-L3.
 
-Models the adversarial symbiosis between:
-1. The Naive Human (Dr. Rash): metric myopia, brute force compute demand, no-control bias, HARKing.
-2. The Sycophantic AI (Dr. Yes, Gemini 3.1 Pro style): flattering agreement, concept substitution,
-   faked manipulation_verified flags, pseudo-ablations.
+Four synthetic protocol violations: threshold substitution, confirmation reuse,
+budget overstretch and post-hoc hypothesis changes. This is not an evaluation
+of a particular human or language model.
 """
 from dataclasses import dataclass
 from typing import Any, Dict, List
@@ -34,6 +33,7 @@ def get_redteam_scenarios() -> List[RedTeamAttack]:
                 "source": "def control(x): return 19*x/(20*(1+x))\ndef treatment(x): return x/(1+x)\n",
                 "formal": {
                     "kind": "contraction_boundary",
+                    "statement": "threshold_necessity",
                     "quantity": "scalar_property",
                     "domain": ["0", "100"],
                     "threshold": "1",

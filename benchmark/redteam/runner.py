@@ -1,7 +1,7 @@
 """Adversarial Red-Blue Benchmark Runner for RDS-L3.
 
-Executes adversarial scenarios against the deterministic RDS-L3 state machine,
-measuring Attack Success Rate (ASR) and Minimal Falsifiable Protocol (MFP) advice generation.
+Executes four synthetic adversarial scenarios against the RDS-L3 state machine.
+Observed scenario rates do not establish security or scientific reliability.
 """
 import json
 from pathlib import Path
@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from benchmark.run import Project, C7_CONTROL
+from benchmark.run import Project, C7_CONTROL, C7_FORMAL
 from benchmark.redteam.scenarios import get_redteam_scenarios, RedTeamAttack
 
 
@@ -24,6 +24,7 @@ class RedTeamRunner:
         self.results = []
 
     def run_all(self) -> Dict[str, Any]:
+        self.results = []
         passed_defenses = 0
         total_attacks = len(self.scenarios)
 
@@ -46,7 +47,8 @@ class RedTeamRunner:
             "passed_defenses": passed_defenses,
             "attack_success_rate": asr,
             "defense_rate": defense_rate,
-            "epistemic_stability": "IMPERMEABLE" if asr == 0.0 else "VULNERABLE",
+            "epistemic_stability": "SCENARIOS_PASSED" if asr == 0.0 else "SCENARIO_FAILURE",
+            "scope": "four_synthetic_scalar_scenarios",
             "results": self.results,
         }
 
@@ -54,7 +56,8 @@ class RedTeamRunner:
         project = Project(budget=50000, floor=4000)
         try:
             if attack.id == "attack-c7-substitution":
-                # Initialize with formal property
+                # Lock a matching control so the mathematical gate is exercised.
+                (project.root / "model.py").write_text(attack.attack_payload["source"], encoding="utf-8")
                 project.init(formal=attack.attack_payload["formal"])
                 # The attacker tries to pass a treatment that does not cross threshold
                 (project.root / "model_attack.py").write_text(attack.attack_payload["source"], encoding="utf-8")
@@ -64,12 +67,11 @@ class RedTeamRunner:
                 
                 # Check gate
                 err = project.call("gate", "check", spec=plan, flag="--plan", ok=False)
-                intercepted = ("[RDS-REJECT]" in err and (
-                    "Self-signed verification fields are forbidden" in err or
-                    "Formal gate FAIL" in err or
-                    "UNKNOWN" in err
-                ))
-                return intercepted, {"error_message": err.strip()}
+                del plan["manipulation_verified"]
+                boundary_err = project.call("gate", "check", spec=plan, flag="--plan", ok=False)
+                intercepted = ("Self-signed verification fields are forbidden" in err
+                               and "Formal gate FAIL" in boundary_err)
+                return intercepted, {"error_message": boundary_err.strip(), "self_sign_error": err.strip()}
 
             elif attack.id == "attack-test-leakage":
                 project.init()
@@ -95,10 +97,13 @@ class RedTeamRunner:
                 return intercepted, {"error_message": err.strip()}
 
             elif attack.id == "attack-harking-tamper":
-                project.init()
-                # Register H1, run a plan
-                p1 = project.plan("p-refute", runtime=5000)
-                project.call("plan", "create", spec=p1)
+                source = C7_CONTROL + "def treatment(x): return 25*x/(20*(1+x))\n"
+                (project.root / "model.py").write_text(source, encoding="utf-8")
+                (project.root / "dev.csv").write_text("sample_id,x,y\ndev-1,10,1\n", encoding="utf-8")
+                project.init(C7_FORMAL)
+                assessment = project.run(project.plan("p-refute", runtime=5000))
+                if assessment["mechanism"] != "REFUTED":
+                    return False, {"error": "Fixture did not produce an executed refutation"}
                 
                 # Now try to tamper by re-adding H1 with altered claim
                 tamper_spec = {
@@ -127,13 +132,14 @@ class RedTeamTest(unittest.TestCase):
         self.assertEqual(report["passed_defenses"], 4)
         self.assertEqual(report["attack_success_rate"], 0.0)
         self.assertEqual(report["defense_rate"], 1.0)
-        self.assertEqual(report["epistemic_stability"], "IMPERMEABLE")
+        self.assertEqual(report["epistemic_stability"], "SCENARIOS_PASSED")
+        self.assertEqual(report["scope"], "four_synthetic_scalar_scenarios")
 
 
 def main():
     print("=" * 65)
     print("RDS-L3 Adversarial Red-Blue Stress Test Suite (Red-Team Benchmark)")
-    print("Target: Deterministic State Machine vs. Naive Human + Sycophantic AI")
+    print("Scope: four synthetic scalar scenarios")
     print("=" * 65)
     runner = RedTeamRunner(verbose=True)
     report = runner.run_all()
@@ -146,9 +152,9 @@ def main():
 
     print("\n" + "=" * 65)
     print(f"Total Attacks: {report['total_attacks']} | Defenses Passed: {report['passed_defenses']}")
-    print(f"Attack Success Rate (ASR): {report['attack_success_rate'] * 100:.1f}%")
-    print(f"Epistemic Defense Rate: {report['defense_rate'] * 100:.1f}%")
-    print(f"System State: {report['epistemic_stability']}")
+    print(f"Observed Scenario Attack Success Rate: {report['attack_success_rate'] * 100:.1f}%")
+    print(f"Observed Scenario Defense Rate: {report['defense_rate'] * 100:.1f}%")
+    print(f"Scenario Result: {report['epistemic_stability']}")
     print("=" * 65)
     if report["attack_success_rate"] > 0:
         sys.exit(1)

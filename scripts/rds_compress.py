@@ -1,87 +1,95 @@
 """Deep Learning Log & Metric Compressor for RDS-L3.
 
-Reduces token consumption by 90-98% in real PyTorch/TensorFlow research workflows:
+Extracts a bounded summary of common training-log fields:
 1. Strips repetitive step-by-step stdout/stderr output (e.g. tqdm bars, ETA lines).
 2. Extracts critical numerical signatures: final losses, convergence trend, NaN/Inf anomaly flags,
    peak gradient norms, and empirical throughput (samples/sec).
-3. Produces a compact, deterministic JSON receipt (<50 tokens) suitable for direct state transition.
+3. Keeps differently named losses separate. Token usage is not measured here.
 """
-import json
 import math
-from pathlib import Path
 import re
-import sys
 from typing import Any, Dict, List
 
 
 def compress_training_log(raw_log: str, max_samples: int = 10) -> Dict[str, Any]:
     """Compresses large training stdout/stderr into a lightweight semantic signature."""
     lines = raw_log.strip().splitlines()
-    loss_pattern = re.compile(r"(?:loss|mse|loss_val|eval_loss)[:=\s]+([0-9]+\.?[0-9]*(?:e[-+]?[0-9]+)?)", re.IGNORECASE)
-    throughput_pattern = re.compile(r"([0-9]+\.?[0-9]*)\s*(?:samples/s|it/s|fps)", re.IGNORECASE)
-    grad_norm_pattern = re.compile(r"(?:grad_norm|gnorm)[:=\s]+([0-9]+\.?[0-9]*)", re.IGNORECASE)
+    if type(max_samples) is not int or max_samples < 1:
+        raise ValueError("max_samples must be a positive integer")
+    number = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?"
+    loss_pattern = re.compile(
+        r"(?<![\w.])((?:(?:train|val|eval|test|validation)[_ -])?loss(?:_(?:train|val|eval|test|validation))?|mse)"
+        + r"(?:\s*[:=]\s*|\s+)(" + number + r")(?![\w.])", re.IGNORECASE)
+    throughput_pattern = re.compile(r"(?<![\w.])(" + number + r")\s*(?:samples/s|it/s|fps)(?!\w)", re.IGNORECASE)
+    grad_norm_pattern = re.compile(r"(?<![\w.])(?:grad_norm|gnorm)(?:\s*[:=]\s*|\s+)(" + number + r")(?![\w.])", re.IGNORECASE)
+    nonfinite_pattern = re.compile(r"(?<![\w.])[+-]?(?:nan|inf(?:inity)?)(?![\w.])", re.IGNORECASE)
 
-    extracted_losses = []
+    loss_series = {}
     throughputs = []
     grad_norms = []
     nan_or_inf_detected = False
 
     for line in lines:
-        if "nan" in line.lower() or "inf" in line.lower():
+        if nonfinite_pattern.search(line):
             nan_or_inf_detected = True
 
-        m_loss = loss_pattern.search(line)
-        if m_loss:
-            try:
-                val = float(m_loss.group(1))
-                if not math.isnan(val) and not math.isinf(val):
-                    extracted_losses.append(val)
-            except ValueError:
-                pass
+        for match in loss_pattern.finditer(line):
+            loss_type = re.sub(r"[ -]", "_", match.group(1).lower())
+            val = float(match.group(2))
+            if not math.isfinite(val):
+                nan_or_inf_detected = True
+                continue
+            series = loss_series.setdefault(loss_type, {
+                "initial_loss": val, "final_loss": val, "min_loss": val,
+                "sample_count": 0, "samples": [], "loss_trend": "UNKNOWN",
+            })
+            series["final_loss"] = val
+            series["min_loss"] = min(series["min_loss"], val)
+            series["sample_count"] += 1
+            series["samples"].append(val)
+            del series["samples"][:-max_samples]
 
-        m_thru = throughput_pattern.search(line)
-        if m_thru:
-            try:
-                throughputs.append(float(m_thru.group(1)))
-            except ValueError:
-                pass
+        for match in throughput_pattern.finditer(line):
+            val = float(match.group(1))
+            if not math.isfinite(val):
+                nan_or_inf_detected = True
+            elif val >= 0:
+                throughputs.append(val)
 
-        m_grad = grad_norm_pattern.search(line)
-        if m_grad:
-            try:
-                grad_norms.append(float(m_grad.group(1)))
-            except ValueError:
-                pass
+        for match in grad_norm_pattern.finditer(line):
+            val = float(match.group(1))
+            if not math.isfinite(val):
+                nan_or_inf_detected = True
+            elif val >= 0:
+                grad_norms.append(val)
 
-    # Compute concise dynamics
-    final_loss = extracted_losses[-1] if extracted_losses else None
-    initial_loss = extracted_losses[0] if extracted_losses else None
-    min_loss = min(extracted_losses) if extracted_losses else None
+    # ponytail: endpoint trends are heuristic; add step-aligned statistics when needed.
+    for series in loss_series.values():
+        if series["sample_count"] >= 2:
+            delta = series["final_loss"] - series["initial_loss"]
+            margin = abs(series["initial_loss"]) * 0.05
+            series["loss_trend"] = "DECREASING" if delta < -margin else "EXPLODING" if delta > margin else "STAGNANT"
+    loss_type = next((key for key in ("loss", "train_loss", "loss_train", "mse") if key in loss_series),
+                     next(iter(loss_series), None))
+    primary = loss_series.get(loss_type, {})
 
-    loss_trend = "UNKNOWN"
-    if initial_loss is not None and final_loss is not None:
-        if final_loss < initial_loss * 0.95:
-            loss_trend = "DECREASING"
-        elif final_loss > initial_loss * 1.05:
-            loss_trend = "EXPLODING"
-        else:
-            loss_trend = "STAGNANT"
-
-    mean_throughput = round(sum(throughputs) / len(throughputs), 2) if throughputs else None
+    mean_throughput = round(sum(value / len(throughputs) for value in throughputs), 2) if throughputs else None
     peak_grad_norm = round(max(grad_norms), 3) if grad_norms else None
 
-    # Return ultra-compact signature (typically ~40 tokens)
     return {
         "compressed": True,
         "raw_lines": len(lines),
-        "initial_loss": initial_loss,
-        "final_loss": final_loss,
-        "min_loss": min_loss,
-        "loss_trend": loss_trend,
+        "raw_characters": len(raw_log),
+        "loss_type": loss_type,
+        "loss_series": loss_series,
+        "initial_loss": primary.get("initial_loss"),
+        "final_loss": primary.get("final_loss"),
+        "min_loss": primary.get("min_loss"),
+        "loss_trend": primary.get("loss_trend", "UNKNOWN"),
+        "trend_assurance": "HEURISTIC_ONLY",
         "nan_or_inf": nan_or_inf_detected,
         "peak_grad_norm": peak_grad_norm,
         "mean_throughput": mean_throughput,
-        "token_reduction_rate": f"{max(0.0, 1.0 - (50.0 / max(50, len(raw_log.split())))) * 100:.1f}%",
     }
 
 

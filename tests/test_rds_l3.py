@@ -34,7 +34,8 @@ class KernelTests(unittest.TestCase):
             result = execute({"source": ORDINARY, "data": "sample_id,x,y\na,1,2\n", "hypothesis": {}})
             self.assertEqual(result["gain"], "1")
             formal = admission_probe({"formal": C7_FORMAL}, C7_CONTROL + "def treatment(x): return 2*x\n")
-            self.assertEqual(formal["status"], "UNKNOWN")
+            self.assertEqual(formal["status"], "PASS")
+            self.assertEqual(formal["assurance"], "CERTIFICATE_CHECKED")
 
     def test_ordinary_cli_without_site_packages(self):
         project = self.project()
@@ -303,7 +304,7 @@ class KernelTests(unittest.TestCase):
         self.assertEqual(dec2["assessment"]["task_gain"], "EXPLORATORY")
 
     def test_redteam_adversarial_stress(self):
-        """Red-Team Adversarial Stress Benchmark: Impermeable to Naive Human + Sycophantic AI collusion."""
+        """Four synthetic scenarios exercise the protocol's rejection paths."""
         from benchmark.redteam.runner import RedTeamRunner
         runner = RedTeamRunner(verbose=False)
         report = runner.run_all()
@@ -311,7 +312,8 @@ class KernelTests(unittest.TestCase):
         self.assertEqual(report["passed_defenses"], 4)
         self.assertEqual(report["attack_success_rate"], 0.0)
         self.assertEqual(report["defense_rate"], 1.0)
-        self.assertEqual(report["epistemic_stability"], "IMPERMEABLE")
+        self.assertEqual(report["epistemic_stability"], "SCENARIOS_PASSED")
+        self.assertEqual(report["scope"], "four_synthetic_scalar_scenarios")
 
     def test_rsi_step3_adversary_and_alignment(self):
         """RSI Step 3: Adversarial mutation fuzzing, alignment evaluation, and auto-repair cycle."""
@@ -337,7 +339,7 @@ class KernelTests(unittest.TestCase):
         self.assertFalse(eval_bad["is_aligned"])
         self.assertTrue("guaranteed_gain" in eval_bad["rejection_reason"] or "banned ungrounded certainty" in eval_bad["rejection_reason"])
 
-        # Valid rule alignment
+        # A schema-valid rule is a proposal, not measured alignment evidence.
         good_rule = {
             "id": "rule-valid-c7-boundary", "scope": "test",
             "trigger": "c7 contraction boundary test",
@@ -346,8 +348,11 @@ class KernelTests(unittest.TestCase):
             "sources": ["source1"]
         }
         eval_good = project.call("meta", "evaluate-alignment", spec=good_rule, flag="--rule")
-        self.assertTrue(eval_good["is_aligned"])
-        self.assertEqual(eval_good["false_positives"], 0)
+        self.assertFalse(eval_good["is_aligned"])
+        self.assertTrue(eval_good["lint_passed"])
+        self.assertEqual(eval_good["assurance"], "HEURISTIC_ONLY")
+        self.assertIsNone(eval_good["precision"])
+        self.assertIsNone(eval_good["false_positive_rate"])
 
         # 3. Auto-repair dry run
         repair_res = project.call("meta", "auto-repair", "--dry-run")
@@ -367,11 +372,11 @@ class KernelTests(unittest.TestCase):
         self.assertEqual(adv_dyn["status"], "CRITICAL_ANOMALY")
         self.assertTrue(any("eps=1e-7" in a for a in adv_dyn["action_items"]))
 
-        # 3. Fit status: Strictly prevent calling Underfitting 'Overfitting'
-        # Train loss = 1.2, Val loss = 1.3, Baseline = 1.25 -> Model hasn't even learned train set!
+        # Scalar losses alone do not identify capacity or optimization causes.
         adv_fit = project.call("advise", "--train-loss", "1.20", "--val-loss", "1.30", "--baseline-loss", "1.25")
-        self.assertEqual(adv_fit["verdict"], "UNDERFITTING_CAPACITY_DEFICIT")
-        self.assertTrue(any("DO NOT add Dropout" in f for f in adv_fit["forbidden_actions"]))
+        self.assertEqual(adv_fit["verdict"], "UNKNOWN")
+        self.assertEqual(adv_fit["assurance"], "HEURISTIC_ONLY")
+        self.assertEqual(adv_fit["forbidden_actions"], [])
 
         # 4. Document ingestion: Model investigates literature and absorbs tuning knowledge
         doc_path = project.root / "tuning_guide.md"
@@ -383,4 +388,3 @@ class KernelTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
-
