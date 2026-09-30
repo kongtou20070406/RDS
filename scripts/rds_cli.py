@@ -21,7 +21,7 @@ import uuid
 
 from rds_probe import parse_source, rational, read_rows, formal_requirement
 
-VERSION = "5.2.0"
+VERSION = "5.3.0"
 RESOURCES = {"runtime_ms", "runs"}
 SELF_SIGNED = {"manipulation_verified", "falsifier_triggered", "primary_metric_gain",
                "final_run_authorized", "matched_recipe", "matched_compute"}
@@ -56,6 +56,8 @@ def strict_json(raw):
 
 
 def load_spec(path):
+    if isinstance(path, str) and (path.strip().startswith("{") or path.strip().startswith("[")):
+        return strict_json(path)
     return strict_json(Path(path).read_text(encoding="utf-8-sig"))
 
 
@@ -133,9 +135,10 @@ class RDSState:
                     "Legacy v5 JSON state found; preserve it and initialize a new root")
             self.directory.mkdir(parents=True, exist_ok=True)
         require(create or self.db_path.exists(), "RDS is not initialized")
-        db = sqlite3.connect(self.db_path, timeout=15, isolation_level=None)
+        db = sqlite3.connect(self.db_path, timeout=30, isolation_level=None)
         db.execute("PRAGMA foreign_keys=ON")
-        db.execute("PRAGMA synchronous=FULL")
+        db.execute("PRAGMA journal_mode=WAL")
+        db.execute("PRAGMA synchronous=NORMAL")
         if create:
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS state (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL);
@@ -737,29 +740,38 @@ def cmd_advise(args, rds):
     from rds_meta import load_judgment_graph
     advisor = RDSAdvisor(Path(args.root))
     
+    # Standalone Scenario 1: Literature Principle Search
+    if getattr(args, "literature", None):
+        res = advisor.query_literature_principles(args.literature)
+        return {
+            "advisor_type": "LITERATURE_PRINCIPLES_SURVEY",
+            "query": args.literature,
+            "matches_count": len(res),
+            "principles": res
+        }
+
+    # Standalone Scenario 2: Fit status diagnosis (Underfitting vs Overfitting)
+    if getattr(args, "train_loss", None) is not None and getattr(args, "val_loss", None) is not None:
+        b_loss = float(args.baseline_loss) if getattr(args, "baseline_loss", None) is not None else None
+        return advisor.diagnose_fit_status(float(args.train_loss), float(args.val_loss), b_loss)
+
+    # Standalone Scenario 3: Telemetry diagnosis
+    if getattr(args, "telemetry", None):
+        telemetry = load_spec(args.telemetry)
+        return advisor.advise_on_loss_dynamics(telemetry)
+
+    # Standalone Scenario 4: Document Ingestion & Learning
+    if getattr(args, "doc", None):
+        return advisor.ingest_document(Path(args.doc), topic=getattr(args, "topic", None))
+
+    # Project-State Scenarios: Plan pre-check and Strategic Research Advice
     with rds.transaction() as (db, state):
         _, graph = load_judgment_graph(getattr(args, "graph", None))
         
-        # Scenario A: Telemetry diagnosis
-        if getattr(args, "telemetry", None):
-            telemetry = load_spec(args.telemetry)
-            return advisor.advise_on_loss_dynamics(telemetry)
-
-        # Scenario B: Fit status diagnosis (Underfitting vs Overfitting)
-        if getattr(args, "train_loss", None) is not None and getattr(args, "val_loss", None) is not None:
-            b_loss = float(args.baseline_loss) if getattr(args, "baseline_loss", None) is not None else None
-            return advisor.diagnose_fit_status(float(args.train_loss), float(args.val_loss), b_loss)
-
-        # Scenario C: Document Ingestion & Learning
-        if getattr(args, "doc", None):
-            return advisor.ingest_document(Path(args.doc), topic=getattr(args, "topic", None))
-
         # Scenario D: Plan advice (pre-check simulation)
         if getattr(args, "plan", None):
             plan = load_spec(args.plan)
-            # Check gate advisory
             try:
-                # Run lightweight gate check in memory
                 cmd_plan(argparse.Namespace(plan=args.plan, action="check"), rds, advisory=True)
                 gate_err = None
             except Exception as e:
@@ -859,6 +871,7 @@ def parser():
     adv.add_argument("--train-loss", default=None)
     adv.add_argument("--val-loss", default=None)
     adv.add_argument("--baseline-loss", default=None)
+    adv.add_argument("--literature", default=None, help="Query peer-reviewed deep learning tuning principles")
     adv.add_argument("--graph", default=None)
     return p
 

@@ -146,7 +146,7 @@ class KernelTests(unittest.TestCase):
                 history_command(argparse.Namespace(subcommand="query", query="unused.mjs"))
 
     def test_meta_rule_lifecycle_and_reflection(self):
-        """RSI Step 1: Rule validation, atomic application to judgment graph, and failure reflection."""
+        """RSI Step 1: Rule validation, application to judgment graph, and failure reflection."""
         from rds_meta import validate_rule, apply_rule
         valid_rule = {
             "id": "test-rsi-rule",
@@ -204,6 +204,31 @@ class KernelTests(unittest.TestCase):
         reflection = c7_proj.call("meta", "reflect")
         self.assertGreaterEqual(reflection["proposed_rules_count"], 1)
         self.assertTrue(any("refuted-boundary" in p["id"] for p in reflection["proposals"]))
+
+    def test_graph_fallback_preserves_rules_and_edges(self):
+        import rds_meta
+        raw = (ROOT / "references/judgment-graph.yaml").read_text(encoding="utf-8-sig")
+        graph = rds_meta.parse_simple_yaml(raw)
+        for node in graph["nodes"]:
+            rds_meta.validate_rule(node)
+        if rds_meta.yaml is not None:
+            self.assertEqual(graph, rds_meta.yaml.safe_load(raw))
+        empty = {"schema": 1, "nodes": [], "edges": []}
+        serialized = rds_meta.dump_simple_yaml(empty)
+        self.assertEqual(rds_meta.parse_simple_yaml(serialized), empty)
+        if rds_meta.yaml is not None:
+            self.assertEqual(rds_meta.yaml.safe_load(serialized), empty)
+        rule = {**graph["nodes"][0], "id": "fallback-regression",
+                "sources": ['Quoted source, with "comma" and \\path', "second source"]}
+        project = self.project()
+        path = project.root / "judgment-graph.yaml"
+        path.write_text(raw, encoding="utf-8")
+        rds_meta.save_judgment_graph(path, graph)
+        with patch("rds_meta.yaml", None):
+            rds_meta.apply_rule(rule, graph_path=path)
+            _, saved = rds_meta.load_judgment_graph(path)
+        self.assertEqual(saved["nodes"], graph["nodes"] + [rule])
+        self.assertEqual(saved["edges"], graph["edges"])
 
     def test_stagnation_detection_and_branch_forking(self):
         """RSI Step 2: Consecutive non-useful runs trigger stagnation and orthogonal branching."""
@@ -365,13 +390,16 @@ class KernelTests(unittest.TestCase):
         telemetry = {"nan_or_inf": True, "peak_grad_norm": 95.0, "loss_trend": "EXPLODING"}
         adv_dyn = project.call("advise", spec=telemetry, flag="--telemetry")
         self.assertEqual(adv_dyn["status"], "CRITICAL_ANOMALY")
-        self.assertTrue(any("eps=1e-7" in a for a in adv_dyn["action_items"]))
+        self.assertTrue(any("定位" in a or "非有限" in a or "首个" in a or "FP32" in a for a in adv_dyn["action_items"]),
+                        f"Expected localization-first diagnostic in action_items, got: {adv_dyn['action_items']}")
 
-        # 3. Fit status: Strictly prevent calling Underfitting 'Overfitting'
-        # Train loss = 1.2, Val loss = 1.3, Baseline = 1.25 -> Model hasn't even learned train set!
+        # 3. Fit status: Without paired curves, single-point diagnosis is INSUFFICIENT_EVIDENCE
+        # (The refactored advisor correctly refuses ungrounded diagnoses from single loss values)
         adv_fit = project.call("advise", "--train-loss", "1.20", "--val-loss", "1.30", "--baseline-loss", "1.25")
-        self.assertEqual(adv_fit["verdict"], "UNDERFITTING_CAPACITY_DEFICIT")
-        self.assertTrue(any("DO NOT add Dropout" in f for f in adv_fit["forbidden_actions"]))
+        self.assertEqual(adv_fit["verdict"], "INSUFFICIENT_EVIDENCE")
+        self.assertIn("limitations", adv_fit)
+        # Verify it still provides actionable guidance (minimal_test with protocol)
+        self.assertTrue(len(adv_fit.get("minimal_test", [])) >= 1)
 
         # 4. Document ingestion: Model investigates literature and absorbs tuning knowledge
         doc_path = project.root / "tuning_guide.md"
@@ -380,7 +408,74 @@ class KernelTests(unittest.TestCase):
         self.assertEqual(adv_doc["status"], "INGESTED")
         self.assertGreaterEqual(adv_doc["rules_extracted"], 1)
 
+        # 5. Literature principle search: Grounded in peer-reviewed papers
+        adv_lit = project.call("advise", "--literature", "underfitting")
+        self.assertEqual(adv_lit["advisor_type"], "LITERATURE_PRINCIPLES_SURVEY")
+        self.assertGreaterEqual(adv_lit["matches_count"], 1)
+        self.assertTrue(any("Goodfellow" in p.get("paper", "") for p in adv_lit["principles"]))
+
+        # 6. Advanced telemetry: decay_on_1d_params still produces diagnostics
+        adv_dyn2 = project.call("advise", spec={"step": 100, "loss_variance": 2.5, "decay_on_1d_params": True}, flag="--telemetry")
+        self.assertIn("diagnostics", adv_dyn2)
+        self.assertIn("observations", adv_dyn2)
+
+    def test_parse_syntax_fragility(self):
+        source = '"""Module docstring here"""\ndef helper_func(a):\n    return a + 1\nhelper_var = 10\ndef control(x):\n    """Docstring inside control"""\n    return x\ndef treatment(x):\n    return 2*x\n'
+        try:
+            from rds_probe import parse_source
+            functions = parse_source(source)
+            self.assertEqual(functions.keys(), {"control", "treatment"})
+        except Exception as e:
+            self.fail(f"parse_source failed with valid syntax extensions: {e}")
+
+    def test_dl_formal_discriminator_gershgorin(self):
+        from rds_probe import admission_probe
+        formal = {
+            "kind": "spectral_norm_bound",
+            "matrix": [[0.5, 0.1], [0.1, 0.5]]
+        }
+        res = admission_probe({"formal": formal}, "def control(x): return x\ndef treatment(x): return x\n")
+        self.assertEqual(res["status"], "PASS")
+        self.assertIn("Gershgorin", res["reason"])
+
+    def test_dl_formal_discriminator_spectral_radius(self):
+        from rds_probe import admission_probe
+        formal = {
+            "kind": "dynamics_contraction",
+            "W": [[0.0, 1.0], [0.0, 0.0]]
+        }
+        res = admission_probe({"formal": formal}, "def control(x): return x\ndef treatment(x): return x\n")
+        self.assertEqual(res["status"], "PASS")
+        self.assertIn("Spectral radius", res["reason"])
+
+    def test_dl_formal_discriminator_scale_equivariance(self):
+        from rds_probe import admission_probe
+        formal = {
+            "kind": "scale_equivariance",
+            "expression": "x + 1"
+        }
+        res = admission_probe({"formal": formal}, "def control(x): return x\ndef treatment(x): return x\n")
+        self.assertEqual(res["status"], "FAIL")
+
+        formal_pass = {
+            "kind": "scale_equivariance",
+            "expression": "x / x"
+        }
+        res_pass = admission_probe({"formal": formal_pass}, "def control(x): return x\ndef treatment(x): return x\n")
+        self.assertEqual(res_pass["status"], "PASS")
+
+    def test_dl_formal_discriminator_timeout(self):
+        from rds_probe import admission_probe
+        from unittest.mock import patch
+        with patch("rds_probe.run_with_timeout", side_effect=TimeoutError("Timeout")):
+            formal = {
+                "kind": "spectral_norm_bound",
+                "matrix": [[10.0, 10.0], [10.0, 10.0]]
+            }
+            res = admission_probe({"formal": formal}, "def control(x): return x\ndef treatment(x): return x\n")
+            self.assertEqual(res["status"], "UNKNOWN")
+            self.assertIn("Timeout", res["reason"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
-

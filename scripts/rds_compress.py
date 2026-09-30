@@ -17,9 +17,10 @@ from typing import Any, Dict, List
 def compress_training_log(raw_log: str, max_samples: int = 10) -> Dict[str, Any]:
     """Compresses large training stdout/stderr into a lightweight semantic signature."""
     lines = raw_log.strip().splitlines()
-    loss_pattern = re.compile(r"(?:loss|mse|loss_val|eval_loss)[:=\s]+([0-9]+\.?[0-9]*(?:e[-+]?[0-9]+)?)", re.IGNORECASE)
+    loss_pattern = re.compile(r"(?:loss|mse|loss_val|eval_loss)[:=\s]+([0-9]+\.?[0-9]*(?:e[-+]?[0-9]+)?|nan|[-+]?inf(?:inity)?)", re.IGNORECASE)
     throughput_pattern = re.compile(r"([0-9]+\.?[0-9]*)\s*(?:samples/s|it/s|fps)", re.IGNORECASE)
     grad_norm_pattern = re.compile(r"(?:grad_norm|gnorm)[:=\s]+([0-9]+\.?[0-9]*)", re.IGNORECASE)
+    nan_inf_boundary_pattern = re.compile(r"\b(?:nan|[-+]?inf(?:inity)?)\b", re.IGNORECASE)
 
     extracted_losses = []
     throughputs = []
@@ -27,17 +28,24 @@ def compress_training_log(raw_log: str, max_samples: int = 10) -> Dict[str, Any]
     nan_or_inf_detected = False
 
     for line in lines:
-        if "nan" in line.lower() or "inf" in line.lower():
+        # Strict word boundary check to prevent false positives like "inference" or "financial"
+        if nan_inf_boundary_pattern.search(line):
             nan_or_inf_detected = True
 
         m_loss = loss_pattern.search(line)
         if m_loss:
-            try:
-                val = float(m_loss.group(1))
-                if not math.isnan(val) and not math.isinf(val):
-                    extracted_losses.append(val)
-            except ValueError:
-                pass
+            raw_val = m_loss.group(1).lower()
+            if "nan" in raw_val or "inf" in raw_val:
+                nan_or_inf_detected = True
+            else:
+                try:
+                    val = float(raw_val)
+                    if math.isnan(val) or math.isinf(val):
+                        nan_or_inf_detected = True
+                    else:
+                        extracted_losses.append(val)
+                except ValueError:
+                    pass
 
         m_thru = throughput_pattern.search(line)
         if m_thru:
@@ -53,14 +61,24 @@ def compress_training_log(raw_log: str, max_samples: int = 10) -> Dict[str, Any]
             except ValueError:
                 pass
 
-    # Compute concise dynamics
+    # Compute concise dynamics & spike detection
     final_loss = extracted_losses[-1] if extracted_losses else None
     initial_loss = extracted_losses[0] if extracted_losses else None
     min_loss = min(extracted_losses) if extracted_losses else None
+    max_loss = max(extracted_losses) if extracted_losses else None
+
+    loss_spike_detected = False
+    if extracted_losses and len(extracted_losses) >= 3 and initial_loss is not None:
+        sorted_losses = sorted(extracted_losses)
+        median_loss = sorted_losses[len(sorted_losses) // 2]
+        if max_loss is not None and (max_loss > 3.0 * median_loss or max_loss > 2.5 * initial_loss) and max_loss > 0.5:
+            loss_spike_detected = True
 
     loss_trend = "UNKNOWN"
     if initial_loss is not None and final_loss is not None:
-        if final_loss < initial_loss * 0.95:
+        if loss_spike_detected:
+            loss_trend = "SPIKE_DESTABILIZED"
+        elif final_loss < initial_loss * 0.95:
             loss_trend = "DECREASING"
         elif final_loss > initial_loss * 1.05:
             loss_trend = "EXPLODING"
@@ -77,7 +95,9 @@ def compress_training_log(raw_log: str, max_samples: int = 10) -> Dict[str, Any]
         "initial_loss": initial_loss,
         "final_loss": final_loss,
         "min_loss": min_loss,
+        "max_loss": max_loss,
         "loss_trend": loss_trend,
+        "loss_spike_detected": loss_spike_detected,
         "nan_or_inf": nan_or_inf_detected,
         "peak_grad_norm": peak_grad_norm,
         "mean_throughput": mean_throughput,

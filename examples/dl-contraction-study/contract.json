@@ -1,0 +1,35 @@
+{
+  "project_id": "dl-contraction-study",
+  "claim": "Contractive activation bounded above 1.0 maintains numerical stability while reducing reconstruction error",
+  "primary_metric": {
+    "name": "mse",
+    "direction": "min",
+    "min_useful_delta": "1/100"
+  },
+  "evaluation_scope": "finite_locked_dataset",
+  "baseline_source": "model.py",
+  "budget": {
+    "limits": {
+      "runtime_ms": 60000,
+      "runs": 10
+    },
+    "confirmation_floor": {
+      "runtime_ms": 4000,
+      "runs": 1
+    }
+  },
+  "splits": {
+    "development": {
+      "role": "development",
+      "path": "dev_dataset.csv",
+      "cohort": "dev",
+      "prior_exposure": "exposed"
+    },
+    "final": {
+      "role": "confirmation",
+      "path": "test_dataset.csv",
+      "cohort": "final",
+      "prior_exposure": "none_declared"
+    }
+  }
+}

@@ -1,5 +1,10 @@
 # Static decision rules, not a project memory database. Evidence and outcomes stay in source records.
-# Status denotes evidence for a rule's discriminating value, not a guarantee of higher task score.
+# Rules guide discriminating tests and interpretation, not guarantees of higher task scores.
+# Historical rules below are retrospective syntheses of the five related NSI/EqOp cases
+# in benchmark/manifest.json, not independent GPU reruns or causal estimates of RDS impact.
+# Public packet paths and original-message IDs preserve traceability without private host paths.
+# Repository file references are relative to the repository root.
+# These cases are development evidence for this graph; replaying them is not a fresh holdout.
 schema: 1
 nodes:
   - id: locked-test-selection
@@ -33,6 +38,7 @@ nodes:
     sources: ["NSI 2026-07-29 original experiment and user correction; retrieve via Obelisk when needed"]
 
   - id: computation-graph-identity
+    executable: {"decisions":["mechanism-attribution"],"preconditions":[{"fact":"mechanism_claim","op":"eq","value":true,"query":"Read the locked question and latest decision: is a primary gain being attributed to a specific mechanism?"}],"satisfied_when":[{"fact":"graph_identity_preserved","op":"eq","value":true,"query":"Read the tensor path and existing fixed-weight branch swap: does identity survive until the claimed operator?","on_false":{"id":"narrow-erased-identity","kind":"INTERPRETATION_UPDATE","description":"Withdraw the affected mechanism attribution and inspect the collapse point before full retraining.","competing_explanations":["identity erased before the operator","audit refers to another version"],"required_observables":["versioned tensor path","fixed-weight swap"],"outcomes":[{"observation":"identity erased in this path","next_decision":"retain only measured engineering gain"},{"observation":"audit belongs to another version","next_decision":"reconcile source identity"}],"stop_condition":"Reuse existing artifacts first; stop on invalid prerequisites or the declared budget cap."}}],"action":{"id":"inspect-graph-identity","kind":"READ_ONLY_CHECK","description":"Inspect code and an existing fixed-weight identity-sensitive swap before considering training.","competing_explanations":["claimed identity reaches the operator","pooling/routing collapses identity"],"required_observables":["code/checkpoint identity","tensor path","fixed-weight swap"],"outcomes":[{"observation":"identity preserved","next_decision":"proceed to executed manipulation check"},{"observation":"identity erased","next_decision":"withdraw branch-identity attribution"}],"stop_condition":"Reuse existing artifacts first; stop on invalid prerequisites or the declared budget cap."}}
     scope: general check; NSI nine-axis failure is a local example
     trigger: a claimed multi-branch or multi-axis mechanism may be pooled before the operation meant to use its identity
     correction: names and diagrams cannot establish what information the executed graph preserves
@@ -45,6 +51,7 @@ nodes:
       - "https://proceedings.neurips.cc/paper_files/paper/2018/hash/294a8ed24b1ad22ec2e7efea049b8737-Abstract.html"
 
   - id: proxy-primary-bridge
+    executable: {"decisions":["mechanism-attribution"],"preconditions":[{"fact":"mechanism_claim","op":"eq","value":true,"query":"Read the locked question and latest decision: is a primary gain being attributed to a specific mechanism?"},{"fact":"primary_gain_reported","op":"eq","value":true,"query":"Read the primary metric and matched baseline receipt: was task gain observed?"},{"fact":"same_seed_matched_comparison","op":"eq","value":true,"query":"Read both arm manifests for same seed, carrier, data, selection and budget."}],"action":{"id":"paired-route-ablation","kind":"PAIRED_TEST","description":"After sourced prerequisites pass, disable the claimed route under the matched carrier/data/same seed/budget; reuse an identical baseline receipt.","competing_explanations":["gain depends on the route in this recipe","gain survives through another route/capacity"],"required_observables":["versioned ablation manifest","matched primary metric","resource use","actual route activity"],"outcomes":[{"observation":"gain survives removal","next_decision":"retain engineering gain only"},{"observation":"gain disappears under valid matched ablation","next_decision":"retain scoped mechanism evidence; no universal necessity claim"}],"stop_condition":"Reuse existing artifacts first; stop on invalid prerequisites or the declared budget cap."}}
     scope: general
     trigger: a proxy, visual impression, or aggregate PSNR rises while the claimed iterative mechanism may be bypassed
     correction: task gain and mechanism evidence are separate propositions
@@ -60,14 +67,18 @@ nodes:
   - id: short-budget-fidelity
     scope: conditional; train-curve and schedule dependent
     trigger: short-run ordering is used to select a full-budget architecture
-    correction: short-run rank is an unvalidated surrogate until checked against formal endpoints
+    correction: short-run rank is an unvalidated surrogate until checked against formal endpoints; equal steps need not imply equal sample-work or comparable convergence when batch size and schedule differ
     alternatives: [early rank predicts endpoint, schedules or fast starters reverse rank]
-    discriminator: compare early and full-budget ranks on representative candidates; report rank correlation and top-choice retention
+    discriminator: compare early and longer matched-budget ranks on representative candidates; account for steps times batch size, schedule and implementation changes, and report rank correlation or top-choice retention only when enough candidates were measured
     primary_gate: full-budget formal endpoint under the same recipe
     falsifier: if ranks reverse, short runs serve only as feasibility diagnostics for this setting
     sources:
       - "NSI 2026-08-01 5k/15k/30k versus 60k case; retrieve original logs through Obelisk"
       - "https://arxiv.org/abs/1905.04753"
+      - "benchmark/prompts/sep14-48h-budget.md"
+      - "benchmark/sealed/sep14-48h-budget.md"
+      - "codex:01a07a03-acf7-7fd1-b823-afdd157db056:002233"
+      - "codex:01a07a03-acf7-7fd1-b823-afdd157db056:002957"
 
   - id: method-recipe-variance
     scope: general
@@ -82,14 +93,18 @@ nodes:
       - "https://arxiv.org/abs/2607.26587"
 
   - id: realized-boundary-not-knob
+    executable: {"decisions":["mechanism-attribution","strict-boundary-test"],"preconditions":[{"fact":"strict_subunit_claim","op":"eq","value":true,"query":"Read the claim: is strict realized mass below one, rather than a safety margin, being tested?"},{"fact":"executed_equation_family","op":"eq","value":"nsi-row-normalization","query":"Read the executed versioned equation; do not identify this family from generic m<1 text."},{"fact":"strict_crossing_feasible","op":"eq","value":true,"query":"Read the attainable-range derivation for this executed equation, domain and rho. Can this arm realize m>=1?","on_false":{"id":"narrow-boundary-interpretation","kind":"INTERPRETATION_UPDATE","description":"Narrow the current interpretation to the tested margin/engineering effect and read actual crossing logs. A rho=1 knob change is not a strict crossing when the sourced executed equation/range remains m<1.","competing_explanations":["executed equation/range excludes crossing","log or equation belongs to another version"],"required_observables":["executed equation/version","attainable range/source","actual mass/crossing log"],"outcomes":[{"observation":"range and actual log agree that no crossing occurred","next_decision":"retain margin comparison only; mechanism remains untested"},{"observation":"actual log contradicts the declared equation/range","next_decision":"reconcile implementation and range before another mechanism test"}],"stop_condition":"Reuse existing artifacts first; stop on invalid prerequisites or the declared budget cap."}}],"satisfied_when":[{"fact":"actual_boundary_crossing","op":"eq","value":true,"query":"Read actual per-sample mass and crossing counts for the exact executed arm.","on_false":{"id":"narrow-boundary-interpretation","kind":"INTERPRETATION_UPDATE","description":"Narrow the current interpretation to the tested margin/engineering effect and read actual crossing logs. A rho=1 knob change is not a strict crossing when the sourced executed equation/range remains m<1.","competing_explanations":["executed equation/range excludes crossing","log or equation belongs to another version"],"required_observables":["executed equation/version","attainable range/source","actual mass/crossing log"],"outcomes":[{"observation":"range and actual log agree that no crossing occurred","next_decision":"retain margin comparison only; mechanism remains untested"},{"observation":"actual log contradicts the declared equation/range","next_decision":"reconcile implementation and range before another mechanism test"}],"stop_condition":"Reuse existing artifacts first; stop on invalid prerequisites or the declared budget cap."}}],"action":{"id":"inspect-actual-boundary-crossings","kind":"READ_ONLY_CHECK","description":"Reuse source and crossing logs; verify actual strict-boundary manipulation before a task comparison.","competing_explanations":["threshold actually crossed","only a cap/margin changed and masses remain subunit"],"required_observables":["executed equation","declared domain","attainable range","actual crossing counts"],"outcomes":[{"observation":"crossing observed in declared domain","next_decision":"consider matched boundary task comparison"},{"observation":"crossing absent","next_decision":"retain margin comparison only"}],"stop_condition":"Reuse existing artifacts first; stop on invalid prerequisites or the declared budget cap."}}
     scope: NSI-style row normalization a_i = rho * raw_i / (1 + sum_j abs(raw_j)); recompute for any changed implementation
     trigger: a change of the rho parameter is claimed to test whether actual row mass below one is necessary
     correction: actual mass m = rho * S / (1 + S), S = sum_j abs(raw_j); for finite S and rho = 1, m is still strictly below one
     alternatives: [a tighter 0.95 safety margin helps, strict subunit mass is necessary, ordinary amplitude control or optimization explains the result]
-    discriminator: to test the strict subunit predicate, use a normalized comparator that can realize m at or above one, measure actual crossings, and match starting operator and training as closely as feasible; a 0.95 versus 1.00 cap tests only the margin
+    discriminator: to test the strict subunit predicate, use a normalized comparator that can realize m at or above one, measure actual crossings, and match starting operator and training as closely as feasible; a 0.95 versus 1.00 cap tests only the margin; for rho > 1 the original formula crosses only when S >= 1 / (rho - 1)
     primary_gate: matched restoration metric and budget; separate any task gain from the narrower mechanism conclusion
     falsifier: if the executed operator differs from this formula, recalculate its attainable mass; if no actual crossing occurs, withdraw any strict-bound inference
-    sources: ["NSI operator definition, 2026-08-26 original record codex:01a03d28-4c3b-70a0-94f0-d4396cde19b6:000244"]
+    sources:
+      - "benchmark/prompts/sep13-c7-boundary.md"
+      - "benchmark/sealed/sep13-c7-boundary.md — source-aware intervention audit"
+      - "codex:01a03d28-4c3b-70a0-94f0-d4396cde19b6:000244"
 
   - id: depth-versus-trajectory
     scope: NSI case and analogous recurrent models
@@ -102,14 +117,257 @@ nodes:
     sources: ["NSI 2026-09-27 experiment audit; retrieve original checkpoint records through Obelisk"]
 
   - id: reuse-baseline-control
-    scope: general / compute-allocation
+    executable: {"decisions":["allocate-control-compute"],"preconditions":[{"fact":"plan_reruns_baseline","op":"eq","value":true,"query":"Read the pending plan: is it allocating a repeated blank control?"},{"fact":"baseline_cache_available","op":"eq","value":true,"query":"Read cache keys and per-sample artifacts without running the baseline."}],"satisfied_when":[{"fact":"baseline_identity_exact","op":"eq","value":true,"query":"Compare control AST/data bytes; stochastic/trained extensions also require seed/checkpoint/recipe/numerical identity."},{"fact":"successful_origin_receipt","op":"eq","value":true,"query":"Read the original successful receipt and bind its cached sample outputs."}],"action":{"id":"verify-control-cache-identity","kind":"READ_ONLY_CHECK","description":"Inspect existing cache identity and receipt. Matching signature/metric label is insufficient; a cache hit does not restore confirmation eligibility.","competing_explanations":["identical cached computation","code/data/seed/recipe or origin differ"],"required_observables":["full control identity","data SHA256","sample outputs","original receipt"],"outcomes":[{"observation":"identity and successful origin match","next_decision":"reuse cached control; pay incremental treatment cost"},{"observation":"identity or origin differs","next_decision":"invalidate cache candidate; cost necessary fresh control"}],"stop_condition":"Reuse existing artifacts first; stop on invalid prerequisites or the declared budget cap."}}
+    scope: deterministic reference adapter / compute-allocation; extend identity for stochastic or learned controls
     trigger: an experiment plan proposes re-running the blank baseline control on a dataset partition where an identical baseline was already evaluated
-    correction: once an approved baseline run has executed on the matched dataset with identical control AST and seed, its evaluation should be cached and reused across treatment evaluations; do not spend compute re-evaluating the identical baseline across minor environment/machine variations
+    correction: reuse a verified identical control evaluation across treatments; the current rational adapter is deterministic and keys the cache by locked control AST and dataset bytes, while stochastic or learned controls also require seed, checkpoint, recipe and any result-affecting execution settings
     alternatives: [fresh rerun needed due to code/data/seed drift, redundant rerun of identical baseline]
-    discriminator: verify control AST hash, random seed, and dataset split SHA-256; if identical, reuse cached baseline regardless of harmless host/environment variations
-    primary_gate: cached baseline metrics must bind the exact dataset partition and control AST; reject redundant baseline GPU hours
-    falsifier: if baseline code, random seed, or dataset partition has changed, invalidate cache and require a fresh baseline run
-    sources: ["RDS Autonomous Efficiency Protocol", "FML-Bench v2 Resource Preservation"]
+    discriminator: verify control identity and dataset SHA-256 against the original receipt; for an extended adapter verify its full stochastic and numerical identity before reuse; host changes are harmless only when they cannot change the declared control result
+    primary_gate: cached per-sample control outputs must bind the locked baseline and exact dataset partition; a cache hit does not restore an exposed partition's confirmation eligibility
+    falsifier: invalidate reuse if baseline computation, data, or result-affecting stochastic or numerical conditions changed, or if cached observations cannot be traced to a successful receipt
+    sources:
+      - "scripts/rds_cli.py — cmd_run baseline_key and BASELINE_CACHED receipt"
+      - "scripts/rds_probe.py — restricted deterministic rational AST"
+      - "benchmark/prompts/sep13-c7-boundary.md — no-repeat research instruction"
+      - "codex:01a07a03-acf7-7fd1-b823-afdd157db056:001512"
+
+  - id: trained-anchor-not-method-win
+    scope: first feasible benchmark run / July08 EqOp example
+    trigger: a first completed trained model or an old single score is used to claim superiority over an unmatched method
+    correction: a feasible trained anchor establishes executable training and a measured endpoint; comparative superiority requires an appropriate matched control
+    alternatives:
+      - feasible implementation with unknown comparative utility
+      - reproducible gain over a matched baseline
+    discriminator: record the anchor's recipe, resource use and per-example endpoint; compare a mixer-only replacement with the baseline under the same carrier, data, selection and evaluation rules
+    primary_gate: the project's primary task metric against the matched baseline at the declared quality-resource budget
+    falsifier: if only the anchor completed, retain the feasibility conclusion and withhold the comparative win; an unfavorable matched result narrows the tested recipe rather than every future operator
+    sources:
+      - "benchmark/manifest.json — july08-baseline provenance and packet hashes"
+      - "benchmark/prompts/july08-baseline.md"
+      - "benchmark/sealed/july08-baseline.md"
+      - "1c33f31f-a6bf-4ed2-adaf-3dff4e46c882"
+      - "8475a3e9-b8da-449e-87ab-6e806e421832"
+
+  - id: resource-canary-before-campaign
+    scope: resource-constrained training / July08 and Aug30 examples
+    trigger: architecture size or a multi-arm campaign is chosen from nominal capacity without measuring the actual run configuration
+    correction: parameter counts and GPU availability alone do not establish memory fit or affordable throughput for the selected batch, crop, precision and evaluation path
+    alternatives:
+      - feasible run at useful comparison scale
+      - memory or runtime failure hidden by nominal estimates
+    discriminator: run a bounded canary at the intended configuration; measure peak memory and step time, verify data loading and evaluation overhead, then cost the matched campaign before launch
+    primary_gate: a reproducible task comparison that fits the explicit memory redline and total campaign cap
+    falsifier: if the canary or measured overhead invalidates the estimate, reduce or reallocate the plan before launching; a smaller feasible width is not itself a quality improvement
+    sources:
+      - "benchmark/manifest.json — July08, Aug30 and Sep14 provenance and packet hashes"
+      - "benchmark/prompts/july08-baseline.md"
+      - "benchmark/sealed/july08-baseline.md"
+      - "benchmark/prompts/aug30-gopro-command.md"
+      - "benchmark/sealed/aug30-gopro-command.md"
+      - "benchmark/prompts/sep14-48h-budget.md"
+      - "c833ef67-e14b-48d5-a384-c45e01a8d1c3"
+      - "codex:01a05273-2670-7d51-a636-64470fed50d5:002348"
+
+  - id: bundled-change-needs-component-control
+    scope: compiler or architecture attribution / Aug02 DH9 example
+    trigger: a new model changes both representation and input-dependent routing, then attributes its score difference to one component
+    correction: a bundled change estimates the bundle's effect in the tested recipe; it does not identify which component contributed or whether their interaction mattered
+    alternatives:
+      - representation contribution
+      - routing contribution
+      - representation-routing interaction
+      - initialization or resource difference
+    discriminator: predeclare one component intervention while retaining the carrier, routing interface, trainable capacity, starting operator and training recipe as closely as feasible; inspect both the physical action and its routing-energy path
+    primary_gate: a fixed-endpoint primary metric under a matched budget, with remaining mismatches recorded separately from mechanism attribution
+    falsifier: if both components or their effective paths change, withdraw component-specific attribution; a loss of the tested control supports retaining the bundle locally without proving every component necessary
+    sources:
+      - "benchmark/manifest.json — aug02-compiler-ablation provenance and packet hashes"
+      - "benchmark/prompts/aug02-compiler-ablation.md"
+      - "benchmark/sealed/aug02-compiler-ablation.md"
+      - "codex:019fc075-e3dd-7c50-aa90-16c85eb31d29:000176"
+      - "codex:019fc09b-240c-7e73-94df-670d1b8dd6af:000418"
+
+  - id: ablation-is-intervention-specific
+    scope: structural necessity claims / Aug02 dictionary controls
+    trigger: a replacement ablation is treated as equivalent to deletion, or one composite ablation is used to declare every removed element necessary
+    correction: filling local slots with global coordinates, zeroing their actions, and deleting their slots are distinct interventions with distinct estimands
+    alternatives:
+      - tested replacement loses useful information
+      - removal changes capacity or routing
+      - only some components or their interaction matter
+    discriminator: bind the executed arm to a precise intervention manifest; verify preserved slots, gains, action paths and routing inputs, and describe the conclusion for that exact arm
+    primary_gate: matched endpoint and resource comparison for the executed intervention; reused development images support local model choice rather than generalization confirmation
+    falsifier: if the executed arm differs from the planned control, revise the interpretation; failure of one replacement does not establish individual necessity or predict every other ablation
+    sources:
+      - "benchmark/manifest.json — aug02-compiler-ablation provenance and packet hashes"
+      - "benchmark/prompts/aug02-compiler-ablation.md"
+      - "benchmark/sealed/aug02-compiler-ablation.md"
+      - "codex:019fcf6a-5859-76b1-a608-248dbc0d8bd7:002756"
+      - "codex:019fd155-bfe5-7920-b4ac-ff0e403a7a2e:001368"
+      - "codex:019fd155-bfe5-7920-b4ac-ff0e403a7a2e:012507"
+
+  - id: transfer-requires-matched-protocol
+    scope: cross-dataset mixer comparison / Aug30 GoPro example
+    trigger: a small-dataset signal or unmatched old run is promoted to a cross-task method win
+    correction: transfer is a new empirical question; the official carrier, data conventions, evaluation path and credible controls must be audited for the target task
+    alternatives:
+      - operator effect survives the target-task protocol
+      - earlier gain depended on dataset or recipe
+      - apparent gain comes from an unmatched comparison
+    discriminator: execute the requested task pivot with a costed matched comparison; fix carrier, endpoints and evaluation, include a strong relevant comparator, and use paired seeds when the gain and available budget justify them
+    primary_gate: target-task primary metric and paired uncertainty at the declared resource budget, with every completed arm and artifact identity recorded
+    falsifier: if the gain disappears against the matched target-task control, retract the transfer claim for that recipe; do not infer failure on all tasks from one target-task result
+    sources:
+      - "benchmark/manifest.json — aug30-gopro-command provenance and packet hashes"
+      - "benchmark/prompts/aug30-gopro-command.md"
+      - "benchmark/sealed/aug30-gopro-command.md"
+      - "codex:01a05273-2670-7d51-a636-64470fed50d5:000348"
+      - "codex:01a05273-2670-7d51-a636-64470fed50d5:004469"
+
+  - id: protocol-versioned-evidence
+    scope: historical score comparison / evolving model and evaluation protocols
+    trigger: scores from different model versions, tiling rules, checkpoints or evaluation recipes are merged into one comparative result
+    correction: a task name and metric label do not identify an experiment; early halo-tiling and later full-image results cannot be exchanged without a matched replay
+    alternatives:
+      - reproducible difference under one protocol
+      - score difference due to protocol or model drift
+    discriminator: bind each table row to dataset hash, model and checkpoint identity, seed, training budget, endpoint selection and evaluation settings; compare like versions or explicitly rerun the required matched contrast
+    primary_gate: a primary-metric table with auditable protocol identity and comparators evaluated by the same rule
+    falsifier: if provenance cannot reconcile the rows, withhold the comparative claim rather than choosing the larger historical score
+    sources:
+      - "benchmark/manifest.json — aug30-gopro-command provenance and packet hashes"
+      - "benchmark/prompts/aug30-gopro-command.md"
+      - "benchmark/sealed/aug30-gopro-command.md"
+      - "codex:01a05273-2670-7d51-a636-64470fed50d5:004469"
+      - "codex:01a05b11-1356-7112-b489-17f64ae41ac0:001069"
+
+  - id: normalization-removal-confound
+    scope: amplitude constraints and optimization / Sep13 C7 example
+    trigger: removing normalization harms quality and is offered as proof that a strict subunit boundary is necessary
+    correction: deletion changes coefficient amplitude, the initial operator and gradients together; it tests the whole normalized design against the unprojected design
+    alternatives:
+      - ordinary amplitude control helps
+      - a strict subunit boundary contributes
+      - changed initialization or optimization explains the loss
+    discriminator: retain normalization and match the starting operator and training recipe while varying the claimed boundary; measure realized amplitude and optimization differences rather than treating the knob value as the intervention
+    primary_gate: matched task quality plus a verified boundary manipulation; task utility and strict-bound attribution are separate conclusions
+    falsifier: if the comparator changes amplitude or optimization without identifying the boundary effect, retain only the narrower controlled-amplitude conclusion
+    sources:
+      - "benchmark/manifest.json — sep13-c7-boundary provenance and packet hashes"
+      - "benchmark/prompts/sep13-c7-boundary.md"
+      - "benchmark/sealed/sep13-c7-boundary.md"
+      - "codex:01a042a0-1d63-7673-a07f-3f3f0a51bcee:006524"
+      - "codex:01a084bf-fc89-73d3-a405-4d0b0e16da43:001633"
+
+  - id: executed-manipulation-validity
+    executable: {"decisions":["mechanism-attribution"],"preconditions":[{"fact":"mechanism_claim","op":"eq","value":true,"query":"Read the locked question and latest decision: is a primary gain being attributed to a specific mechanism?"}],"satisfied_when":[{"fact":"actual_predicate_changed","op":"eq","value":true,"query":"Read the executed intervention manifest and measured route activity/crossings: did the intended property change?","on_false":{"id":"narrow-unexecuted-manipulation","kind":"INTERPRETATION_UPDATE","description":"Mark the mechanism comparison untested; inspect actual route/crossing logs before redesigning.","competing_explanations":["intended property unchanged","code/log identity mismatch"],"required_observables":["executed manifest","actual predicate","source identity"],"outcomes":[{"observation":"intended property unchanged","next_decision":"narrow interpretation and redesign intervention"},{"observation":"evidence identity mismatch","next_decision":"repair binding before new comparison"}],"stop_condition":"Reuse existing artifacts first; stop on invalid prerequisites or the declared budget cap."}}],"action":{"id":"inspect-realized-manipulation","kind":"READ_ONLY_CHECK","description":"Inspect existing intervention measurements; a knob label is not actual manipulation.","competing_explanations":["intended property physically changed","another property changed or no manipulation occurred"],"required_observables":["intervention manifest","actual predicate values","executed identity"],"outcomes":[{"observation":"intended property changed","next_decision":"consider matched task comparison"},{"observation":"intended property unchanged","next_decision":"mark mechanism untested and revise intervention"}],"stop_condition":"Reuse existing artifacts first; stop on invalid prerequisites or the declared budget cap."}}
+    scope: general / threshold and mechanism interventions
+    trigger: a treatment is admitted or interpreted as testing a property without showing that its executed values can and do change that property
+    correction: declared intervention labels and permissive parameter ranges are not manipulation checks; a same-side treatment cannot discriminate a threshold proposition
+    alternatives:
+      - the intervention changes the claimed property
+      - the intervention is infeasible or unresponsive
+      - the intervention changes a different property
+    discriminator: derive the attainable range from the executed equation before expensive training, then log actual crossings or route activity on the committed data; keep feasibility, realized intervention and task outcome as separate checks
+    primary_gate: the declared property must actually be manipulated before mechanism attribution; task quality still uses the predeclared matched metric and budget
+    falsifier: absent realized manipulation, mark the mechanism untested; a valid counterexample within the declared domain refutes that necessity claim without proving a universal alternative
+    sources:
+      - "benchmark/manifest.json — sep13-c7-boundary provenance and packet hashes"
+      - "benchmark/prompts/sep13-c7-boundary.md"
+      - "benchmark/sealed/sep13-c7-boundary.md — source-aware intervention audit"
+      - "codex:01a03d28-4c3b-70a0-94f0-d4396cde19b6:000244"
+      - "scripts/rds_probe.py — admission_probe and observed boundary checks"
+
+  - id: learned-support-not-allowed-support
+    scope: learned constraints / Sep13 learnable-scaling example
+    trigger: a learned parameter is allowed to cross a boundary and a quality gain is credited to crossing without inspecting the fitted values
+    correction: the allowed parameter domain and the realized learned support are different; a gain confined to the original regime supports adaptation within that regime
+    alternatives:
+      - adaptation within the original constrained regime helps
+      - realized boundary crossing helps
+      - initialization or optimization accounts for the gain
+    discriminator: inspect the executed effective operator and fitted parameter range across the declared data; compare matched fixed and learned controls and report boundary activity alongside quality
+    primary_gate: primary metric for utility and observed effective-property crossings for the boundary claim, under the same recipe and selection rule
+    falsifier: if no fitted effective operator crosses the boundary, withdraw any claim that crossing helped or that the boundary is unnecessary; parameter inspection must be repeated when the implementation changes
+    sources:
+      - "benchmark/manifest.json — sep13-c7-boundary provenance and packet hashes"
+      - "benchmark/prompts/sep13-c7-boundary.md"
+      - "benchmark/sealed/sep13-c7-boundary.md"
+      - "codex:01a07a03-acf7-7fd1-b823-afdd157db056:001664"
+      - "codex:01a07a03-acf7-7fd1-b823-afdd157db056:001181"
+      - "codex:01a07a03-acf7-7fd1-b823-afdd157db056:001595"
+
+  - id: hard-budget-reallocation
+    scope: finite campaign allocation / Sep14 48-hour example
+    trigger: a weak early rank motivates extending selected arms while an existing queue already consumes the authorized total cap
+    correction: a useful extension spends the remaining campaign budget; queued allocations are not free and must be cancelled or deferred before replacing them
+    alternatives:
+      - reallocation can resolve a low-fidelity ranking within the cap
+      - an extension cannot fit the measured remaining budget
+      - the early rank is sufficient for the next local decision
+    discriminator: account for spent and reserved work; derive scheduled wall time from per-arm step times, step counts and feasible concurrency, including data and evaluation overhead and contingency; cost a matched pair and explicitly release displaced allocations before admission
+    primary_gate: expected decision-changing primary-metric evidence within the authorized total cap and protected confirmation reserve
+    falsifier: if the measured remaining budget cannot fit the comparison, reduce the plan or seek a new budget decision; a promising outcome never retroactively authorizes an overrun
+    sources:
+      - "benchmark/manifest.json — sep14-48h-budget provenance and packet hashes"
+      - "benchmark/prompts/sep14-48h-budget.md"
+      - "benchmark/sealed/sep14-48h-budget.md"
+      - "codex:01a07a03-acf7-7fd1-b823-afdd157db056:001688"
+      - "codex:01a07a03-acf7-7fd1-b823-afdd157db056:001712"
+      - "codex:01a07a03-acf7-7fd1-b823-afdd157db056:002240"
+
+  - id: adaptive-test-reuse
+    scope: adaptive model, schedule and budget selection / Sep14 example
+    trigger: viewed test outcomes determine a new architecture, endpoint or resource allocation, and the same test is called untouched confirmation afterward
+    correction: adaptive reuse can produce useful exploration and a measured score, but it does not erase selection information or restore an independent final test
+    alternatives:
+      - productive exploratory gain on the exposed partition
+      - a gain that survives independent precommitted confirmation
+    discriminator: log the exposure and every decision it influenced; freeze the selected candidate and evaluation rule before testing once on a genuinely unexposed cohort, or explicitly limit the claim to exploratory performance
+    primary_gate: independent confirmation for a confirmatory gain claim; the exposed test remains a valid measured exploratory endpoint under its stated protocol
+    falsifier: if the confirmation cohort or overlapping lineage was previously exposed, retract the independent-confirmation label; do not discard the exploratory score merely because its selection was adaptive
+    sources:
+      - "benchmark/manifest.json — sep14-48h-budget provenance and packet hashes"
+      - "benchmark/prompts/sep14-48h-budget.md"
+      - "benchmark/sealed/sep14-48h-budget.md"
+      - "codex:01a07a03-acf7-7fd1-b823-afdd157db056:002233"
+      - "codex:01a07a03-acf7-7fd1-b823-afdd157db056:002313"
+      - "codex:01a07a03-acf7-7fd1-b823-afdd157db056:002957"
+
+  - id: implementation-equivalence-before-speedup
+    scope: accelerated implementation within a scientific comparison / Sep14 example
+    trigger: a faster implementation is introduced alongside a longer-budget comparison and the resulting score change is attributed only to the scientific method or training length
+    correction: execution speed and numerical equivalence are distinct claims; a changed computation can alter the experiment even when the interface and parameter count match
+    alternatives:
+      - equivalent implementation permits more affordable evidence
+      - numerical or gradient drift changes model behavior
+    discriminator: compare forward outputs and relevant gradients with the original implementation on representative inputs under a declared tolerance, retain version hashes, and use one verified implementation protocol for the matched arms
+    primary_gate: equivalence checks within their declared input and tolerance scope, then primary quality and actual resource use under the recorded protocol
+    falsifier: if output or gradient checks fail or omit the altered route, treat the accelerated code as a distinct implementation and do not credit all later differences to budget alone
+    sources:
+      - "benchmark/manifest.json — sep14-48h-budget provenance and packet hashes"
+      - "benchmark/prompts/sep14-48h-budget.md"
+      - "benchmark/sealed/sep14-48h-budget.md"
+      - "codex:01a07a03-acf7-7fd1-b823-afdd157db056:002579"
+      - "codex:01a07a03-acf7-7fd1-b823-afdd157db056:002630"
+
+  - id: source-aware-evaluator-check
+    scope: proposal judging and self-repair / C7 source-aware audit
+    trigger: a high proposal or judge score is used as evidence that the proposed intervention discriminates the scientific claim
+    correction: a judge can reward a plausible intervention while missing the executed equation; agreement or rubric scores cannot replace source-aware manipulation checks
+    alternatives:
+      - high-scoring proposal is scientifically discriminating
+      - proposal and judge share an omitted premise
+      - rubric measures protocol fluency rather than causal validity
+    discriminator: provide an independent auditor the declared claim, executed equation and intervention manifest; derive the reachable property without the sealed later outcome, and preserve original scores alongside any correction
+    primary_gate: reproducible source-grounded validity of the discriminator before a score is used to justify mechanism inference or an expensive launch
+    falsifier: if the claimed distinction disappears under the executed equation, revise the proposal or narrow its scope; a repair on this known case is not evidence of general evaluator reliability
+    sources:
+      - "benchmark/prompts/sep13-c7-boundary.md"
+      - "benchmark/sealed/sep13-c7-boundary.md — source-aware intervention audit"
+      - "benchmark/rubric.json — sep13-c7-boundary"
+      - "benchmark/manifest.json — related retrospective cases and source hashes"
+      - "codex:01a03d28-4c3b-70a0-94f0-d4396cde19b6:000244"
 
 # Read edges as reasoning dependencies, not as automatic causal claims.
 edges:
@@ -118,3 +376,18 @@ edges:
   - {from: short-budget-fidelity, relation: qualified_by, to: locked-test-selection}
   - {from: method-recipe-variance, relation: prerequisite_for, to: locked-test-selection}
   - {from: realized-boundary-not-knob, relation: prerequisite_for, to: proxy-primary-bridge}
+  - {from: trained-anchor-not-method-win, relation: qualified_by, to: method-recipe-variance}
+  - {from: resource-canary-before-campaign, relation: prerequisite_for, to: hard-budget-reallocation}
+  - {from: bundled-change-needs-component-control, relation: prerequisite_for, to: proxy-primary-bridge}
+  - {from: ablation-is-intervention-specific, relation: qualified_by, to: bundled-change-needs-component-control}
+  - {from: transfer-requires-matched-protocol, relation: qualified_by, to: method-recipe-variance}
+  - {from: protocol-versioned-evidence, relation: prerequisite_for, to: transfer-requires-matched-protocol}
+  - {from: normalization-removal-confound, relation: qualified_by, to: realized-boundary-not-knob}
+  - {from: realized-boundary-not-knob, relation: scoped_example_of, to: executed-manipulation-validity}
+  - {from: executed-manipulation-validity, relation: prerequisite_for, to: proxy-primary-bridge}
+  - {from: learned-support-not-allowed-support, relation: qualified_by, to: executed-manipulation-validity}
+  - {from: short-budget-fidelity, relation: constrained_by, to: hard-budget-reallocation}
+  - {from: adaptive-test-reuse, relation: scoped_example_of, to: locked-test-selection}
+  - {from: reuse-baseline-control, relation: constrained_by, to: adaptive-test-reuse}
+  - {from: implementation-equivalence-before-speedup, relation: prerequisite_for, to: protocol-versioned-evidence}
+  - {from: source-aware-evaluator-check, relation: prerequisite_for, to: executed-manipulation-validity}
