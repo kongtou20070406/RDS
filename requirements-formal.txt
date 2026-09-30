@@ -1,0 +1,2 @@
+# Optional; ordinary AST execution uses only the standard library.
+sympy==1.14.0

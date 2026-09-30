@@ -1,0 +1,3 @@
+interface:
+  display_name: "Research direction selector"
+  short_description: "Choose and test the next research direction"

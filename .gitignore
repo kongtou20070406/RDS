@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.venv/
+.rds/
+.rds.lock
+.codex/
+*.sqlite*
+*.log
+*.zip
+obq-*.mjs
+dist/

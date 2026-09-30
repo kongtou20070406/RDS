@@ -1,0 +1,110 @@
+# Static decision rules, not a project memory database. Evidence and outcomes stay in source records.
+# Status denotes evidence for a rule's discriminating value, not a guarantee of higher task score.
+schema: 1
+nodes:
+  - id: locked-test-selection
+    scope: general
+    trigger: a checkpoint, model, or hyperparameter is chosen after seeing the same reported test scores
+    correction: selection on a finite test set can make the apparent winner optimistic
+    alternatives: [real method gain, selection noise]
+    discriminator: predeclare checkpoint selection on development data; confirm the chosen model once on untouched test data
+    primary_gate: project locked test metric and fair baseline, with every candidate and selection decision logged
+    falsifier: if fresh test gain vanishes, retract the strong gain claim; do not infer the method can never work
+    sources: ["https://www.jmlr.org/papers/v11/cawley10a.html"]
+
+  - id: deployment-information
+    scope: general
+    trigger: a proposal uses GT, a target-derived feature, or a per-example oracle at inference
+    correction: an oracle upper bound does not establish a deployable learned mapping
+    alternatives: [gain from available inputs, gain from leaked target information]
+    discriminator: trace every inference input; compare deployment-only model with oracle reported separately
+    primary_gate: formal task metric using deployment-visible inputs only
+    falsifier: oracle-only gains remain bounds, not achieved method gains
+    sources: ["https://doi.org/10.1145/2382577.2382579"]
+
+  - id: preserve-quantifiers
+    scope: NSI case and analogous quantified claims
+    trigger: failure of one fixed action is used to dismiss every input-conditional policy
+    correction: failure of a fixed a for all f does not disprove existence of g(f) for all f
+    alternatives: [no fixed action works, no learnable conditional policy works]
+    discriminator: compare fixed action, per-example oracle bound, and policy using deployment-visible f on a held-out set
+    primary_gate: formal held-out task metric for the learned conditional policy
+    falsifier: failure of a tested g narrows that policy class; it does not disprove all g
+    sources: ["NSI 2026-07-29 original experiment and user correction; retrieve via Obelisk when needed"]
+
+  - id: computation-graph-identity
+    scope: general check; NSI nine-axis failure is a local example
+    trigger: a claimed multi-branch or multi-axis mechanism may be pooled before the operation meant to use its identity
+    correction: names and diagrams cannot establish what information the executed graph preserves
+    alternatives: [claimed mechanism is active, implementation collapses it]
+    discriminator: inspect tensor path and fixed-weight branch swaps or ablations before full retraining
+    primary_gate: formal metric against same-budget baseline plus a mechanism-sensitive diagnostic
+    falsifier: if branch identity is erased before the claimed operator, do not attribute scores to that mechanism
+    sources:
+      - "NSI 2026-08-07 nine-axis code audit; retrieve original code/log through Obelisk"
+      - "https://proceedings.neurips.cc/paper_files/paper/2018/hash/294a8ed24b1ad22ec2e7efea049b8737-Abstract.html"
+
+  - id: proxy-primary-bridge
+    scope: general
+    trigger: a proxy, visual impression, or aggregate PSNR rises while the claimed iterative mechanism may be bypassed
+    correction: task gain and mechanism evidence are separate propositions
+    alternatives: [gain through claimed mechanism, gain through shortcut or unrelated capacity]
+    discriminator: same-budget ablation or intervention that disables claimed route while preserving the rest
+    primary_gate: predeclared task metric decides utility; mechanism diagnostic decides mechanism attribution
+    falsifier: if metric gain survives route removal, keep only engineering gain claim
+    sources:
+      - "NSI 2026-07-09 pooling and K-gain record; retrieve original run through Obelisk"
+      - "https://doi.org/10.1038/s42256-020-00257-z"
+      - "https://www.jmlr.org/papers/v23/20-1335.html"
+
+  - id: short-budget-fidelity
+    scope: conditional; train-curve and schedule dependent
+    trigger: short-run ordering is used to select a full-budget architecture
+    correction: short-run rank is an unvalidated surrogate until checked against formal endpoints
+    alternatives: [early rank predicts endpoint, schedules or fast starters reverse rank]
+    discriminator: compare early and full-budget ranks on representative candidates; report rank correlation and top-choice retention
+    primary_gate: full-budget formal endpoint under the same recipe
+    falsifier: if ranks reverse, short runs serve only as feasibility diagnostics for this setting
+    sources:
+      - "NSI 2026-08-01 5k/15k/30k versus 60k case; retrieve original logs through Obelisk"
+      - "https://arxiv.org/abs/1905.04753"
+
+  - id: method-recipe-variance
+    scope: general
+    trigger: one method implementation or seed beats a baseline with different recipe or tuning effort
+    correction: implementation, recipe, and stochastic variation can reverse a nominal method ranking
+    alternatives: [method effect, recipe or implementation effect]
+    discriminator: matched budget and tuning rules, paired seeds, then independent implementations when decisions hinge on a small gain
+    primary_gate: formal test metric with spread or uncertainty under fair comparison
+    falsifier: if gain is explained by recipe or vanishes across implementations, do not credit method
+    sources:
+      - "https://openaccess.thecvf.com/content_CVPR_2019/html/He_Bag_of_Tricks_for_Image_Classification_with_Convolutional_Neural_Networks_CVPR_2019_paper.html"
+      - "https://arxiv.org/abs/2607.26587"
+
+  - id: realized-boundary-not-knob
+    scope: NSI-style row normalization a_i = rho * raw_i / (1 + sum_j abs(raw_j)); recompute for any changed implementation
+    trigger: a change of the rho parameter is claimed to test whether actual row mass below one is necessary
+    correction: actual mass m = rho * S / (1 + S), S = sum_j abs(raw_j); for finite S and rho = 1, m is still strictly below one
+    alternatives: [a tighter 0.95 safety margin helps, strict subunit mass is necessary, ordinary amplitude control or optimization explains the result]
+    discriminator: to test the strict subunit predicate, use a normalized comparator that can realize m at or above one, measure actual crossings, and match starting operator and training as closely as feasible; a 0.95 versus 1.00 cap tests only the margin
+    primary_gate: matched restoration metric and budget; separate any task gain from the narrower mechanism conclusion
+    falsifier: if the executed operator differs from this formula, recalculate its attainable mass; if no actual crossing occurs, withdraw any strict-bound inference
+    sources: ["NSI operator definition, 2026-08-26 original record codex:01a03d28-4c3b-70a0-94f0-d4396cde19b6:000244"]
+
+  - id: depth-versus-trajectory
+    scope: NSI case and analogous recurrent models
+    trigger: independently trained K-step models are used to assert that one model degrades at later steps
+    correction: cross-model depth comparison is not a within-checkpoint trajectory
+    alternatives: [same model worsens at later steps, separately trained deep model performs worse]
+    discriminator: evaluate intermediate steps from one fixed checkpoint on the same images
+    primary_gate: fixed-checkpoint stepwise formal metric with compute cost
+    falsifier: without fixed-checkpoint trajectory, withhold trajectory claims
+    sources: ["NSI 2026-09-27 experiment audit; retrieve original checkpoint records through Obelisk"]
+
+# Read edges as reasoning dependencies, not as automatic causal claims.
+edges:
+  - {from: preserve-quantifiers, relation: constrained_by, to: deployment-information}
+  - {from: computation-graph-identity, relation: prerequisite_for, to: proxy-primary-bridge}
+  - {from: short-budget-fidelity, relation: qualified_by, to: locked-test-selection}
+  - {from: method-recipe-variance, relation: prerequisite_for, to: locked-test-selection}
+  - {from: realized-boundary-not-knob, relation: prerequisite_for, to: proxy-primary-bridge}
