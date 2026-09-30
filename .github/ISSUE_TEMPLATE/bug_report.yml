@@ -1,0 +1,33 @@
+name: Bug report
+description: Report a reproducible problem in the skill, CLI, or documentation.
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: "Share a minimal public or synthetic reproducer. Do not include private session exports, logs, datasets, runtime state, or credentials."
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and observed behavior
+      description: State the requirement or documentation claim and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal reproduction
+      description: Include the exact commands, sanitized inputs, and relevant output or error. For a documentation issue, link the affected passage.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include the RDS commit or CLI version, OS, Python version, and relevant optional dependencies.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Evidence and impact
+      description: Explain which path or claim is affected and any workaround. Distinguish a failed run from a scientific refutation.

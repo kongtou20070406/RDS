@@ -1,0 +1,33 @@
+name: Feature or research case
+description: Propose a focused capability, scoped rule, documentation improvement, or research case.
+title: "[Proposal] "
+body:
+  - type: markdown
+    attributes:
+      value: "Use public references and sanitized examples. Keep proposed evidence distinct from established results."
+  - type: textarea
+    id: problem
+    attributes:
+      label: Decision or problem
+      description: What concrete decision or workflow needs improvement, and where does current RDS fall short?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change and scope
+      description: Describe the smallest useful change, supported inputs, and limits. Mention a simpler alternative if applicable.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence and validation
+      description: Link dated original sources or a minimal example. Suggest a discriminating check and failure condition. Label synthetic regression, retrospective replay, or proposed independent evaluation.
+    validations:
+      required: true
+  - type: textarea
+    id: cost
+    attributes:
+      label: Cost and compatibility
+      description: Note dependencies, estimated budget, and changes to existing commands or evidence boundaries.
