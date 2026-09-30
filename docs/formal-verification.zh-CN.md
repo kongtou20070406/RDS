@@ -6,9 +6,9 @@ RDS 将数学命题与检验实用收益或机制的实验分开。验证器依�
 
 ## 实现状态
 
-本指南区分公开 `main`（`f020b2c`）与已推送的 [PR #2](https://github.com/kongtou20070406/RDS/pull/2) 版本 `995e8eb`；在本次快照中，后者仍在审阅，尚未合并。使用接口前核对实际 ref。默认克隆取得 `main`；路线图条目不是安装后已有的能力。
+当前 `main` 已包含 [PR #2](https://github.com/kongtou20070406/RDS/pull/2) 在 `995e8eb` 引入的数学实现，以及 Advisor／工作台集成。下表保留较早的 `f020b2c` 基础版本作为历史对照。使用接口前核对实际 ref；路线图条目不是安装后已有的能力。
 
-| 范围 | 公开 `main`（`f020b2c`） | PR #2（`995e8eb`，未合并） | 后续工作 |
+| 范围 | 历史基础版本（`f020b2c`） | 当前 `main`（数学实现来自 `995e8eb`） | 后续工作 |
 | --- | --- | --- | --- |
 | 普通标量执行 | 受限有理 AST 与配对 MSE；准入为 `AST_ONLY`。 | 保留。 | 与数学验证分别处理。 |
 | 显式标量边界 | 可选 SymPy，依据为 `SYMBOLIC_CHECKED`；不支持的情况返回 `UNKNOWN`。 | 显式命题类型、精确仿射有理证书生成器和独立检查器。 | 扩展覆盖，保留命题与证据绑定。 |
@@ -18,11 +18,11 @@ RDS 将数学命题与检验实用收益或机制的实验分开。验证器依�
 | 原生 Lean | 没有原生 Lean 适配器。 | 已注册固定模板的闭合 Rat `eq`／`lt`／`le` 义务，调用显式配置的 Lean4 程序检查。 | mathlib 与带量词的模型／性质适配器。 |
 | 框架、张量与模型导出 | 没有通用定理命令或模型导出。 | `formal` CLI、有限定理模块、具体精确张量检查，以及受限 Python 模型导出 API。 | 通用符号张量与更多经过检查的翻译。 |
 
-下述接口已在推送的 PR 版本中实现，不属于 `main`。使用其[版本化框架契约](https://github.com/kongtou20070406/RDS/blob/995e8eb98f75697ef1ce43a9991f0686e5c29caa/references/formal_framework.md)、注册和测试。PR 初始提交 `8eadae9` 只覆盖标量证书路径，不是本页描述的接口快照。
+下述接口已包含在 `main` 中。[固定版本实现契约](https://github.com/kongtou20070406/RDS/blob/995e8eb98f75697ef1ce43a9991f0686e5c29caa/references/formal_framework.md) 记录其来源版本；运行时使用已安装版本的注册和测试。PR 初始提交 `8eadae9` 只覆盖标量证书路径，不是本页描述的接口快照。
 
 ## 声明与独立检查
 
-PR #2 版本 `995e8eb` 使用 `scripts/rds_verify.py` 和 `formal` CLI，接受有限 schema-1 声明。可信注册表包含 12 个原子数学 kind 与有限定理模块组合，区别于 23 节点方法论目录。JSON 不能注册可执行规则或用户公理。原子声明通过 `kind` 选择规则；命名模块声明使用 `by.rule`，没有顶层 `rule_id` 字段。
+`main` 中的实现使用 `scripts/rds_verify.py` 和 `formal` CLI，接受有限 schema-1 声明。可信注册表包含 12 个原子数学 kind 与有限定理模块组合，区别于 23 节点方法论目录。JSON 不能注册可执行规则或用户公理。原子声明通过 `kind` 选择规则；命名模块声明使用 `by.rule`，没有顶层 `rule_id` 字段。
 
 | 声明 kind | 框架规则／支持的义务 |
 | --- | --- |
@@ -37,7 +37,7 @@ PR #2 版本 `995e8eb` 使用 `scripts/rds_verify.py` 和 `formal` CLI，接受�
 
 `verify(spec)` 生成证据并独立检查，`check_certificate(spec, certificate)` 检查证书是否有效，`checked_result` 重建结论。有效的 **FAIL** 证书也能通过证书有效性检查：证据有效不等于命题成立。结果包含 `status`、`assurance`、`backend`、`semantics`、`spec_sha256`、`verifier_sha256`，得到确定结论时附证书。CLI `check` 接受框架证书或包含它的完整框架结果，重新构造结论，不信任结果中报告的状态。CLI 对 PASS／FAIL／UNKNOWN 的退出码分别是 0／1／2。这些命令不需要已初始化的科研契约。
 
-以下为 PR 预览，需要 `995e8eb` checkout 具备这些命令和示例文件：
+在包含示例文件的当前 `main` 或 v5.5.0-rc.2 checkout 中运行以下命令：
 
 ```powershell
 python -B scripts/rds_cli.py --root . formal rules
@@ -77,7 +77,7 @@ python -B scripts/rds_cli.py --root . formal check --spec examples/formal/lean_o
 
 ### 历史 prototype：独立的实验性路径
 
-另一份本地 `scripts/rds_probe.py` 中的历史实验性实现曾加入 `FormalRuleRegistry` 与一个同名 `LeanFormalEngine` 类，加载 23 个方法论节点和五个数学检查，接收规则 ID 或 tactic 列表并输出轨迹。它不是 PR #2 当前的 `rds_verify.py` 分派器，其标识不能继承该框架的复核保证。以下审计只针对这条历史路径。
+另一份本地 `scripts/rds_probe.py` 中的历史实验性实现曾加入 `FormalRuleRegistry` 与一个同名 `LeanFormalEngine` 类，加载 23 个方法论节点和五个数学检查，接收规则 ID 或 tactic 列表并输出轨迹。它不是当前的 `rds_verify.py` 分派器，其标识不能继承该框架的复核保证。以下审计只针对这条历史路径。
 
 在该 prototype 中，`kind: causal_rule` 加 `rule_id` 只检查注册规则的 `discriminator`、`primary_gate`、`falsifier` 是否非空，并不检查提案或图中新补充的义务。因此，`RULE_ALIGNED` 只表示注册元数据结构符合要求；还须满足的证据见 [23 节点义务映射](rule-obligations.zh-CN.md)。
 
@@ -87,7 +87,7 @@ python -B scripts/rds_cli.py --root . formal check --spec examples/formal/lean_o
 
 ### 验证流程
 
-PR #2 当前的已注册接口遵循下述结构。合并到公开 `main` 与扩展数学覆盖仍是不同的里程碑。
+现已包含在 `main` 的注册接口遵循下述结构；扩展数学覆盖仍是后续开发里程碑。
 
 ```mermaid
 flowchart LR
@@ -105,7 +105,7 @@ flowchart LR
 
 ## 标量契约与显式命题类型
 
-审阅中的标量实现将声明放在 `hypothesis.formal`：
+当前标量实现将声明放在 `hypothesis.formal`：
 
 ```json
 {
@@ -122,16 +122,16 @@ flowchart LR
 
 这只是一个假说的数学部分，不是完整假说或计划。其余必填字段以运行 checkout 的[可执行契约](../references/l3-state-machine.md)为准。精确标量声明使用有限整数、十进制字符串或有理数字符串。
 
-| 字段或命题 | 审阅中标量适配器的含义 |
+| 字段或命题 | 当前标量适配器的含义 |
 | --- | --- |
 | `kind` | 路由标量性质；边界适配器包含 `strict_algebraic_threshold` 和 `contraction_boundary`，保留显式旧名称 `threshold_necessity`。名称本身不能证明一般收缩。 |
 | `quantity: scalar_property` | 执行对象是可测标量性质，须说明它如何对应研究声明。 |
 | `domain` / `threshold` | 闭区间上的义务与预声明边界；即使符号化简消去分母，原始分母仍须有定义。 |
-| `statement: threshold_separation` | 两臂有定义，对照在整个定义域低于阈值，干预至少存在一个跨越见证；这是审阅版本边界声明的默认命题。 |
+| `statement: threshold_separation` | 两臂有定义，对照在整个定义域低于阈值，干预至少存在一个跨越见证；这是当前边界声明的默认命题。 |
 | `statement: threshold_necessity` | 当执行跨越满足两臂损失上限时，允许单独解释为对有范围的必要性命题的反例。 |
 | `max_loss` | 标量必要性证伪条件预声明的损失上限；数学见证本身不是实际执行的低损失反例。 |
 
-公开 `main` 尚未实施显式命题类型的区分，不能只加入 `statement` 字段就依赖新语义。如果原声明意图检验必要性，应使用对应实现版本并明确声明；引擎绑定改变后使用新契约。
+历史基础版本 `f020b2c` 尚未实施显式命题类型的区分，在旧版本中加入 `statement` 字段不会获得当前语义。使用当前 `main` 时，必要性意图须显式声明；引擎绑定改变后使用新契约。
 
 精确检查器在有界算术下覆盖支持的仿射有理式；不支持的表达式可能回退到可选 SymPy。未声明数学性质的普通运行使用 AST 检查和精确有理执行；省略声明不能证明科研提案没有数学义务。
 
@@ -151,19 +151,19 @@ flowchart LR
 | --- | --- |
 | `AST_ONLY` | 受限语法检查，没有声明数学性质；`main` 可用。 |
 | `SYMBOLIC_CHECKED` | 可选符号检查结果，没有独立证书；`main` 可用。 |
-| `CERTIFICATE_CHECKED` | 独立检查已绑定的精确领域证书或有限模块；PR #2 新增，模块可以组合 Python 与原生 Lean 叶子。 |
-| `LEAN_KERNEL_CHECKED` | 已注册的原子闭合 Rat 模板再次通过原生 Lean 检查和空公理审计；PR #2 `995e8eb` 提供，不是通用模型验证。 |
-| `EXACT_OBSERVATION_CHECKED` | 精确检查实际执行的标量样本，与准入证书分别记录；PR #2 新增。 |
+| `CERTIFICATE_CHECKED` | 独立检查已绑定的精确领域证书或有限模块；`main` 可用，模块可以组合 Python 与原生 Lean 叶子。 |
+| `LEAN_KERNEL_CHECKED` | 已注册的原子闭合 Rat 模板再次通过原生 Lean 检查和空公理审计；在 `main` 配置原生工具链后可用，不是通用模型验证。 |
+| `EXACT_OBSERVATION_CHECKED` | 精确检查实际执行的标量样本；`main` 可用，与准入证书分别记录。 |
 | `EXACT_COUNTEREXAMPLE_CHECKED` | 直接调用网络适配器时，其精确前向见证反驳声明模型性质；通用框架将已检查的 FAIL 包装为 `CERTIFICATE_CHECKED`。 |
 | `NONE` | 没有数学验证依据。 |
 
-准入见证可能不在本次执行所选样本中。因此，审阅实现分别记录 `admission_status` / `admission_assurance` 与 `observed_status` / `execution_assurance`。没有观察到跨越，不能推翻先前的存在性证书；执行者失败，也不能反驳数学或科学声明。
+准入见证可能不在本次执行所选样本中。因此，当前实现分别记录 `admission_status` / `admission_assurance` 与 `observed_status` / `execution_assurance`。没有观察到跨越，不能推翻先前的存在性证书；执行者失败，也不能反驳数学或科学声明。
 
 验证器输出与 `run_status`、`assessment.task_gain`、`assessment.mechanism` 分别记录。`PASS` 不证明任务性能提升、因果隔离、总体泛化或 L4 策略改进。
 
 ## 多维适配器范围
 
-以下数学 kind 已在 PR #2 `995e8eb` 中注册，不属于公开 `main`。受限模型导出是 Python API，不是另一种 `formal` CLI kind。使用所选版本的契约和限制；不能将标量 `hypothesis.formal` 字段强加给每个后端。
+以下数学 kind 已在当前 `main` 中注册，来源实现为 PR #2 `995e8eb`。受限模型导出是 Python API，不是另一种 `formal` CLI kind。使用所选版本的契约和限制；不能将标量 `hypothesis.formal` 字段强加给每个后端。
 
 | 适配器 | 声明模型与义务 | 解释边界 |
 | --- | --- | --- |
@@ -176,7 +176,7 @@ flowchart LR
 | `tensor_identity` / `tensor_bounds` | 具体精确张量表达式，检查值／形状一致或闭合界。 | 有界的 literal/add/scale/transpose/matmul 计算，不是通用符号张量定理，不支持一般 broadcasting。 |
 | 受限模型导出 | 将支持的评估模式 `Sequential`、Linear/ReLU 叶子导出为精确有理参数。 | 二进制参数值形成模型快照，不产生前向执行或检查点安全声明；导出成功不保证验证器能接受其规模。 |
 
-后端的大小限制、schema 和错误行为须以所选版本为准。上述声明不覆盖通用符号张量、任意层、浮点舍入、autograd、随机优化或泛化。
+后端的大小限制、schema 和错误行为须以所选版本为准。上述声明不覆盖通用符号张量、任意层、浮点舍入、autograd、随机优化或泛化。本次发布回归因未配置工具链跳过两项原生 Lean 检查，因未安装 PyTorch 跳过两项 PyTorch 检查；该次运行未验证这些可选路径。
 
 ## 怎样提交有用的验证贡献
 
@@ -186,6 +186,6 @@ flowchart LR
 
 ## Lean 兼容与可选 C++ 适配
 
-RDS 的主体是自动化辅助人类科研。PR #2 提供上述窄范围原生 Rat 接口；更广的 Lean4/mathlib 兼容应针对合适的数学子问题，复用真正的证明器与检查器，详见[当前接口与后续接入契约](lean-integration.zh-CN.md)。RDS 翻译支持的性质，将证明证据绑定到实验；Python 继续编排，C++ 可用于已经测量的适配瓶颈。本次文档 PR 不改变可执行代码，也不建立延迟保证。
+RDS 的主体是自动化辅助人类科研。当前 `main` 提供上述窄范围原生 Rat 接口；更广的 Lean4/mathlib 兼容应针对合适的数学子问题，复用真正的证明器与检查器，详见[当前接口与后续接入契约](lean-integration.zh-CN.md)。RDS 翻译支持的性质，将证明证据绑定到实验；Python 继续编排，C++ 可用于已经测量的适配瓶颈。这些接口不建立延迟保证。
 
 接入 Lean 时，应独立固定期望定理和定义，核查包含 `sorryAx` 在内的公理依赖，并复核证明对象。编译一个无关文件成功不够。这些要求依据 Lean 的[官方证明验证指南](https://lean-lang.org/doc/reference/latest/ValidatingProofs/)；其[内核类型检查器源码](https://github.com/leanprover/lean4/blob/master/src/kernel/type_checker.cpp)也是具体的 C++ 参考。实现语言本身不能建立可靠性。

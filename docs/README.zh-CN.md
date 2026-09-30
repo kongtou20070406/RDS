@@ -1,6 +1,6 @@
-# RDS 文档
+# Research Direction Selector 文档
 
-本工作副本是 v5.5.0-rc.1，已包含 PR #2 的数学实现。指南对比公开 main 与 PR #2 时，本版对应 PR #2 列；更广泛的计划能力仍未实现。参见[五组件](rds-purpose.md)、[Advisor 设计](advisor-graph-design.md)、[工作台](dashboard.md)、[组件基准](advisor-benchmark.md)和[未来计划](roadmap.md)。
+本指南面向 `main` 上的 v5.5.0-rc.2，已包含 PR #2 引入的数学实现和 PR #3 引入的 Advisor／工作台集成。能力表保留 `f020b2c` 作为历史对照，本版对应当前实现列；更广泛的计划能力仍未实现。参见[五组件](rds-purpose.md)、[Advisor 设计](advisor-graph-design.md)、[工作台](dashboard.md)、[组件基准](advisor-benchmark.md)和[未来计划](roadmap.md)。
 
 [English](README.md) · [项目首页](../README.zh-CN.md) · [贡献指南](../CONTRIBUTING.zh-CN.md)
 
@@ -17,4 +17,4 @@
 
 [可执行契约](../references/l3-state-machine.md) 定义所用 checkout 的运行行为，[SKILL.md](../SKILL.md) 定义科研协作协议。二者不一致时应报告差异，不能把协议要求解释为程序已实现的保证。
 
-首页的稳定示例面向公开 `main`。[PR #2](https://github.com/kongtou20070406/RDS/pull/2) 的证书实现处于审阅阶段；持续开发的多维适配器须按各自实现版本核对。存在模块或设计草案，不代表安装的 CLI 已经支持。选择后端前请查看形式化验证指南的能力表。
+首页示例面向公开 `main`，其证书检查和有范围的多维接口来自 [PR #2](https://github.com/kongtou20070406/RDS/pull/2)。选择后端前请核对各适配器的实现版本与文档限制。本次发布回归因未配置工具链跳过了两项原生 Lean 检查，因未安装 PyTorch 跳过了两项 PyTorch 检查；跳过不代表这些可选路径已获验证。

@@ -2,10 +2,12 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset=".github/assets/rds-hero-dark.svg">
-  <img src=".github/assets/rds-hero-light.svg" alt="RDS — Research Direction Selector" width="100%">
+  <img src=".github/assets/rds-hero-light.svg" alt="Research Direction Selector" width="100%">
 </picture>
 
-**Codex 向けの研究方針選択と実験監査**
+# Research Direction Selector
+
+**研究者と研究者の AI のための研究支援**
 
 次の実験に、明確な問い、公平な比較、そして意思決定につながる結果を。
 
@@ -17,17 +19,39 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md) · **日本語**
 
-[目指すもの](#目指すもの) · [L1–L4](#l1l4) · [クイックスタート](#クイックスタート) · [検証](#回帰シナリオと検証) · [コントリビュート](#コントリビュート)
+[実測結果](#実測結果と具体的な価値) · [目指すもの](#目指すもの) · [L1–L4](#l1l4) · [クイックスタート](#クイックスタート) · [コントリビュート](#コントリビュート)
 
 </div>
 
-> この版は **v5.5.0-rc.1 プレリリース**です。研究者とその AI 向けの[ダウンロード](https://github.com/kongtou20070406/RDS/releases/tag/v5.5.0-rc.1)。五つの構成要素を固定し、[計画](docs/roadmap.md)で実装と今後の検証を分けています。
+> この版は `main` から公開する **v5.5.0-rc.2 プレリリース**です。研究者とその AI 向けの[ダウンロード](https://github.com/kongtou20070406/RDS/releases/tag/v5.5.0-rc.2)。五つの構成要素を固定し、[計画](docs/roadmap.md)で実装と今後の検証を分けています。
 
-RDS は、実行可能なローカル参照カーネルを備えた、Codex 向けの研究支援スキルです。研究目標、競合する説明、過去の経験、プログラムによるチェックを結び付け、**現在の証拠と予算のもとで、次にどの実験を行うべきか**という問いに取り組みます。
+Research Direction Selector（RDS）は、実行可能なローカル参照カーネルを備えた、Codex 向けの研究支援スキルです。研究目標、競合する説明、過去の経験、プログラムによるチェックを結び付け、**現在の証拠と予算のもとで、次にどの実験を行うべきか**という問いに取り組みます。
 
 研究者が目標と投入する資源を決め、モデルが候補となる方針を設計し、プログラムが実行上の制約を確認します。その結果をもとに次の一手を見直します。RDS は、評価指標の停滞、メカニズムのアブレーション、予算配分、中断した研究の再開に適しています。
 
 > **2 つの使い方：**[SKILL.md](SKILL.md) を通じて実際の研究プロジェクトで協働する方法と、参照 CLI で制限されたスカラー実験を実行し、予算・データ利用・証拠判定のプロトコルを検証する方法があります。実際の GPU 学習は、研究プロジェクト自身の学習コードで実行します。
+
+## 実測結果と具体的な価値
+
+2026-09-30 のリリース検査で得られた結果です。
+
+| 検査 | 実際の結果 | 検査する動作 |
+| --- | --- | --- |
+| [回帰テスト](tests/) | **204 件成功、4 件の任意検査をスキップ、計 208 件** | カーネル、Advisor、形式アダプター、画面の動作。ネイティブ Lean 未設定、PyTorch 不在。 |
+| [過去の事例のリプレイ](benchmark/README.md) | **6/6 成功** | 記録済みの意思決定パケットと関連する実行条件。 |
+| [合成攻撃シナリオ](benchmark/redteam/) | **4/4 成功** | 事前に定めた四つのプロトコル攻撃。 |
+| [公開タスクを改編したコンポーネント課題](docs/advisor-benchmark.md) | **8/8 ケース、28/28 条件を確認** | 明示的な契約、証拠不足、依存関係、コスト、予算、出典の識別。 |
+
+公開タスク課題は ScienceAgentBench と CORE-Bench のメタデータを使い、人がルールを改編しました。八つのローカル fixture の処理と結果の組み立てに **83.0743 ms** を要しました。小規模なメタデータ検査の時間です。[入力](benchmark/advisor-public/source-facts.json)と[条件ごとの出力](benchmark/advisor-public/results.json)を公開しています。**科学タスク全体のスコアと研究品質の改善は未測定**です。件数が示すのは表の動作であり、他システムとの順位ではありません。
+
+次の研究判断を支援する具体的な動作を確認しました。
+
+- **証拠不足を保持する：**一つの学習損失から収束を診断しません（C1）。事実の出典を削除すると `NEEDS_EVIDENCE` に変わり、照会を提案します（C4）。
+- **要求とワークフローに応じて提案を変える：**20 特徴の契約を 10 に変更すると利用可能な候補が入れ替わります（C3）。embedding の証拠がない場合、二段階の前提関係をたどって証拠を求めます（C6）。
+- **既知のコストと予算で判断する：**不明なコストは不明のまま保持し（C5）、予算ゼロでは正のコストを持つ検査を阻止します（C7）。
+- **再現対象の出典を確認する：**異なる capsule ID なら、選択した出典の後続検査を阻止します（C8）。
+
+検査した範囲では、プログラムが判断条件と導出を保持し、人と AI が確認できます。実際の科学的成果は、研究プロジェクト自身の実験と評価で確かめる必要があります。
 
 ## 目指すもの
 
@@ -46,7 +70,8 @@ RDS の中心的な目的は、人間の研究を自動化支援することで�
 AI に渡す開始指示の例：
 
 ```text
-この研究プロジェクトを RDS で支援してください。まず既存の証拠と判断を復元してください。
+この研究プロジェクトを Research Direction Selector（RDS）で支援してください。
+まず既存の証拠と判断を復元してください。
 目標、指標、ベースライン、予算を明確にし、有効な対照とログを再利用してください。
 競合する説明を区別できる次の実験を推奨してください。
 予想される観測、反証条件、総コスト、結果ごとの判断を説明してください。
@@ -94,7 +119,7 @@ RDS が現在提供するのは、**L2 に相当する研究助言と、スカ�
 
 ## 形式検証とルールの義務
 
-宣言した命題、バックエンドによる探索、独立した検査、科学的評価を分けて扱います。公開 `main` はスカラー AST/SymPy に対応します。[PR #2](https://github.com/kongtou20070406/RDS/pull/2) の `995e8eb` は宣言型レジストリ、独立して検査できる数学的証明書、限定的なネイティブ Lean4 接続を追加し、未マージです。旧実験版 `LeanFormalEngine`/Tactic ディスパッチャーは別のプロトタイプです。`RULE_ALIGNED` はメタデータの確認であり、tactic の成功ラベルは宣言した命題の証明を意味しません。[検証範囲（English）](docs/formal-verification.md)を参照してください。
+宣言した命題、バックエンドによる探索、独立した検査、科学的評価を分けて扱います。`main` はスカラー AST/SymPy と、[PR #2](https://github.com/kongtou20070406/RDS/pull/2) の宣言型レジストリ、独立検査可能な数学的証明書、限定的なネイティブ Lean4 接続を含みます。Python アダプターは証明書の検査を報告します。ネイティブ Lean 検査は対応する閉じた有理数の義務に限り、実行ファイルの設定が必要です。旧実験版 `LeanFormalEngine`/Tactic ディスパッチャーは別のプロトタイプです。`RULE_ALIGNED` はメタデータの確認であり、tactic の成功ラベルは宣言した命題の証明を意味しません。[検証範囲（English）](docs/formal-verification.md)と[アダプター時間の生データ](benchmark/results/formal-windows-python313.json)を参照してください。
 
 23 個の判断ルールに、前提条件・反証条件・実行可能領域の式を記録しました。表は義務の対応関係を示し、23 個の因果定理の証明を主張するものではありません。変数・証拠・候補 tactic は[義務ガイド（English）](docs/rule-obligations.md)に記載しています。追加メタデータは現在のディスパッチャーでは強制検査されません。
 
@@ -129,7 +154,7 @@ RDS が現在提供するのは、**L2 に相当する研究助言と、スカ�
 
 </details>
 
-[ドキュメント](docs/README.md)には L1–L4 の実験フロー、英中の用語とコントリビュートガイドがあります。[Lean4/mathlib との互換性](docs/lean-integration.md)は、人間の研究を自動化支援する RDS のループ内で適切な数学的部分問題を扱います。PR #2 は閉じた有理数の義務でネイティブ Lean カーネルを再利用し、汎用 mathlib モデル変換は今後の課題です。C++ は測定済みのアダプター性能問題に限る選択肢です。
+[ドキュメント](docs/README.md)には L1–L4 の実験フロー、英中の用語とコントリビュートガイドがあります。[Lean4/mathlib との互換性](docs/lean-integration.md)は、人間の研究を自動化支援する RDS のループ内で適切な数学的部分問題を扱います。ネイティブアダプターは閉じた有理数の義務で Lean カーネルを再利用し、汎用 mathlib モデル変換は今後の課題です。C++ は測定済みのアダプター性能問題に限る選択肢です。
 
 ## ワークフロー
 
@@ -155,7 +180,7 @@ flowchart LR
 
 ```powershell
 New-Item -ItemType Directory -Path "$env:USERPROFILE/.agents/skills" -Force | Out-Null
-git clone --branch v5.5.0-rc.1 https://github.com/kongtou20070406/RDS.git "$env:USERPROFILE/.agents/skills/research-direction-selector"
+git clone --branch v5.5.0-rc.2 https://github.com/kongtou20070406/RDS.git "$env:USERPROFILE/.agents/skills/research-direction-selector"
 ```
 
 研究プロジェクトの `.agents/skills/research-direction-selector/` に配置することもできます。スキルの配置場所と呼び出し方は、[OpenAI 公式スキルドキュメント](https://learn.chatgpt.com/docs/build-skills)を参照してください。
@@ -171,7 +196,7 @@ RDS は、現在のファイルと会話から目標と制約を整理し、1 �
 **Python 3.11+** が必要です。通常のスカラー実行は Python 標準ライブラリのみに依存し、GPU は不要です。実際に履歴を検索するには、Obelisk が別途インストールされている必要があります。
 
 ```powershell
-git clone --branch v5.5.0-rc.1 https://github.com/kongtou20070406/RDS.git
+git clone --branch v5.5.0-rc.2 https://github.com/kongtou20070406/RDS.git
 Set-Location RDS
 python -B scripts/rds_cli.py --version
 ```
@@ -333,7 +358,3 @@ python -B benchmark/redteam/runner.py
 ## 検索キーワード
 
 研究方針の選択 · AI による研究支援 · 実験設計 · 仮説検証 · 因果推論 · 再現可能な研究 · Advisor · 証明義務 · Lean4 互換性 · エージェントスキル · Codex · CLI · Obelisk。
-
-## この版の検査
-
-208 件の回帰検査：204 件成功、4 件の任意検査をスキップ（原生 Lean 未設定、PyTorch 不在）。歴史検査 6 件と合成攻撃 4 ケースが成功しました。公開タスクを改編した 8 件のコンポーネント課題で 28 条件を確認しました。ScienceAgentBench/CORE-Bench の端到端スコアや研究効果の測定ではありません。[範囲と結果](docs/advisor-benchmark.md)。

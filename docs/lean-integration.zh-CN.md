@@ -4,7 +4,7 @@
 
 RDS 的主体是自动化辅助人类科研：调查证据、生成与筛选实验、安排执行、评估结果、复盘接续。Lean4 兼容支持其中合适的数学子问题。当前窄接口使用 Lean 的 Rat 定义；更广接入应复用 Lean4 和 [mathlib](https://github.com/leanprover-community/mathlib4)，由 RDS 提供模型／性质适配、实验义务及证据绑定。RDS 不应重新实现 Lean 的逻辑，也不能把名为 `linarith` 的 Python 方法当作 Lean 的算术 tactic。
 
-本页区分已实现的窄接口和更广的接入设计。公开 `main`（`f020b2c`）没有原生 Lean 适配器；已推送的 [PR #2](https://github.com/kongtou20070406/RDS/pull/2) 版本 `995e8eb` 提供该接口，但在本次快照中尚未合并。本次文档 PR 不改变可执行代码。
+本页区分已实现的窄接口和更广的接入设计。当前 `main` 已包含 [PR #2](https://github.com/kongtou20070406/RDS/pull/2) 在 `995e8eb` 引入的原生闭合有理数适配器。较早的 `f020b2c` 基础版本不包含该接口；更广的模型／mathlib 接入仍是后续工作。
 
 ## 已实现的闭合有理数接口
 
@@ -14,7 +14,7 @@ RDS 的主体是自动化辅助人类科研：调查证据、生成与筛选实�
 {"schema":1,"kind":"lean_obligation","relation":"lt","left":"1/2","right":"3/4"}
 ```
 
-使用 `995e8eb` checkout，将下面路径替换为已有原生 Lean4 工具链程序的绝对路径。适配器不会下载工具链，拒绝 elan 和 `.elan/bin` shim。
+使用当前 `main` 或 v5.5.0-rc.2，将下面路径替换为已有原生 Lean4 工具链程序的绝对路径。适配器不会下载工具链，拒绝 elan 和 `.elan/bin` shim。
 
 ```powershell
 $env:RDS_LEAN_EXECUTABLE = 'C:\path\to\native-toolchain\bin\lean.exe'
@@ -61,7 +61,7 @@ python -B scripts/rds_cli.py --root . formal check --spec examples/formal/lean_o
 
 Lean 的[证明验证指南](https://lean-lang.org/doc/reference/latest/ValidatingProofs/)说明了公理检查、`lean4checker --fresh` 和可信目标比较。实验期间应固定匹配的 [Lake](https://lean-lang.org/doc/reference/latest/Build-Tools-and-Distribution/Lake/) 与 mathlib 依赖，避免跟随持续变化的分支。
 
-证明搜索或编译失败，只表示尚未获得可接受证明，不表示命题为假。数学负结论需要检查过的反例或对应否定命题的证明；资源上限和不支持模型仍是不确定。历史上另一份本地 prototype 的 `LEAN_TACTIC_PROVED` 与 `LEAN4_CERTIFIED` 标识不满足这些条件，不是当前 PR #2 原生适配器的验证依据。
+证明搜索或编译失败，只表示尚未获得可接受证明，不表示命题为假。数学负结论需要检查过的反例或对应否定命题的证明；资源上限和不支持模型仍是不确定。历史上另一份本地 prototype 的 `LEAN_TACTIC_PROVED` 与 `LEAN4_CERTIFIED` 标识不满足这些条件，不是当前原生适配器的验证依据。
 
 ## 迁移顺序
 

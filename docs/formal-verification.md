@@ -6,9 +6,9 @@ RDS separates a mathematical proposition from the experiment that tests utility 
 
 ## Implementation status
 
-This guide distinguishes public `main` (`f020b2c`) from the pushed [PR #2](https://github.com/kongtou20070406/RDS/pull/2) revision `995e8eb`, which remains under review and unmerged at this snapshot. Check the actual ref before using an interface. Default cloning selects `main`; a roadmap entry is not an installed capability.
+Current `main` includes the mathematical implementation introduced by [PR #2](https://github.com/kongtou20070406/RDS/pull/2) at `995e8eb`, together with the Advisor/dashboard integration. The table retains the older `f020b2c` base for historical comparison. Check the actual ref before using an interface; a roadmap entry is not an installed capability.
 
-| Area | Public `main` (`f020b2c`) | PR #2 (`995e8eb`, unmerged) | Further work |
+| Area | Historical base (`f020b2c`) | Current `main` (implementation from `995e8eb`) | Further work |
 | --- | --- | --- | --- |
 | Ordinary scalar execution | Restricted rational AST and paired MSE; `AST_ONLY` admission. | Preserved. | Remains distinct from mathematical verification. |
 | Declared scalar boundary | Optional SymPy; `SYMBOLIC_CHECKED`; unsupported cases yield `UNKNOWN`. | Typed statements, an exact affine-rational certificate generator and a separate checker. | Extend coverage while preserving statement and evidence bindings. |
@@ -18,11 +18,11 @@ This guide distinguishes public `main` (`f020b2c`) from the pushed [PR #2](https
 | Native Lean | No native Lean adapter. | Registered fixed-template closed Rat `eq`/`lt`/`le` obligations, checked by an explicitly configured Lean4 executable. | mathlib and quantified model/property adapters. |
 | Framework, tensors and exports | No general theorem command or model export. | `formal` CLI, finite theorem modules, concrete exact tensor checks and a restricted Python model-export API. | General symbolic tensors and further checked translations. |
 
-The interfaces below are implemented in the pushed PR revision, not in `main`. Use its [versioned framework contract](https://github.com/kongtou20070406/RDS/blob/995e8eb98f75697ef1ce43a9991f0686e5c29caa/references/formal_framework.md), registrations and tests. The initial PR commit `8eadae9` covered only the scalar certificate path and is not the interface snapshot described here.
+The interfaces below are included in `main`. The [pinned implementation contract](https://github.com/kongtou20070406/RDS/blob/995e8eb98f75697ef1ce43a9991f0686e5c29caa/references/formal_framework.md) records their source revision; use the installed revision's registrations and tests. The initial PR commit `8eadae9` covered only the scalar certificate path and is not the interface snapshot described here.
 
 ## Declaration and independent checking
 
-PR #2 revision `995e8eb` uses `scripts/rds_verify.py` and the `formal` CLI, with finite schema-1 specifications. Its trusted registry contains 12 atomic mathematical kinds plus finite theorem-module composition, distinct from the 23-node methodology catalog. JSON cannot register executable rules or user axioms. Atomic declarations select a rule through `kind`; named module declarations use `by.rule`, not a top-level `rule_id`.
+The implementation included in `main` uses `scripts/rds_verify.py` and the `formal` CLI, with finite schema-1 specifications. Its trusted registry contains 12 atomic mathematical kinds plus finite theorem-module composition, distinct from the 23-node methodology catalog. JSON cannot register executable rules or user axioms. Atomic declarations select a rule through `kind`; named module declarations use `by.rule`, not a top-level `rule_id`.
 
 | Specification kind | Framework rule / supported obligation |
 | --- | --- |
@@ -37,7 +37,7 @@ PR #2 revision `995e8eb` uses `scripts/rds_verify.py` and the `formal` CLI, with
 
 `verify(spec)` produces and independently checks evidence; `check_certificate(spec, certificate)` checks its validity, and `checked_result` reconstructs the conclusion. A valid **FAIL** certificate can also pass certificate validation: valid evidence is not necessarily a true proposition. Results include `status`, `assurance`, `backend`, `semantics`, `spec_sha256`, `verifier_sha256` and a certificate when decided. CLI `check` accepts a framework certificate or a complete framework result containing it; it reconstructs the verdict rather than trusting the result's reported status. CLI exit codes are 0/1/2 for PASS/FAIL/UNKNOWN. These commands need no initialized research contract.
 
-PR preview, requiring a checkout of `995e8eb` with these commands and example files:
+Run these commands from a current `main` or v5.5.0-rc.2 checkout containing the example files:
 
 ```powershell
 python -B scripts/rds_cli.py --root . formal rules
@@ -77,7 +77,7 @@ The bounded tactic names are `rule`, `gershgorin`, `spectral_radius`, `scale_inv
 
 ### Historical prototype: a separate experimental path
 
-A historical experimental implementation in a separate local `scripts/rds_probe.py` introduced `FormalRuleRegistry` and a class also named `LeanFormalEngine`. It loaded the 23 methodology nodes and five mathematical checks, accepted rule IDs or tactic lists, and emitted a trace. It is not PR #2's current `rds_verify.py` dispatcher and its labels cannot inherit that framework's checking guarantees. The following audit applies only to that historical path.
+A historical experimental implementation in a separate local `scripts/rds_probe.py` introduced `FormalRuleRegistry` and a class also named `LeanFormalEngine`. It loaded the 23 methodology nodes and five mathematical checks, accepted rule IDs or tactic lists, and emitted a trace. It is not the current `rds_verify.py` dispatcher and its labels cannot inherit that framework's checking guarantees. The following audit applies only to that historical path.
 
 In that prototype, `kind: causal_rule` with `rule_id` checked only that the registered `discriminator`, `primary_gate` and `falsifier` fields were nonempty. It did not check the proposed experiment or the additional obligations in the graph. `RULE_ALIGNED` therefore meant registry structure only. The [23-node obligation map](rule-obligations.md) specifies the evidence still required.
 
@@ -87,7 +87,7 @@ The declared residual lemma also needs correction: `Lip(F)<=K` and `alpha*K<1` c
 
 ### Verification flow
 
-PR #2's current registered interfaces follow the structure below. Integration into public `main` and broader mathematical coverage remain separate milestones.
+The registered interfaces now included in `main` follow the structure below. Broader mathematical coverage remains a separate development milestone.
 
 ```mermaid
 flowchart LR
@@ -105,7 +105,7 @@ Python orchestrates this architecture. Most domain certificates use exact Python
 
 ## Scalar contract and typed statements
 
-In the reviewed scalar implementation, the declaration belongs to `hypothesis.formal`:
+In the current scalar implementation, the declaration belongs to `hypothesis.formal`:
 
 ```json
 {
@@ -122,16 +122,16 @@ In the reviewed scalar implementation, the declaration belongs to `hypothesis.fo
 
 This is the mathematical portion of a hypothesis, not a complete hypothesis or plan. Use the remaining required fields from the [execution contract](../references/l3-state-machine.md) for the checkout being run. Exact scalar values use finite integer, decimal-string or rational-string declarations.
 
-| Field or statement | Meaning in the reviewed scalar adapter |
+| Field or statement | Meaning in the current scalar adapter |
 | --- | --- |
 | `kind` | Routes the scalar property. Boundary adapters include `strict_algebraic_threshold` and `contraction_boundary`; legacy explicit `threshold_necessity` remains accepted. A label does not prove general contraction. |
 | `quantity: scalar_property` | The executed quantity is a measured scalar property with a documented mapping to the research claim. |
 | `domain` / `threshold` | Closed-domain obligations and the predeclared boundary. Original denominators must remain defined, even after symbolic cancellation. |
-| `statement: threshold_separation` | Both arms are defined; control stays below the threshold throughout the domain; treatment has a crossing witness. This is the reviewed default for boundary declarations. |
+| `statement: threshold_separation` | Both arms are defined; control stays below the threshold throughout the domain; treatment has a crossing witness. This is the current default for boundary declarations. |
 | `statement: threshold_necessity` | Enables the separate, scoped necessity-refutation interpretation when an executed crossing satisfies both arms' loss bound. |
 | `max_loss` | Predeclared bound used by the scalar necessity falsifier; a mathematical witness alone is not an executed low-loss counterexample. |
 
-Public `main` predates typed statement enforcement. Do not rely on adding `statement` to that version to obtain the reviewed distinction. If a declaration intended necessity, use the appropriate implementation ref, state it explicitly, and create a new contract when engine bindings change.
+The historical `f020b2c` base predates typed statement enforcement; adding `statement` to that old version does not obtain the current distinction. In current `main`, state necessity explicitly when intended, and create a new contract when engine bindings change.
 
 The exact checker covers supported affine-rational expressions with bounded arithmetic. Unsupported expressions may fall back to optional SymPy. Ordinary runs without a mathematical declaration use AST checks and exact rational execution; omission of a declaration does not prove that a research proposal has no mathematical obligation.
 
@@ -151,19 +151,19 @@ Declared formal admission requires `PASS`; both `FAIL` and `UNKNOWN` block it. M
 | --- | --- |
 | `AST_ONLY` | Restricted syntax; no declared mathematical property. Available on `main`. |
 | `SYMBOLIC_CHECKED` | Optional symbolic result without an independently checked certificate. Available on `main`. |
-| `CERTIFICATE_CHECKED` | Bound exact domain certificates or a finite module were independently checked. Added by PR #2; a module can combine Python and native Lean leaves. |
-| `LEAN_KERNEL_CHECKED` | The registered atomic closed Rat template was checked again with native Lean and an empty-axiom audit. PR #2 `995e8eb`; not general model verification. |
-| `EXACT_OBSERVATION_CHECKED` | Executed scalar samples checked exactly. Separate from the admission certificate; added by PR #2. |
+| `CERTIFICATE_CHECKED` | Bound exact domain certificates or a finite module were independently checked. Available on `main`; a module can combine Python and native Lean leaves. |
+| `LEAN_KERNEL_CHECKED` | The registered atomic closed Rat template was checked again with native Lean and an empty-axiom audit. Available on `main` with the configured native toolchain; not general model verification. |
+| `EXACT_OBSERVATION_CHECKED` | Executed scalar samples checked exactly. Available on `main`, separately from the admission certificate. |
 | `EXACT_COUNTEREXAMPLE_CHECKED` | The direct network adapter's exact forward witness refutes the declared model property. The generic framework wraps a checked FAIL as `CERTIFICATE_CHECKED`. |
 | `NONE` | No mathematical checking assurance. |
 
-An admission witness can exist outside the samples selected for execution. The reviewed implementation therefore records `admission_status` / `admission_assurance` separately from `observed_status` / `execution_assurance`. A missed observed crossing does not invalidate the earlier existence certificate. A failed worker does not refute the mathematical or scientific claim.
+An admission witness can exist outside the samples selected for execution. The current implementation therefore records `admission_status` / `admission_assurance` separately from `observed_status` / `execution_assurance`. A missed observed crossing does not invalidate the earlier existence certificate. A failed worker does not refute the mathematical or scientific claim.
 
 Verifier outputs remain separate from `run_status`, `assessment.task_gain` and `assessment.mechanism`. `PASS` does not establish better task performance, causal isolation, population generalization or L4 policy improvement.
 
 ## Multidimensional adapter scope
 
-The following mathematical kinds are registered in PR #2 `995e8eb`, not in public `main`. The restricted export is a Python API, not another `formal` CLI kind. Use the selected revision's contract and limits; scalar `hypothesis.formal` fields must not be imposed on every backend.
+The following mathematical kinds are registered in current `main`, originating in PR #2 `995e8eb`. The restricted export is a Python API, not another `formal` CLI kind. Use the selected revision's contract and limits; scalar `hypothesis.formal` fields must not be imposed on every backend.
 
 | Adapter | Declared model and obligation | Interpretation limit |
 | --- | --- | --- |
@@ -176,7 +176,7 @@ The following mathematical kinds are registered in PR #2 `995e8eb`, not in publi
 | `tensor_identity` / `tensor_bounds` | Concrete exact tensor expressions, matching values/shapes or closed bounds. | Bounded literal/add/scale/transpose/matmul calculations; no universal symbolic tensor theorem or general broadcasting. |
 | Restricted model export | A supported evaluation-mode `Sequential` model with Linear/ReLU leaves exported to exact rational parameters. | Exported binary parameter values form a model snapshot; no forward execution or checkpoint safety claim follows. Successful export does not imply the verifier accepts its size. |
 
-Backend-specific limits, schemas and error behavior must come from the selected revision. General symbolic tensors, arbitrary layers, floating-point rounding, autograd, stochastic optimization and generalization are not covered by the declarations above.
+Backend-specific limits, schemas and error behavior must come from the selected revision. General symbolic tensors, arbitrary layers, floating-point rounding, autograd, stochastic optimization and generalization are not covered by the declarations above. The release regression run skipped two native-Lean checks because no toolchain was configured and two PyTorch checks because PyTorch was absent; these optional paths were not validated by that run.
 
 ## A useful verification contribution
 
@@ -186,6 +186,6 @@ Keep admission, actual execution and scientific interpretation separate. See [Co
 
 ## Lean compatibility and optional C++ adapters
 
-RDS primarily automates assistance to human research. PR #2 supplies the narrow native Rat interface above; broader Lean4/mathlib compatibility should reuse the real prover and checker for suitable mathematical subproblems. See the [current interface and future integration contract](lean-integration.md). RDS translates supported properties and binds proof evidence to experiments. Python can continue to orchestrate this work; C++ is an option for measured adapter bottlenecks. This documentation PR changes no executable code and establishes no latency guarantee.
+RDS primarily automates assistance to human research. Current `main` supplies the narrow native Rat interface above; broader Lean4/mathlib compatibility should reuse the real prover and checker for suitable mathematical subproblems. See the [current interface and future integration contract](lean-integration.md). RDS translates supported properties and binds proof evidence to experiments. Python can continue to orchestrate this work; C++ is an option for measured adapter bottlenecks. These interfaces establish no latency guarantee.
 
 For Lean-backed claims, fix the expected theorem and definitions independently, inspect axiom dependencies including `sorryAx`, and recheck proof objects. Successful compilation of an unrelated file is insufficient. These requirements follow Lean's [official proof validation guidance](https://lean-lang.org/doc/reference/latest/ValidatingProofs/); its [kernel type-checker source](https://github.com/leanprover/lean4/blob/master/src/kernel/type_checker.cpp) is also a concrete C++ reference. Language choice alone does not establish soundness.

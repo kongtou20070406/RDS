@@ -4,7 +4,7 @@
 
 RDS primarily automates assistance to human research: investigate evidence, propose and select experiments, arrange execution, assess results, and resume after reflection. Lean4 compatibility supports suitable mathematical subproblems within that loop. The current narrow adapter uses Lean's Rat definitions; wider integration should reuse Lean4 and [mathlib](https://github.com/leanprover-community/mathlib4), while RDS supplies model/property adapters, experiment obligations and evidence bindings. RDS should not recreate Lean's logic or treat a Python method named `linarith` as Lean's arithmetic tactic.
 
-This page separates the implemented narrow interface from the broader integration design. Public `main` (`f020b2c`) has no native Lean adapter. The pushed [PR #2](https://github.com/kongtou20070406/RDS/pull/2) revision `995e8eb` supplies one, but remains unmerged at this snapshot. This documentation PR changes no executable code.
+This page separates the implemented narrow interface from the broader integration design. Current `main` includes the native closed-rational adapter introduced by [PR #2](https://github.com/kongtou20070406/RDS/pull/2) at `995e8eb`. The older `f020b2c` base did not contain this adapter; broader model/mathlib integration remains future work.
 
 ## Implemented closed-rational interface
 
@@ -14,7 +14,7 @@ This page separates the implemented narrow interface from the broader integratio
 {"schema":1,"kind":"lean_obligation","relation":"lt","left":"1/2","right":"3/4"}
 ```
 
-Use a checkout of `995e8eb`. Replace the path below with an existing absolute native Lean4 toolchain binary. The adapter does not download a toolchain and rejects elan and `.elan/bin` shims.
+Use current `main` or v5.5.0-rc.2. Replace the path below with an existing absolute native Lean4 toolchain binary. The adapter does not download a toolchain and rejects elan and `.elan/bin` shims.
 
 ```powershell
 $env:RDS_LEAN_EXECUTABLE = 'C:\path\to\native-toolchain\bin\lean.exe'
@@ -61,7 +61,7 @@ Actual checkpoint weights can be represented as exact rationals in a real-valued
 
 Lean documents axiom inspection, `lean4checker --fresh` and trusted-statement comparison in its [proof validation guidance](https://lean-lang.org/doc/reference/latest/ValidatingProofs/). Projects should pin matching [Lake](https://lean-lang.org/doc/reference/latest/Build-Tools-and-Distribution/Lake/) and mathlib dependencies rather than track moving branches during an experiment.
 
-A failed proof search or compilation means no accepted proof was obtained; it does not prove the proposition false. A negative mathematical result needs a checked counterexample or a proof of the relevant negation. Resource limits and unsupported models remain inconclusive. The historical, separate local prototype's `LEAN_TACTIC_PROVED` and `LEAN4_CERTIFIED` labels did not satisfy these conditions; they are not the current PR #2 native adapter's assurances.
+A failed proof search or compilation means no accepted proof was obtained; it does not prove the proposition false. A negative mathematical result needs a checked counterexample or a proof of the relevant negation. Resource limits and unsupported models remain inconclusive. The historical, separate local prototype's `LEAN_TACTIC_PROVED` and `LEAN4_CERTIFIED` labels did not satisfy these conditions; they are not the current native adapter's assurances.
 
 ## Migration sequence
 

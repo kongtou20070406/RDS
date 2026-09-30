@@ -2,10 +2,12 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset=".github/assets/rds-hero-dark.svg">
-  <img src=".github/assets/rds-hero-light.svg" alt="RDS — Research Direction Selector" width="100%">
+  <img src=".github/assets/rds-hero-light.svg" alt="Research Direction Selector" width="100%">
 </picture>
 
-**Research Direction Selector · 科研方向选择与实验审计**
+# Research Direction Selector
+
+**辅助人类和人类的 AI 持续推进科研**
 
 让下一次实验有明确的问题、公平的对照，以及能改变决策的结果。
 
@@ -17,17 +19,39 @@
 
 [English](README.md) · **简体中文** · [日本語](README.ja-JP.md)
 
-[我们的目标](#我们的目标) · [L1–L4](#l1l4) · [快速上手](#快速上手) · [验证](#回归场景与验证) · [参与贡献](#参与贡献)
+[实测结果](#实测结果与具体价值) · [我们的目标](#我们的目标) · [L1–L4](#l1l4) · [快速上手](#快速上手) · [参与贡献](#参与贡献)
 
 </div>
 
-> 本版为 **v5.5.0-rc.1 预发布版**，面向真人及真人交给 AI 使用。[下载版本](https://github.com/kongtou20070406/RDS/releases/tag/v5.5.0-rc.1)。下文固定五组件，[未来计划](docs/roadmap.md)区分当前实现和后续验收。
+> 本版为从 `main` 发布的 **v5.5.0-rc.2 预发布版**，面向真人及真人交给 AI 使用。[下载版本](https://github.com/kongtou20070406/RDS/releases/tag/v5.5.0-rc.2)。下文固定五组件，[未来计划](docs/roadmap.md)区分当前实现和后续验收。
 
-RDS 是面向 Codex 的科研协作技能，配有可执行的本地参考内核。它把研究目标、竞争解释、历史经验和程序检查连接起来，帮助研究者回答：**在当前证据和预算下，下一步最值得做哪个实验？**
+Research Direction Selector（简称 RDS）是面向 Codex 的科研协作技能，配有可执行的本地参考内核。它把研究目标、竞争解释、历史经验和程序检查连接起来，帮助研究者回答：**在当前证据和预算下，下一步最值得做哪个实验？**
 
 研究者确定目标与投入，模型设计候选路线，程序检查执行约束，结果用于修订下一步。RDS 尤其适合指标停滞、机制消融、预算分配，以及中断后的研究接续。
 
 > **两种使用方式：**通过 [SKILL.md](SKILL.md) 在真实研究项目中协作；通过参考 CLI 运行受限标量实验，验证预算、数据使用和证据判定协议。真实 GPU 训练仍由研究项目自己的训练器执行。
+
+## 实测结果与具体价值
+
+2026-09-30 的版本检查得到以下结果：
+
+| 检查 | 实际结果 | 检查内容 |
+| --- | --- | --- |
+| [回归套件](tests/) | **204 项通过，4 项可选跳过，共 208 项** | 内核、Advisor、形式化适配器和界面的行为；原生 Lean 未配置，PyTorch 不可用。 |
+| [历史回放](benchmark/README.md) | **6/6 通过** | 记录中的决策材料及相关门禁。 |
+| [合成攻击场景](benchmark/redteam/) | **4/4 通过** | 四种预先定义的协议攻击。 |
+| [公开任务改编组件挑战](docs/advisor-benchmark.md) | **8/8 个案例、28/28 条检查通过** | 显式合同、缺失证据、依赖、成本、预算和来源身份。 |
+
+公开任务挑战采用 ScienceAgentBench、CORE-Bench 的元数据，由人手工改编规则。八个本地 fixture 的处理与结果组装耗时 **83.0743 ms**；这是小型元数据检查的耗时。可查看[原始输入](benchmark/advisor-public/source-facts.json)和[逐项输出](benchmark/advisor-public/results.json)。**端到端科学任务分数与科研质量提升尚未测量**；这些通过数支持表中的具体行为，不能作为与其它系统的排名比较。
+
+这组检查展示了对下一步研究决定的具体帮助：
+
+- **保留证据缺口：**单个训练损失值不会被升级成收敛诊断（C1）；删除事实来源后，候选转为 `NEEDS_EVIDENCE` 并提出查询（C4）。
+- **建议随需求和工作流改变：**把 20 项特征合同改成 10 项后，可用候选随之交换（C3）；embedding 证据缺失时，沿两层前置依赖请求补证（C6）。
+- **按已知成本与可用预算判断：**成本缺失就保留未知（C5）；零预算阻止有正成本的检查（C7）。
+- **核对实际复现来源：**提供另一个 capsule ID 时，阻止所选来源的后续检查（C8）。
+
+在已测范围内，程序能执行并保留这些判断条件和推导过程，便于人和 AI 复核。真实科学结果仍需研究项目自己的实验与评价。
 
 ## 我们的目标
 
@@ -46,7 +70,8 @@ RDS 的主体是自动化辅助人类科研：调查证据、生成与筛选实�
 可以将这段起始指令交给 AI：
 
 ```text
-请用 RDS 协助这个科研项目，先恢复已有证据和决策。
+请用 Research Direction Selector（RDS）协助这个科研项目。
+先恢复已有证据和决策。
 明确我的目标、指标、基线与预算，复用有效对照和日志。
 推荐能区分竞争解释的下一步实验。
 说明预期观测、可证伪条件、完整成本及不同结果对应的决定。
@@ -94,7 +119,7 @@ RDS 当前提供的是 **L2 科研建议，以及通过标量参考内核实现�
 
 ## 形式化验证与规则义务
 
-架构将显式命题、后端搜索、独立检查与科学评估分开。公开 `main` 使用标量 AST/SymPy 路径；[PR #2](https://github.com/kongtou20070406/RDS/pull/2) 的 `995e8eb` 增加声明式注册表、可独立复核的数学证书及窄范围原生 Lean4 接口，目前开放且未合并。旧实验性 `LeanFormalEngine`／Tactic 分派器是另一条原型路径：`RULE_ALIGNED` 检查元数据，tactic 成功标识不能证明声明目标。详见[验证范围](docs/formal-verification.zh-CN.md)。
+架构将显式命题、后端搜索、独立检查与科学评估分开。`main` 已包含标量 AST/SymPy 路径，以及 [PR #2](https://github.com/kongtou20070406/RDS/pull/2) 的声明式注册表、可独立复核的数学证书及窄范围原生 Lean4 接口。Python 适配器报告证书检查；原生 Lean 检查限于支持的闭合有理数义务，并需要配置可执行文件。旧实验性 `LeanFormalEngine`／Tactic 分派器是另一条原型路径：`RULE_ALIGNED` 检查元数据，tactic 成功标识不能证明声明目标。详见[验证范围](docs/formal-verification.zh-CN.md)与[适配器耗时原始测量](benchmark/results/formal-windows-python313.json)。
 
 23 个有范围的判断节点现已分别记录**前置门禁、可证伪判据与可行域表达式**。下表映射的是义务，并不声称已经证明 23 条因果定理。完整变量、证据与候选 tactic 映射见[规则义务指南](docs/rule-obligations.zh-CN.md)；当前分派器尚未强制检查新增元数据。
 
@@ -129,7 +154,7 @@ RDS 当前提供的是 **L2 科研建议，以及通过标量参考内核实现�
 
 </details>
 
-[文档导航](docs/README.zh-CN.md)包含 L1–L4 实验流、双语术语和贡献说明。[Lean4/mathlib 兼容](docs/lean-integration.zh-CN.md)服务于 RDS 自动化辅助人类科研循环中的合适数学子问题。PR #2 已在闭合有理数义务上复用原生 Lean 内核；通用 mathlib 模型翻译仍待实现。C++ 仅用于测量后确认的适配性能瓶颈。
+[文档导航](docs/README.zh-CN.md)包含 L1–L4 实验流、双语术语和贡献说明。[Lean4/mathlib 兼容](docs/lean-integration.zh-CN.md)服务于 RDS 自动化辅助人类科研循环中的合适数学子问题。原生适配器在闭合有理数义务上复用 Lean 内核；通用 mathlib 模型翻译仍待实现。C++ 仅用于测量后确认的适配性能瓶颈。
 
 ## 工作流程
 
@@ -155,7 +180,7 @@ flowchart LR
 
 ```powershell
 New-Item -ItemType Directory -Path "$env:USERPROFILE/.agents/skills" -Force | Out-Null
-git clone --branch v5.5.0-rc.1 https://github.com/kongtou20070406/RDS.git "$env:USERPROFILE/.agents/skills/research-direction-selector"
+git clone --branch v5.5.0-rc.2 https://github.com/kongtou20070406/RDS.git "$env:USERPROFILE/.agents/skills/research-direction-selector"
 ```
 
 也可以将仓库放到研究项目的 `.agents/skills/research-direction-selector/`。技能目录与调用方式见 [OpenAI 官方技能文档](https://learn.chatgpt.com/docs/build-skills)。
@@ -171,7 +196,7 @@ RDS 从当前文件和对话中整理目标与约束，给出一个推荐方向�
 需要 **Python 3.11+**。普通标量执行仅依赖 Python 标准库，无需 GPU；实时历史检索另需已安装的 Obelisk。
 
 ```powershell
-git clone --branch v5.5.0-rc.1 https://github.com/kongtou20070406/RDS.git
+git clone --branch v5.5.0-rc.2 https://github.com/kongtou20070406/RDS.git
 Set-Location RDS
 python -B scripts/rds_cli.py --version
 ```
@@ -333,7 +358,3 @@ python -B benchmark/redteam/runner.py
 ## 检索关键词
 
 科研方向选择 · 人机科研协作 · 实验设计 · 假说检验 · 因果推断 · 可复现研究 · Advisor · 证明义务 · Lean4 兼容 · Agent Skills · Codex · CLI · Obelisk。英文检索词：research direction selection、AI-assisted research、experiment design、hypothesis testing、causal inference、proof obligations、Lean4 interoperability、reproducible research。
-
-## 本版检查
-
-208 项回归检查：204 项通过，4 项可选检查跳过（未配置原生 Lean、缺少 PyTorch）。6 项历史检查和 4 个合成攻击场景通过。8 个公开任务改编的组件挑战通过 28 条检查；这不是 ScienceAgentBench/CORE-Bench 端到端分数，也未测量科研效益。[范围与原始结果](docs/advisor-benchmark.md)。

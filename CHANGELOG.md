@@ -1,5 +1,16 @@
 # Changelog
 
+## 5.5.0-rc.2 — 2026-09-30
+
+Publish Research Direction Selector from `main` after merging the mathematical kernel and Advisor integration. The GitHub repository address remains `kongtou20070406/RDS`.
+
+- Put the full project name, measured component checks and linked raw evidence on the three README homepages. Explain the observed evidence, contract, prerequisite and budget behavior without presenting adapted checks as original scientific benchmark scores.
+- Update implementation guides to reflect the merged main branch and preserve the limits of Lean checks, Python certificates and research evidence.
+- Restore the three judgment-rule descriptions that require observed, decision-relevant seed instability before proposing additional seeds.
+- Keep v5.5.0-rc.1 ledgers readable after the version change; old engine bindings still require a new execution contract. Extend the existing compatibility regression to check both reading and rejection of stale execution bindings.
+
+Validation: 208 regression checks (204 passed, 4 optional skips), including compatibility and graph-reader coverage. The earlier six historical checks, four synthetic scenarios and eight public-task-adapted cases/28 criteria retain their stated scope; no end-to-end scientific score or GPU savings are claimed. The original rc.1 tag is retained.
+
 ## 5.5.0-rc.1 — 2026-09-30
 
 RDS assists human research: turn a question into a useful test, preserve evidence, and decide the next step. This pre-release combines the mathematical compatibility work from PR #2 with the human-facing documentation from PR #1 and the Advisor/dashboard update.

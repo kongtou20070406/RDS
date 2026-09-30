@@ -1,10 +1,10 @@
-# RDS documentation
+# Research Direction Selector documentation
 
 [简体中文](README.zh-CN.md) · [Project homepage](../README.md) · [Contributing](../CONTRIBUTING.md)
 
 Start with the research workflow, then read the verifier guide for mathematical claims. The terminology guide keeps protocols, program checks and scientific conclusions consistent across languages.
 
-This checkout is v5.5.0-rc.1 and includes the PR #2 mathematical implementation. In guides comparing public main with PR #2, the PR #2 column applies to this release; broader planned adapters remain unimplemented. See the [five components](rds-purpose.md), [Advisor design](advisor-graph-design.md), [dashboard](dashboard.md), [component benchmark](advisor-benchmark.md), and [roadmap](roadmap.md).
+This guide targets v5.5.0-rc.2 on `main`, including the mathematical implementation introduced in PR #2 and the Advisor/dashboard integration introduced in PR #3. Capability tables retain `f020b2c` as a historical comparison; the current column applies to this release. Broader planned adapters remain unimplemented. See the [five components](rds-purpose.md), [Advisor design](advisor-graph-design.md), [dashboard](dashboard.md), [component benchmark](advisor-benchmark.md), and [roadmap](roadmap.md).
 
 | Guide | English | 简体中文 |
 | --- | --- | --- |
@@ -17,4 +17,4 @@ This checkout is v5.5.0-rc.1 and includes the PR #2 mathematical implementation.
 
 The [execution contract](../references/l3-state-machine.md) defines the runtime in the checkout being used. [SKILL.md](../SKILL.md) defines the research protocol. When the two differ, report the inconsistency instead of interpreting a protocol instruction as an implemented guarantee.
 
-The stable homepage examples target public `main`. The certificate implementation in [PR #2](https://github.com/kongtou20070406/RDS/pull/2) is under review. Its evolving multidimensional adapters must be checked against their own implementation revision; a module or design sketch does not establish support in the installed CLI. See the verifier guide's capability table before choosing a backend.
+The homepage examples target public `main`. Its checked certificate and scoped multidimensional interfaces originate in [PR #2](https://github.com/kongtou20070406/RDS/pull/2). Check each adapter's implementation revision and documented limits before choosing a backend. The release regression run skipped two native-Lean checks because a toolchain was not configured and two PyTorch checks because PyTorch was absent; those skips do not establish validation of the optional paths.

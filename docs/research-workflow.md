@@ -22,7 +22,7 @@ Budget checks, probes, log handling and applicable mathematical checks belong to
 
 Advisor's intended process starts with real evidence and follows the judgment graph and scoped rules to generate or combine candidates. Each candidate should identify competing explanations, a discriminating observation, and how positive or negative results would change the next decision. Screen these candidates for authorized total cost after establishing their decision value; preserve their derivation and evidence sources.
 
-The existing implementation provides diagnostic and revision hints and scoped rule retrieval. A fully connected process for evidence-driven candidate generation and combination remains a development direction. Rule matching and heuristic thresholds do not establish a causal diagnosis. Claims about Advisor's scientific success rate, research quality or cost savings require independent research trajectories; they do not follow from runnable helpers or synthetic regression cases. RSI likewise produces candidate policy changes, whose improvement needs the L4 evaluation described below.
+The current implementation combines diagnostic hints and scoped rule retrieval with bounded graph search over source-labelled facts and explicit executable bindings. It follows `prerequisite_for` dependencies, preserves unknown conditions as evidence queries, records competing explanations and result-dependent next decisions, and compares costs only when their units are comparable. The rules and candidate bindings are authored; general automatic discovery and combination of research ideas remain development directions. Rule matching does not establish a causal diagnosis. Claims about Advisor's scientific success rate, research quality or cost savings require independent research trajectories; the [component benchmark](advisor-benchmark.md) measures narrower contract checks. RSI likewise produces candidate policy changes, whose improvement needs the L4 evaluation described below.
 
 ## L1–L4 responsibilities
 
@@ -35,7 +35,7 @@ These are RDS's explanatory working levels, not an industry standard or four dat
 | L3 — Bounded execution loop | Bind the authorized contract, hypothesis, source, data, verifier and allocation. | Execution artifacts, engine receipts, separate evidence assessments and a recovery record. | Interpret only the observed result within its declared scope; continue, revise or stop. |
 | L4 — Tested policy improvement | Propose scoped rule changes from repeated failures or counterexamples. | Reviewable candidate rules and a prospective comparison of research trajectories. | Independent cases at equal total cost support the claimed policy improvement; retain failures and limits. |
 
-Current public `main` supplies the L2 skill protocol and L3 scalar reference building blocks. Rules and Advisor provide revision hints. [PR #2](https://github.com/kongtou20070406/RDS/pull/2) adds checked scalar certificates and repair candidates. Neither one model gain nor one mathematical certificate validates an L4 research policy.
+Current public `main` supplies the L2 skill protocol, L3 scalar reference building blocks, checked mathematical interfaces from [PR #2](https://github.com/kongtou20070406/RDS/pull/2), and the bounded Advisor graph search and read-only dashboard from [PR #3](https://github.com/kongtou20070406/RDS/pull/3). Neither one model gain nor one mathematical certificate validates an L4 research policy.
 
 ## One experiment in the reference CLI
 

@@ -2,10 +2,12 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset=".github/assets/rds-hero-dark.svg">
-  <img src=".github/assets/rds-hero-light.svg" alt="RDS — Research Direction Selector" width="100%">
+  <img src=".github/assets/rds-hero-light.svg" alt="Research Direction Selector" width="100%">
 </picture>
 
-**Research direction selection & experiment auditing for Codex**
+# Research Direction Selector
+
+**Research assistance for people and their AI**
 
 Give every experiment a clear question, a fair control, and a result that changes the next decision.
 
@@ -17,17 +19,39 @@ Give every experiment a clear question, a fair control, and a result that change
 
 **English** · [简体中文](README.zh-CN.md) · [日本語](README.ja-JP.md)
 
-[Our goal](#our-goal) · [L1–L4](#l1l4) · [Quick start](#quick-start) · [Validation](#regression-scenarios--verification) · [Contribute](#contribute)
+[Results](#measured-results-and-concrete-strengths) · [Our goal](#our-goal) · [L1–L4](#l1l4) · [Quick start](#quick-start) · [Contribute](#contribute)
 
 </div>
 
-> This checkout is **v5.5.0-rc.1**, a pre-release for researchers and their AI. [Download the release](https://github.com/kongtou20070406/RDS/releases/tag/v5.5.0-rc.1). The five components below anchor the project; [the roadmap](docs/roadmap.md) separates implemented behavior from future validation.
+> This checkout is **v5.5.0-rc.2**, a pre-release from `main` for researchers and their AI. [Download the release](https://github.com/kongtou20070406/RDS/releases/tag/v5.5.0-rc.2). The five components below anchor the project; [the roadmap](docs/roadmap.md) separates implemented behavior from future validation.
 
-RDS is a research collaboration skill for Codex with an executable local reference kernel. It connects research goals, competing explanations, past evidence, and programmatic checks to answer: **given the evidence and budget, which experiment is worth doing next?**
+Research Direction Selector (RDS) is a research collaboration skill for Codex with an executable local reference kernel. It connects research goals, competing explanations, past evidence, and programmatic checks to answer: **given the evidence and budget, which experiment is worth doing next?**
 
 The researcher sets the goal and resources, the model designs candidate routes, the program checks execution constraints, and the results inform the next step. Use it for metric plateaus, mechanism ablations, budget allocation, and resuming interrupted research.
 
 > **Two ways to use RDS:** work on a real research project through [SKILL.md](SKILL.md), or run restricted scalar experiments through the reference CLI to inspect budget, data-use, and evidence protocols. Real GPU training stays with your project's trainer.
+
+## Measured results and concrete strengths
+
+The 2026-09-30 release checks produced these results:
+
+| Check | Actual result | What it checks |
+| --- | --- | --- |
+| [Regression suite](tests/) | **204 passed; 4 optional checks skipped; 208 total** | Kernel, Advisor, formal adapters and dashboard behavior. Native Lean was not configured; PyTorch was unavailable. |
+| [Historical replay](benchmark/README.md) | **6/6 passed** | Recorded decision packets and associated gates. |
+| [Synthetic adversarial scenarios](benchmark/redteam/) | **4/4 passed** | Four predefined protocol attacks. |
+| [Public-task-adapted component challenge](docs/advisor-benchmark.md) | **8/8 cases; 28/28 checks passed** | Explicit contracts, missing evidence, dependencies, costs, budgets and source identity. |
+
+The public-task challenge used ScienceAgentBench and CORE-Bench metadata with manually adapted rules. It took **83.0743 ms** to process the eight local fixtures and assemble results; this is a small metadata check, not scientific task execution. [Raw inputs](benchmark/advisor-public/source-facts.json) and [per-check outputs](benchmark/advisor-public/results.json) are available. End-to-end scientific task scores and research-quality improvement remain **unmeasured**; these counts establish the listed behavior, not a comparative ranking.
+
+The checks show concrete benefits for the researcher's next decision:
+
+- **Keep missing evidence visible:** a lone training-loss value does not become a convergence diagnosis (C1); deleting a fact's source changes readiness to `NEEDS_EVIDENCE` and creates a query (C4).
+- **Let requirements and workflow change suggestions:** changing a 20-feature contract to 10 exchanges the eligible candidates (C3); missing embedding evidence triggers a request along two prerequisite edges (C6).
+- **Respect uncertain cost and available budget:** unknown cost stays unknown (C5); zero budget blocks a positive-cost check (C7).
+- **Check the source being reproduced:** a different capsule ID blocks the downstream check for the selected source (C8).
+
+These results support explicit, inspectable decision checks within the tested scope. The program retains the conditions and derivation for review; real scientific outcomes still require the project's experiments and evaluation.
 
 ## Our goal
 
@@ -46,7 +70,8 @@ Every proposed experiment should answer three questions: **which explanations do
 Copy this starting instruction to your AI:
 
 ```text
-Use RDS for this research project. Recover existing evidence and decisions first.
+Use Research Direction Selector (RDS) for this research project.
+Recover existing evidence and decisions first.
 Clarify my goal, metric, baseline and budget; reuse valid controls and logs.
 Recommend the next experiment that can distinguish competing explanations.
 Explain the expected observations, falsifier, full cost and decision consequences.
@@ -95,7 +120,7 @@ RDS currently provides **L2 research guidance and building blocks for L3 through
 
 ## Formal verification and rule obligations
 
-The architecture separates declared propositions, backend search, independent checking, and scientific assessment. Public `main` has the scalar AST/SymPy path. [PR #2](https://github.com/kongtou20070406/RDS/pull/2), at `995e8eb`, adds a declarative registry, independently checked mathematical certificates and a narrow native Lean4 interface; it is open and unmerged. The older experimental `LeanFormalEngine`/Tactic dispatcher is a separate prototype: `RULE_ALIGNED` checks metadata, and tactic success labels do not establish a proof of the declared goal. See [verification scope](docs/formal-verification.md).
+The architecture separates declared propositions, backend search, independent checking, and scientific assessment. `main` now includes the scalar AST/SymPy path, a declarative registry, independently checked mathematical certificates and a narrow native Lean4 interface from [PR #2](https://github.com/kongtou20070406/RDS/pull/2). Python adapters report certificate checks; native Lean checking is limited to supported closed rational obligations and requires a configured executable. The older experimental `LeanFormalEngine`/Tactic dispatcher is a separate prototype: `RULE_ALIGNED` checks metadata, and tactic success labels do not establish a proof of the declared goal. See [verification scope](docs/formal-verification.md) and [raw adapter timing measurements](benchmark/results/formal-windows-python313.json).
 
 Each of the 23 scoped judgment nodes now has explicit **preconditions, a falsifier and a feasible-domain expression**. The table maps obligations rather than claiming 23 proved causal theorems. Full variable definitions, required evidence and candidate tactic mappings are in the [rule obligation guide](docs/rule-obligations.md); none of the added metadata is currently enforced by the dispatcher.
 
@@ -130,7 +155,7 @@ Each of the 23 scoped judgment nodes now has explicit **preconditions, a falsifi
 
 </details>
 
-[Documentation](docs/README.md) includes the L1–L4 experiment flow, bilingual terminology and contributor guidance. [Lean4/mathlib compatibility](docs/lean-integration.md) serves suitable mathematical subproblems within RDS's human research-assistance loop. PR #2 reuses the native Lean kernel for closed rational obligations; broader mathlib model translation remains planned. C++ is an optional adapter optimization after profiling.
+[Documentation](docs/README.md) includes the L1–L4 experiment flow, bilingual terminology and contributor guidance. [Lean4/mathlib compatibility](docs/lean-integration.md) serves suitable mathematical subproblems within RDS's human research-assistance loop. The native adapter reuses the Lean kernel for closed rational obligations; broader mathlib model translation remains planned. C++ is an optional adapter optimization after profiling.
 
 ## Workflow
 
@@ -156,7 +181,7 @@ Place the complete repository in a skill folder named `research-direction-select
 
 ```powershell
 New-Item -ItemType Directory -Path "$env:USERPROFILE/.agents/skills" -Force | Out-Null
-git clone --branch v5.5.0-rc.1 https://github.com/kongtou20070406/RDS.git "$env:USERPROFILE/.agents/skills/research-direction-selector"
+git clone --branch v5.5.0-rc.2 https://github.com/kongtou20070406/RDS.git "$env:USERPROFILE/.agents/skills/research-direction-selector"
 ```
 
 You can also place it in your research project's `.agents/skills/research-direction-selector/`. See the [official OpenAI skills documentation](https://learn.chatgpt.com/docs/build-skills) for discovery and invocation.
@@ -172,7 +197,7 @@ RDS extracts goals and constraints from the current files and conversation, then
 Requires **Python 3.11+**. Ordinary scalar execution uses only the Python standard library and needs no GPU. Live history retrieval separately requires an installed Obelisk CLI.
 
 ```powershell
-git clone --branch v5.5.0-rc.1 https://github.com/kongtou20070406/RDS.git
+git clone --branch v5.5.0-rc.2 https://github.com/kongtou20070406/RDS.git
 Set-Location RDS
 python -B scripts/rds_cli.py --version
 ```
@@ -334,7 +359,3 @@ RDS branding and copy are original. These links identify a dependency and design
 ## Search terms
 
 Research direction selection · AI-assisted research · experiment design · hypothesis testing · causal inference · reproducible research · Advisor · proof obligations · Lean4 interoperability · agent skills · Codex · CLI · Obelisk.
-
-## Release checks
-
-208 regression checks: 204 passed, 4 optional checks skipped (native Lean not configured and PyTorch unavailable). Six historical checks and four synthetic adversarial scenarios passed. Eight public-task-adapted component cases passed 28 checks; these are not ScienceAgentBench/CORE-Bench end-to-end scores or measured scientific benefit. [Detailed scope and results](docs/advisor-benchmark.md).

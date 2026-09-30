@@ -47,10 +47,16 @@ class CliConcurrencyTests(unittest.TestCase):
     def test_old_state_versions_remain_readable(self):
         project = self.project()
         state = cli.RDSState(project.root)
-        for version in ("5.1.0", "5.2.0", "5.3.0"):
+        for version in ("5.1.0", "5.2.0", "5.3.0", "5.4.0", "5.5.0-rc.1"):
             with state.transaction() as (_, snapshot):
                 snapshot["version"] = version
             self.assertEqual(cli.cmd_status(None, state)["version"], version)
+        with state.transaction() as (_, snapshot):
+            snapshot["engine_sha256"] = "0" * 64
+        self.assertEqual(cli.cmd_status(None, state)["version"], "5.5.0-rc.1")
+        with self.assertRaisesRegex(ValueError, "a new contract is required"):
+            cli.cmd_plan(self.spec_args(project, project.plan()), state)
+        self.assertEqual(cli.cmd_status(None, state)["budget"]["reserved"]["runs"], 0)
 
     def test_advisor_accepts_valid_plan_without_nested_writer_lock(self):
         project = self.project()

@@ -1,4 +1,4 @@
-# RDS terminology
+# Research Direction Selector terminology
 
 **English** · [简体中文](terminology.zh-CN.md)
 
@@ -16,7 +16,7 @@ The research protocol Skill, execution and acceptance kernel, and research state
 | Advisor | 科研建议引擎 | The responsibility for generating or combining candidates along real evidence, judgment dependencies and scoped rules, so tests distinguish competing explanations and change the next decision before cost screening. |
 | RSI | 自改进 | The responsibility for proposing, evaluating, adopting or rolling back scoped changes to rules and work policies. It does not denote an automatic increase in a model's intelligence. |
 
-Existing Advisor helpers provide diagnostic and revision hints and scoped rule retrieval. The fully connected candidate-generation process is a development direction, not an independently measured current research capability. Rule matches and heuristic thresholds are clues whose applicability needs evidence. Policy improvement through RSI requires independent comparisons of whole research trajectories at equal total budgets. Lean-compatible work applies to suitable mathematical subtasks and does not certify the broader scientific conclusion.
+Current Advisor helpers provide diagnostic hints, scoped rule retrieval and bounded graph search over source-labelled facts, explicit candidate bindings and prerequisite dependencies. They preserve unknowns and result-dependent next decisions. General automatic discovery and combination of research ideas remain development directions; the component benchmark does not measure independent scientific success. Rule matches are clues whose applicability needs evidence. Policy improvement through RSI requires independent comparisons of whole research trajectories at equal total budgets. Lean-compatible work applies to suitable mathematical subtasks and does not certify the broader scientific conclusion.
 
 ## Research and experiment terms
 
@@ -58,12 +58,12 @@ Existing Advisor helpers provide diagnostic and revision hints and scoped rule r
 | `AST_ONLY` | Mainline | AST-only checking within the ordinary reference path. This is not a formal proof certificate. |
 | `SYMBOLIC_CHECKED` | Mainline | A symbolic check within the declared adapter's scope. This is not automatically an independently checked certificate. |
 | `NONE` | Mainline | No verification basis is asserted by this check. |
-| `CERTIFICATE_CHECKED` | PR2 addition | A certificate has been checked within the supporting backend's declared scope. |
-| `LEAN_KERNEL_CHECKED` | PR2 `995e8eb`; unmerged | Native Lean independently checks a fixed-template closed rational relation with an empty-axiom audit. Broader model claims are not covered. |
-| `EXACT_OBSERVATION_CHECKED` | PR2 addition | An exact observation has been checked within the supporting backend's declared scope. |
+| `CERTIFICATE_CHECKED` | Mainline, introduced by PR #2 | A certificate has been checked within the supporting backend's declared scope. |
+| `LEAN_KERNEL_CHECKED` | Mainline; configured native Lean required | Native Lean independently checks a fixed-template closed rational relation with an empty-axiom audit. Broader model claims are not covered. |
+| `EXACT_OBSERVATION_CHECKED` | Mainline, introduced by PR #2 | An exact observation has been checked within the supporting backend's declared scope. |
 | `EXACT_COUNTEREXAMPLE_CHECKED` | Adapter-specific evidence | An exact forward counterexample has been checked. The generic framework's outer conclusion uses `CERTIFICATE_CHECKED`; inspect the result field and version. |
 
-These values are categories, not an ordered ladder or a list supported by every version. Read each value together with the check status, declared proposition, domain, and backend scope. For the precise support and acceptance conditions of each backend, use the [formal verification guide](formal-verification.md), including its distinction between mainline, PR2, and unreleased development adapters.
+These values are categories, not an ordered ladder or a list supported by every version. Read each value together with the check status, declared proposition, domain, and backend scope. For the precise support and acceptance conditions of each backend, use the [formal verification guide](formal-verification.md), which distinguishes the historical base, current mainline and future adapters.
 
 ## L1–L4 and the research loop
 
