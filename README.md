@@ -80,10 +80,10 @@ flowchart TD
 You can use RDS in your agent like:
 
 ```text
-/rds The metric has stopped improving. Use the existing logs to distinguish training problems from capacity limits.
-/rds These two ablations change several things at once. Design a minimal fair comparison that distinguishes the explanations.
-/rds Continue this project. Check the remaining budget and completed runs before proposing new work.
-/rds Help me evaluate the current contraction hypothesis and generate checked evidence for a supported formal statement.
+Use RDS to inspect why the metric has stopped improving. Use the existing logs to distinguish training problems from capacity limits.
+Use RDS to review these two ablations that change several things at once. Design a minimal fair comparison that distinguishes the explanations.
+Use RDS to continue this project. Check the remaining budget and completed runs before proposing new work.
+Use RDS to evaluate the current contraction hypothesis and generate checked evidence for a supported formal statement.
 ```
 
 ### Install
@@ -114,11 +114,18 @@ git clone https://github.com/kongtou20070406/research-direction-selector.git "$e
 
 The kernel (`scripts/rds_cli.py`) runs on pure Python 3.11+ standard library:
 
+Run the following CPU demonstration from the repository root, using a new empty `./my-project` directory. The preparation step creates the bound contract and manifests for both arms; this demonstration does not establish scientific confirmation. See the [project-runner example](examples/project-runner/README.md) for execution and receipt details.
+
 ```powershell
+# 0. Prepare the example contract, data, and manifests
+python -B examples/project-runner/prepare.py --root ./my-project
+
 # 1. Initialize research state from contract
 python -B scripts/rds_cli.py --root ./my-project project init --contract ./my-project/contract.json
 
-# 2. Create and execute plan with transactional budget
+# 2. Create and execute both arms with transactional budget
+python -B scripts/rds_cli.py --root ./my-project project create --manifest ./my-project/control.json
+python -B scripts/rds_cli.py --root ./my-project project execute --id control
 python -B scripts/rds_cli.py --root ./my-project project create --manifest ./my-project/treatment.json
 python -B scripts/rds_cli.py --root ./my-project project execute --id treatment
 
