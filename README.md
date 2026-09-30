@@ -10,7 +10,7 @@
 [![stars](https://img.shields.io/github/stars/kongtou20070406/research-direction-selector?style=flat-square)](https://github.com/kongtou20070406/research-direction-selector/stargazers)
 [![version](https://img.shields.io/github/v/tag/kongtou20070406/research-direction-selector?label=version&style=flat-square)](https://github.com/kongtou20070406/research-direction-selector/releases)
 [![license](https://img.shields.io/badge/license-Apache%202.0-blue.svg?style=flat-square)](LICENSE)
-[![tests](https://img.shields.io/badge/tests-passing-brightgreen.svg?style=flat-square)](tests/)
+[![tests](https://github.com/kongtou20070406/research-direction-selector/actions/workflows/test.yml/badge.svg)](https://github.com/kongtou20070406/research-direction-selector/actions/workflows/test.yml)
 
 Turn a research question, existing evidence, and a limited budget into a decision-changing experiment -- driven by your agent, verified by your kernel.
 
@@ -69,7 +69,7 @@ flowchart TD
 
 - **Budget controls, baseline caching, log extraction, probes, and formal checks** mainly belong to the underlying modules of **② Execution & Acceptance Kernel**.
 - **`.rds/` project records, the Obelisk history interface, and the judgment graph (`judgment-graph.yaml`)** mainly belong to **③ Research State & Memory**, where other components can read them.
-- **L1 / L4** are capability levels discussed in the research framework, not additional components.
+- **L1–L5** are [capability levels](docs/research-autonomy.md) discussed in the research framework, not additional components.
 
 **The first 3 components support the basic research loop; Advisor adds proactive suggestions; RSI adds improvement of the tool itself.** The system has **3 foundational components + 2 enhancement components, for a total of 5**.
 
