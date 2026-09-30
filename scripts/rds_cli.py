@@ -21,7 +21,7 @@ import uuid
 
 from rds_probe import parse_source, rational, read_rows, formal_requirement
 
-VERSION = "5.1.0"
+VERSION = "5.2.0"
 RESOURCES = {"runtime_ms", "runs"}
 SELF_SIGNED = {"manipulation_verified", "falsifier_triggered", "primary_metric_gain",
                "final_run_authorized", "matched_recipe", "matched_compute"}
@@ -165,8 +165,19 @@ class RDSState:
             row = db.execute("SELECT body FROM state WHERE id=1").fetchone()
             state = strict_json(row[0]) if row else {}
             if state:
-                require(state["version"] == VERSION, "Incompatible state version")
+                require(state["version"] in {VERSION, "5.1.0"}, "Incompatible state version")
                 require(digest(state["contract"]) == state["contract_sha256"], "Contract integrity failure")
+                if "branches" not in state:
+                    state["branches"] = {
+                        "main": {
+                            "id": "main", "parent_id": None, "orthogonal_dimension": "baseline",
+                            "rationale": "Initial primary exploration branch", "status": "ACTIVE",
+                            "stagnation_count": 0, "created_ns": 0,
+                            "hypotheses": list(state.get("hypotheses", {}).keys())
+                        }
+                    }
+                if "active_branch" not in state:
+                    state["active_branch"] = "main"
             yield db, state
             if state:
                 self.invariants(state)
@@ -243,6 +254,15 @@ def cmd_init(args, rds):
         require(not state, "Already initialized; init never erases history")
         state.update(version=VERSION, contract=contract, contract_sha256=digest(contract),
                      engine_sha256=engine_id(), hypotheses={}, plans={}, exposures=[], final_plan=None,
+                     active_branch="main",
+                     branches={
+                         "main": {
+                             "id": "main", "parent_id": None, "orthogonal_dimension": "baseline",
+                             "rationale": "Initial primary exploration branch", "status": "ACTIVE",
+                             "stagnation_count": 0, "created_ns": time.time_ns(),
+                             "hypotheses": []
+                         }
+                     },
                      budget={"limits": limits, "confirmation_floor": floor,
                              "spent": {k: 0 for k in RESOURCES}, "reserved": {k: 0 for k in RESOURCES}})
         rds.event(db, "CONTRACT_LOCKED", contract_sha256=state["contract_sha256"])
@@ -260,8 +280,12 @@ def cmd_hypothesis(args, rds):
         require(hid not in state["hypotheses"], "Hypothesis already locked; create a revision ID")
         state["hypotheses"][hid] = {"spec": spec, "sha256": digest(spec), "task_gain": "UNTESTED",
                                    "mechanism": "UNTESTED", "search_policy": "UNTESTED", "assessments": []}
-        rds.event(db, "HYPOTHESIS_LOCKED", hypothesis_id=hid, sha256=digest(spec))
-    return {"hypothesis_id": hid}
+        active_b = state.get("active_branch", "main")
+        if active_b in state.get("branches", {}):
+            if hid not in state["branches"][active_b]["hypotheses"]:
+                state["branches"][active_b]["hypotheses"].append(hid)
+        rds.event(db, "HYPOTHESIS_LOCKED", hypothesis_id=hid, sha256=digest(spec), branch_id=active_b)
+    return {"hypothesis_id": hid, "branch_id": active_b}
 
 
 def related_splits(contract, split_id):
@@ -502,7 +526,17 @@ def cmd_decide(args, rds):
         require(receipt["run_status"] == "SUCCEEDED" and plan["run_status"] == "SUCCEEDED",
                 "Execution failure is not scientific refutation")
         if plan["assessment"] is not None:
+            active_b = state.get("active_branch", "main")
+            branch_info = state.get("branches", {}).get(active_b, {})
+            stagnation_report = {
+                "branch_id": active_b,
+                "stagnation_count": branch_info.get("stagnation_count", 0),
+                "stagnated": branch_info.get("stagnation_count", 0) >= 3,
+                "threshold": 3,
+                "recommendation": "IDEMPOTENT_DECISION"
+            }
             return {"assessment": plan["assessment"], "idempotent": True,
+                    "stagnation": stagnation_report,
                     "current_task_gain": state["hypotheses"][plan["spec"]["hypothesis_id"]]["task_gain"]}
         spec = plan["spec"]
         node = state["hypotheses"][spec["hypothesis_id"]]
@@ -514,7 +548,37 @@ def cmd_decide(args, rds):
         for axis in ("task_gain", "mechanism"):
             node[axis] = merge_axis(node[axis], outcome[axis])
         rds.event(db, "ASSESSMENT_RECORDED", **plan["assessment"])
-    return {"assessment": plan["assessment"]}
+
+        # Policy RSI: Stagnation tracking (FML-Bench v2)
+        active_b = state.get("active_branch", "main")
+        branch_info = state.get("branches", {}).get(active_b)
+        stagnation_report = None
+        if branch_info is not None:
+            gain_val = rational(receipt["result"]["gain"])
+            min_delta = rational(state["contract"]["primary_metric"]["min_useful_delta"])
+            useful = gain_val > min_delta
+            if useful and outcome["task_gain"] in {"CONFIRMED", "EXPLORATORY"}:
+                branch_info["stagnation_count"] = 0
+                branch_info["status"] = "ACTIVE"
+            else:
+                branch_info["stagnation_count"] += 1
+                if branch_info["stagnation_count"] >= 3:
+                    branch_info["status"] = "STAGNATING"
+                    rds.event(db, "STAGNATION_DETECTED", branch_id=active_b,
+                              stagnation_count=branch_info["stagnation_count"])
+            stagnated = branch_info["stagnation_count"] >= 3
+            stagnation_report = {
+                "branch_id": active_b,
+                "stagnation_count": branch_info["stagnation_count"],
+                "stagnated": stagnated,
+                "threshold": 3,
+                "recommendation": (
+                    "STAGNATION_DETECTED: Consecutive 3 runs without useful gain. "
+                    "Switch from greedy parameter search to orthogonal branching (FML-Bench v2) via 'branch fork'."
+                    if stagnated else "CONTINUE_GREEDY"
+                )
+            }
+    return {"assessment": plan["assessment"], "stagnation": stagnation_report}
 
 
 def cmd_status(args, rds):
@@ -523,6 +587,109 @@ def cmd_status(args, rds):
         result["receipts"] = [strict_json(r[0]) for r in db.execute("SELECT body FROM receipts ORDER BY run_id")]
         result["event_count"] = db.execute("SELECT COUNT(*) FROM events").fetchone()[0]
         return result
+
+
+def cmd_branch(args, rds):
+    with rds.transaction() as (db, state):
+        branches = state.get("branches", {})
+        active = state.get("active_branch", "main")
+        if args.action == "status":
+            info = branches.get(active, {})
+            stagnated = info.get("stagnation_count", 0) >= 3
+            return {
+                "active_branch": active,
+                "status": info.get("status", "ACTIVE"),
+                "stagnation_count": info.get("stagnation_count", 0),
+                "stagnated": stagnated,
+                "recommendation": (
+                    "STAGNATION_DETECTED: Consecutive 3 runs without useful gain. "
+                    "Consider 'branch fork' to open an orthogonal research direction (FML-Bench v2)."
+                    if stagnated else "ACTIVE: Continue current branch exploration."
+                ),
+                "branch_details": info
+            }
+        elif args.action == "list":
+            return {"active_branch": active, "branches": branches}
+        elif args.action == "switch":
+            bid = identity(args.id)
+            require(bid in branches, f"Unknown branch ID '{bid}'")
+            state["active_branch"] = bid
+            rds.event(db, "BRANCH_SWITCHED", branch_id=bid)
+            return {"active_branch": bid, "status": branches[bid].get("status", "ACTIVE")}
+        elif args.action == "fork":
+            spec = load_spec(args.spec)
+            reject_self_signatures(spec)
+            bid = identity(spec["id"])
+            parent = identity(spec.get("parent_id", active))
+            require(bid not in branches, f"Branch ID '{bid}' already exists")
+            require(parent in branches, f"Parent branch '{parent}' does not exist")
+            require(spec.get("orthogonal_dimension"), "Must declare orthogonal_dimension (e.g. representation, mechanism, loss)")
+            require(spec.get("rationale"), "Must declare rationale for branching")
+
+            if "budget_split" in spec:
+                split = resource_vector(spec["budget_split"])
+                budget = state["budget"]
+                for k in RESOURCES:
+                    available = budget["limits"][k] - (budget["spent"][k] + budget["reserved"][k])
+                    require(split[k] <= available,
+                            f"Branch budget split exceeds available unspent {k}: {split[k]} > {available}")
+
+            branches[bid] = {
+                "id": bid,
+                "parent_id": parent,
+                "orthogonal_dimension": spec["orthogonal_dimension"],
+                "rationale": spec["rationale"],
+                "status": "ACTIVE",
+                "stagnation_count": 0,
+                "created_ns": time.time_ns(),
+                "budget_split": spec.get("budget_split"),
+                "hypotheses": []
+            }
+            state["active_branch"] = bid
+            rds.event(db, "BRANCH_FORKED", branch_id=bid, parent_id=parent,
+                      orthogonal_dimension=spec["orthogonal_dimension"])
+            return {"forked_branch": bid, "parent_id": parent, "active_branch": bid}
+        else:
+            raise ValueError(f"Unknown branch action: {args.action}")
+
+
+def cmd_meta(args, rds):
+    from rds_meta import (
+        validate_rule, load_judgment_graph, apply_rule, reflect_from_state
+    )
+    if args.action == "list-rules":
+        _, graph = load_judgment_graph(getattr(args, "graph", None))
+        return {"schema": graph.get("schema", 1), "total_nodes": len(graph.get("nodes", [])),
+                "nodes": graph.get("nodes", [])}
+    elif args.action == "validate-rule":
+        spec = load_spec(args.rule)
+        reject_self_signatures(spec)
+        validate_rule(spec)
+        return {"status": "VALID", "rule_id": spec["id"], "sha256": digest(spec)}
+    elif args.action == "apply-rule":
+        spec = load_spec(args.rule)
+        reject_self_signatures(spec)
+        res = apply_rule(spec, graph_path=getattr(args, "graph", None),
+                         force=getattr(args, "force", False),
+                         dry_run=getattr(args, "dry_run", False))
+        try:
+            with rds.transaction() as (db, state):
+                rds.event(db, "RULE_APPLIED", **res)
+        except Exception:
+            pass
+        return res
+    elif args.action == "reflect":
+        with rds.transaction() as (db, state):
+            receipts = [strict_json(r[0]) for r in db.execute("SELECT body FROM receipts ORDER BY run_id")]
+            evidence = None
+            if getattr(args, "terms", None):
+                evidence = {"terms": args.terms, "scope": state["contract"].get("project_id", "project")}
+            proposals = reflect_from_state(state, receipts, evidence)
+            if getattr(args, "output", None):
+                Path(args.output).write_text(json.dumps(proposals, indent=2, ensure_ascii=False), encoding="utf-8")
+            return {"proposed_rules_count": len(proposals), "proposals": proposals}
+    else:
+        raise ValueError(f"Unknown meta action: {args.action}")
 
 
 def parser():
@@ -548,6 +715,33 @@ def parser():
     expose.add_argument("--reason", required=True)
     commands.add_parser("decide").add_argument("--run", required=True)
     commands.add_parser("status")
+
+    # Policy RSI: Branch & Stagnation Engine
+    branch = commands.add_parser("branch", help="RSI Policy Stagnation & Branching engine")
+    b_actions = branch.add_subparsers(dest="action", required=True)
+    b_actions.add_parser("status")
+    b_actions.add_parser("list")
+    b_sw = b_actions.add_parser("switch")
+    b_sw.add_argument("--id", required=True)
+    b_fork = b_actions.add_parser("fork")
+    b_fork.add_argument("--spec", required=True)
+
+    # Graph RSI: Meta-Reflection & Rule Evolution Engine
+    meta = commands.add_parser("meta", help="RSI Meta-Reflection & Rule Evolution engine")
+    m_actions = meta.add_subparsers(dest="action", required=True)
+    m_list = m_actions.add_parser("list-rules")
+    m_list.add_argument("--graph", default=None)
+    m_val = m_actions.add_parser("validate-rule")
+    m_val.add_argument("--rule", required=True)
+    m_app = m_actions.add_parser("apply-rule")
+    m_app.add_argument("--rule", required=True)
+    m_app.add_argument("--graph", default=None)
+    m_app.add_argument("--force", action="store_true")
+    m_app.add_argument("--dry-run", action="store_true")
+    m_ref = m_actions.add_parser("reflect")
+    m_ref.add_argument("--terms", default=None)
+    m_ref.add_argument("--output", default=None)
+
     history = commands.add_parser("history", help="Read history through the installed Obelisk CLI")
     actions = history.add_subparsers(dest="subcommand", required=True)
     prepare = actions.add_parser("prepare")
@@ -569,7 +763,11 @@ def main():
             from rds_obelisk import history_command
             history_command(args)
             return 0
-        if args.command == "init":
+        if args.command == "branch":
+            result = cmd_branch(args, rds)
+        elif args.command == "meta":
+            result = cmd_meta(args, rds)
+        elif args.command == "init":
             result = cmd_init(args, rds)
         elif args.command == "hypothesis":
             result = cmd_hypothesis(args, rds)

@@ -145,6 +145,130 @@ class KernelTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "history has not been checked"):
                 history_command(argparse.Namespace(subcommand="query", query="unused.mjs"))
 
+    def test_meta_rule_lifecycle_and_reflection(self):
+        """RSI Step 1: Rule validation, atomic application to judgment graph, and failure reflection."""
+        from rds_meta import validate_rule, apply_rule
+        valid_rule = {
+            "id": "test-rsi-rule",
+            "scope": "image_restoration",
+            "trigger": "repeated spatial filter tuning without residual pathway",
+            "correction": "pure spatial linear conv cannot isolate high-frequency non-local phase",
+            "alternatives": ["local capacity limitation", "missing non-local representation"],
+            "discriminator": "evaluate frequency-domain residual ablation",
+            "primary_gate": "paired test PSNR under equal runtime budget",
+            "falsifier": "if pure spatial conv achieves >= 0.5dB gain over benchmark, discard rule",
+            "sources": ["RDS Synthetic Audit"]
+        }
+        self.assertEqual(validate_rule(valid_rule)["id"], "test-rsi-rule")
+
+        # Rejection of forbidden unscientific claims
+        with self.assertRaisesRegex(ValueError, "forbidden"):
+            bad = {**valid_rule, "id": "bad-rule", "correction": "this guaranteed_gain is proven"}
+            validate_rule(bad)
+
+        # Apply rule to temporary graph
+        project = self.project()
+        temp_graph = project.root / "judgment-graph.yaml"
+        original_graph = ROOT / "references/judgment-graph.yaml"
+        temp_graph.write_text(original_graph.read_text(encoding="utf-8"), encoding="utf-8")
+
+        res = apply_rule(valid_rule, graph_path=str(temp_graph))
+        self.assertEqual(res["status"], "APPLIED")
+        self.assertEqual(res["action"], "CREATED")
+
+        # Duplicate ID rejection without force
+        with self.assertRaisesRegex(ValueError, "already exists"):
+            apply_rule(valid_rule, graph_path=str(temp_graph), force=False)
+
+        # Update with force
+        updated_rule = {**valid_rule, "scope": "generalized_restoration"}
+        res_up = apply_rule(updated_rule, graph_path=str(temp_graph), force=True)
+        self.assertEqual(res_up["action"], "UPDATED")
+
+        # CLI list-rules & validate-rule
+        rule_path = project.root / "new-rule.json"
+        rule_path.write_text(json.dumps(valid_rule), encoding="utf-8")
+        val_cli = project.call("meta", "validate-rule", "--rule", str(rule_path))
+        self.assertEqual(val_cli["status"], "VALID")
+        list_cli = project.call("meta", "list-rules", "--graph", str(temp_graph))
+        self.assertTrue(any(n["id"] == "test-rsi-rule" for n in list_cli["nodes"]))
+
+        # Meta reflect from refuted C7 boundary
+        c7_crossing = C7_CONTROL + "def treatment(x): return 25*x/(20*(1+x))\n"
+        c7_proj = self.project(source=c7_crossing, split="development")
+        (c7_proj.root / "dev.csv").write_text("sample_id,x,y\ndev-1,10,1\n", encoding="utf-8")
+        c7_proj.contract["splits"]["development"]["prior_exposure"] = "exposed"
+        c7_proj.init(formal=C7_FORMAL)
+        res_c7 = c7_proj.run(c7_proj.plan())
+        self.assertEqual(res_c7["mechanism"], "REFUTED")
+        reflection = c7_proj.call("meta", "reflect")
+        self.assertGreaterEqual(reflection["proposed_rules_count"], 1)
+        self.assertTrue(any("refuted-boundary" in p["id"] for p in reflection["proposals"]))
+
+    def test_stagnation_detection_and_branch_forking(self):
+        """RSI Step 2: Consecutive non-useful runs trigger stagnation and orthogonal branching."""
+        # Source where treatment is identical to control (gain = 0 <= min_useful_delta)
+        flat_source = "def control(x): return x\ndef treatment(x): return x\n"
+        project = self.project(source=flat_source, budget=60000, floor=4000)
+        project.init()
+
+        # Initial branch status
+        status = project.call("branch", "status")
+        self.assertEqual(status["active_branch"], "main")
+        self.assertEqual(status["stagnation_count"], 0)
+        self.assertFalse(status["stagnated"])
+
+        # Run 1: sub-threshold -> stagnation_count = 1
+        d1 = project.call("plan", "create", spec=project.plan("P1", runtime=10000))
+        r1 = project.call("run", "execute", "--id", "P1")
+        dec1 = project.call("decide", "--run", r1["run_id"])
+        self.assertEqual(dec1["stagnation"]["stagnation_count"], 1)
+        self.assertFalse(dec1["stagnation"]["stagnated"])
+
+        # Run 2: sub-threshold -> stagnation_count = 2
+        project.call("plan", "create", spec=project.plan("P2", runtime=10000))
+        r2 = project.call("run", "execute", "--id", "P2")
+        dec2 = project.call("decide", "--run", r2["run_id"])
+        self.assertEqual(dec2["stagnation"]["stagnation_count"], 2)
+        self.assertFalse(dec2["stagnation"]["stagnated"])
+
+        # Run 3: sub-threshold -> stagnation_count = 3 -> STAGNATION_DETECTED!
+        project.call("plan", "create", spec=project.plan("P3", runtime=10000))
+        r3 = project.call("run", "execute", "--id", "P3")
+        dec3 = project.call("decide", "--run", r3["run_id"])
+        self.assertEqual(dec3["stagnation"]["stagnation_count"], 3)
+        self.assertTrue(dec3["stagnation"]["stagnated"])
+        self.assertIn("STAGNATION_DETECTED", dec3["stagnation"]["recommendation"])
+
+        # Check branch status reflects stagnation
+        b_status = project.call("branch", "status")
+        self.assertEqual(b_status["status"], "STAGNATING")
+        self.assertTrue(b_status["stagnated"])
+
+        # Fork to orthogonal branch (e.g. frequency-domain)
+        fork_spec = {
+            "id": "branch-freq-res",
+            "parent_id": "main",
+            "orthogonal_dimension": "frequency_representation",
+            "rationale": "Greedy spatial tuning stagnated; forking to frequency representation",
+            "budget_split": {"runtime_ms": 15000, "runs": 1}
+        }
+        fork_res = project.call("branch", "fork", spec=fork_spec)
+        self.assertEqual(fork_res["active_branch"], "branch-freq-res")
+
+        # New branch starts with 0 stagnation count and ACTIVE status
+        b_status_forked = project.call("branch", "status")
+        self.assertEqual(b_status_forked["active_branch"], "branch-freq-res")
+        self.assertEqual(b_status_forked["stagnation_count"], 0)
+        self.assertEqual(b_status_forked["status"], "ACTIVE")
+
+        # Switching back and forth works
+        project.call("branch", "switch", "--id", "main")
+        self.assertEqual(project.call("branch", "status")["active_branch"], "main")
+        project.call("branch", "switch", "--id", "branch-freq-res")
+        self.assertEqual(project.call("branch", "status")["active_branch"], "branch-freq-res")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+

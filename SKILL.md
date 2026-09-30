@@ -2,8 +2,8 @@
 name: research-direction-selector
 description: Select and audit metric-driven research directions using scoped hypotheses, falsifiable interventions, budgets and human instructions. Use for choosing the next experiment or evaluating research proposals; includes a bounded L3 reference runner and Obelisk history retrieval, not a general GPU experiment service.
 metadata:
-  version: v5.1.0
-  engine: rds-cli-v5.1
+  version: v5.2.0
+  engine: rds-cli-v5.2
 ---
 
 # Research Direction Selector — RDS-L3
@@ -155,6 +155,18 @@ python -B scripts/rds_cli.py decide --run RUN_ID
 
 # 6. Audit live research tree, branch statuses, and budget ledger
 python -B scripts/rds_cli.py status
+
+# 7. RSI Step 1: Meta-Reflection & Judgment Graph Evolution
+python -B scripts/rds_cli.py meta list-rules
+python -B scripts/rds_cli.py meta validate-rule --rule rule.json
+python -B scripts/rds_cli.py meta apply-rule --rule rule.json
+python -B scripts/rds_cli.py meta reflect [--terms "topic_query"]
+
+# 8. RSI Step 2: Policy Stagnation & Orthogonal Branching (FML-Bench v2)
+python -B scripts/rds_cli.py branch status
+python -B scripts/rds_cli.py branch fork --spec branch.json
+python -B scripts/rds_cli.py branch switch --id branch_id
+python -B scripts/rds_cli.py branch list
 ```
 
 ## Conditional formal verification
