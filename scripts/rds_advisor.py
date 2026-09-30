@@ -1,18 +1,72 @@
-"""Bounded research advice: observations, competing explanations and small tests.
+"""RDS Programmatic Advisor Engine.
 
-Advice does not certify claims, solve arbitrary formal systems, execute literature
-trigger strings, change locked hypotheses, or launch experiments.
+Reports heuristic signals and candidate diagnostics for human or experimental review.
+It does not solve parameter ranges or establish causes from endpoint telemetry.
 """
-import hashlib
 import json
 import math
-from pathlib import Path
 import re
+from pathlib import Path
+import hashlib
+import sqlite3
+import time
 from typing import Any, Dict, List, Optional
+
+MAX_DOCUMENT_BYTES = 2 * 1024 * 1024
+MAX_KNOWLEDGE_ROWS = 10000
+
+
+def _configure_wal(db):
+    # SQLite's initial journal-mode transition can return BUSY without using
+    # busy_timeout. Retry only this cold-start transition, before any transaction.
+    deadline = time.monotonic() + 15
+    while True:
+        try:
+            db.execute("PRAGMA journal_mode=WAL")
+            return
+        except sqlite3.OperationalError as exc:
+            code = getattr(exc, "sqlite_errorcode", 0) & 255
+            if code not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED) or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.01)
+
+
+def _read_document(path):
+    if not path.is_file():
+        raise ValueError("Document must be an existing regular file")
+    with path.open("rb") as handle:
+        raw = handle.read(MAX_DOCUMENT_BYTES + 1)
+    if len(raw) > MAX_DOCUMENT_BYTES:
+        raise ValueError("Advisor document exceeds the 2 MiB limit")
+    try:
+        return raw, raw.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ValueError("Advisor document must be UTF-8") from exc
+
+
+def _knowledge_entry(rule, entry_id, document_sha, *, legacy=False):
+    if (not isinstance(rule, dict) or type(rule.get("line_number")) is not int
+            or rule["line_number"] < 1 or not isinstance(rule.get("excerpt"), str)
+            or not rule["excerpt"].strip() or not isinstance(rule.get("source"), str)
+            or not rule["source"].strip() or len(rule["source"]) > 1024
+            or not isinstance(rule.get("topic"), str) or not rule["topic"].strip()
+            or len(rule["topic"]) > 256):
+        raise ValueError("Invalid legacy advisor knowledge entry")
+    normalized = {key: rule[key] for key in ("line_number", "excerpt", "topic", "source")}
+    normalized["excerpt"] = normalized["excerpt"][:120]
+    normalized.update(adoption_status="UNREVIEWED", assurance="HEURISTIC_ONLY")
+    if legacy:
+        # This hashes the migration bundle, not the source named by an old excerpt.
+        normalized["legacy_bundle_sha256"] = document_sha
+        normalized["source_hash_status"] = "UNVERIFIED_LEGACY_SOURCE"
+    else:
+        normalized["source_sha256"] = document_sha
+    return entry_id, document_sha, json.dumps(normalized, ensure_ascii=False, allow_nan=False, sort_keys=True)
+
 
 
 def _advice(advisor_type, **fields):
-    return {"advisor_type": advisor_type, "observations": [],
+    return {"advisor_type": advisor_type, "assurance": "HEURISTIC_ONLY", "observations": [],
             "alternative_explanations": [], "minimal_test": [],
             "limitations": [], "evidence": [], **fields}
 
@@ -27,9 +81,11 @@ def _number(value, name):
     return float(value)
 
 
+
 class RDSAdvisor:
     def __init__(self, root_dir: Path):
         self.root_dir = root_dir.resolve()
+        self.knowledge_db = self.root_dir / ".rds" / "advisor.sqlite3"
         self.literature_load_errors = []
         self.literature_principles = self._load_scientific_principles()
 
@@ -40,7 +96,7 @@ class RDSAdvisor:
             if not path.exists():
                 continue
             try:
-                records = json.loads(path.read_text(encoding="utf-8-sig"))
+                records = json.loads(_read_document(path)[1])
                 if not isinstance(records, list) or not all(isinstance(p, dict) for p in records):
                     raise ValueError("Principles must be a list of objects")
                 return records
@@ -49,6 +105,7 @@ class RDSAdvisor:
                 # A malformed explicit library must not silently become a different library.
                 return []
         return []
+
 
     def query_literature_principles(self, query: str) -> List[Dict[str, Any]]:
         """Search source records; matching a topic does not establish applicability."""
@@ -64,6 +121,33 @@ class RDSAdvisor:
                 terms.extend(translations)
         return [p for p in self.literature_principles if not terms or any(
             term in json.dumps(p, ensure_ascii=False).lower() for term in terms)]
+
+
+    def _legacy_entries(self):
+        path = self.root_dir / ".rds" / "advisor_knowledge.json"
+        if not path.exists():
+            return []
+        raw, text = _read_document(path)
+        rows = json.loads(text)
+        if not isinstance(rows, list) or len(rows) > MAX_KNOWLEDGE_ROWS:
+            raise ValueError("Legacy advisor knowledge must contain at most 10000 entries")
+        digest = hashlib.sha256(raw).hexdigest()
+        entries = []
+        for row in rows:
+            entry_id = hashlib.sha256(json.dumps(row, sort_keys=True, ensure_ascii=False,
+                                                allow_nan=False).encode("utf-8")).hexdigest()
+            entries.append(_knowledge_entry(row, "legacy:" + entry_id, digest, legacy=True))
+        return entries
+
+    def _needs_legacy_migration(self):
+        if not self.knowledge_db.exists():
+            return True
+        db = sqlite3.connect(self.knowledge_db.as_uri() + "?mode=ro", uri=True, timeout=15)
+        try:
+            table = db.execute("SELECT 1 FROM sqlite_master WHERE name='metadata'").fetchone()
+            return table is None or db.execute("SELECT 1 FROM metadata WHERE key='legacy_migrated'").fetchone() is None
+        finally:
+            db.close()
 
     def advise_on_rejection(self, gate_error: str, plan_spec: Dict[str, Any]) -> Dict[str, Any]:
         advice = _advice("GATE_REJECTION_ADVICE", detected_bottleneck="GATE_FAILURE",
@@ -119,13 +203,19 @@ class RDSAdvisor:
                 continue
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise ValueError(f"{key} must be a number")
-            if not math.isfinite(value):
+            try:
+                finite = math.isfinite(value)
+            except OverflowError:
+                raise ValueError(f"{key} exceeds the supported numeric range") from None
+            if not finite:
                 nonfinite.append(key)
             else:
                 advice["observations"].append({"field": key, "value": value})
         for key in ("nan_or_inf", "decay_on_1d_params"):
             if key in telemetry and not isinstance(telemetry[key], bool):
                 raise ValueError(f"{key} must be a boolean")
+        if "loss_trend" in telemetry and not isinstance(telemetry["loss_trend"], str):
+            raise ValueError("loss_trend must be a string")
         for key in ("loss_trend", "nan_or_inf", "decay_on_1d_params"):
             if key in telemetry:
                 advice["observations"].append({"field": key, "value": telemetry[key]})
@@ -254,37 +344,77 @@ class RDSAdvisor:
         return result
 
     def ingest_document(self, doc_path: Path, topic: Optional[str] = None) -> Dict[str, Any]:
-        """Store anchored candidate excerpts; keyword hits never adopt executable rules."""
+        """Store unreviewed source excerpts with a short isolated WAL transaction."""
         doc_path = doc_path.resolve()
+        if not doc_path.exists():
+            raise FileNotFoundError(f"Document not found: {doc_path}")
         if doc_path.suffix.lower() in {".pdf", ".docx"}:
             raise ValueError("Document ingestion accepts UTF-8 text; extract binary documents to text first")
-        raw = doc_path.read_bytes()
-        text, source_sha = raw.decode("utf-8-sig"), hashlib.sha256(raw).hexdigest()
+        if topic is not None and (not isinstance(topic, str) or not topic.strip() or len(topic) > 256):
+            raise ValueError("Advisor topic must be a nonempty string of at most 256 characters")
+        raw, text = _read_document(doc_path)
+        document_sha = hashlib.sha256(raw).hexdigest()
+        extracted_rules = []
+        
+        # Keyword matching anchors candidate evidence; it never adopts a scientific rule.
         terms = ("underfitting", "overfitting", "learning rate", "plateau", "gradient", "warmup",
                  "weight decay", "欠拟合", "过拟合", "学习率", "梯度", "停滞", "预热", "权重衰减")
-        excerpts = [{"line_number": i, "excerpt": line.strip(), "topic": topic or "general_tuning",
-                     "source": str(doc_path), "source_sha256": source_sha, "adoption_status": "UNREVIEWED"}
-                    for i, line in enumerate(text.splitlines(), 1) if any(t in line.lower() for t in terms)]
-        knowledge_file = self.root_dir / ".rds/advisor_knowledge.json"
-        existing = json.loads(knowledge_file.read_text(encoding="utf-8-sig")) if knowledge_file.exists() else []
-        if not isinstance(existing, list) or not all(isinstance(item, dict) for item in existing):
-            raise ValueError("Existing advisor knowledge must be a list of objects; file preserved")
-        known = {(item.get("source_sha256"), item.get("line_number"), item.get("topic")) for item in existing}
-        additions = [item for item in excerpts if (source_sha, item["line_number"], item["topic"]) not in known]
-        if additions:
-            knowledge_file.parent.mkdir(parents=True, exist_ok=True)
-            knowledge_file.write_text(json.dumps(existing + additions, indent=2, ensure_ascii=False), encoding="utf-8")
+        lines = text.splitlines()
+        for idx, line in enumerate(lines, 1):
+            line_str = line.strip()
+            if any(kw in line_str.lower() for kw in terms):
+                extracted_rules.append({
+                    "line_number": idx,
+                    "excerpt": line_str[:120],
+                    "topic": topic or "general_tuning",
+                    "source": doc_path.name
+                })
+                if len(extracted_rules) > MAX_KNOWLEDGE_ROWS:
+                    raise ValueError("Advisor document exceeds the 10000-excerpt limit")
+        entries = []
+        for rule in extracted_rules:
+            key = f"{document_sha}:{rule['line_number']}:{rule['topic']}"
+            entries.append(_knowledge_entry(rule, hashlib.sha256(key.encode("utf-8")).hexdigest(), document_sha))
+        # Parsing and possible legacy loading finish before any writer lock.
+        legacy = self._legacy_entries() if self._needs_legacy_migration() else []
+        self.knowledge_db.parent.mkdir(parents=True, exist_ok=True)
+        db = sqlite3.connect(self.knowledge_db, timeout=15, isolation_level=None)
+        try:
+            _configure_wal(db)
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("CREATE TABLE IF NOT EXISTS knowledge (entry_id TEXT PRIMARY KEY, document_sha TEXT NOT NULL, body TEXT NOT NULL)")
+            db.execute("CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            migrate = db.execute("SELECT 1 FROM metadata WHERE key='legacy_migrated'").fetchone() is None
+            existing_ids = {row[0] for row in db.execute("SELECT entry_id FROM knowledge")}
+            candidates = {entry[0]: entry for entry in ((legacy if migrate else []) + entries)}
+            added = [entry for entry_id, entry in candidates.items() if entry_id not in existing_ids]
+            if len(existing_ids) + len(added) > MAX_KNOWLEDGE_ROWS:
+                raise ValueError("Advisor knowledge exceeds the 10000-entry limit")
+            db.executemany("INSERT INTO knowledge VALUES (?,?,?)", added)
+            if migrate:
+                db.execute("INSERT INTO metadata VALUES ('legacy_migrated','1')")
+            total = len(existing_ids) + len(added)
+            db.commit()
+        except BaseException:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+        evidence = [json.loads(entry[2]) for entry in added]
         return _advice("DOCUMENT_EXCERPT_INGESTION", status="INGESTED", doc_path=str(doc_path),
-            adoption_status="UNREVIEWED", rules_extracted=len(additions), excerpts_extracted=len(additions),
-            total_knowledge_entries=len(existing) + len(additions),
-            limitations=["rules_extracted 是兼容字段，计数未审查摘录；它们不会自动成为可执行原则。"], evidence=additions)
+            adoption_status="UNREVIEWED", rules_extracted=len(extracted_rules), rules_added=len(added),
+            excerpts_extracted=len(extracted_rules), total_knowledge_entries=total, evidence=evidence,
+            limitations=["rules_extracted 是兼容字段，计数匹配的未审查摘录；rules_added 计数本次实际新增行，包括显式迁移。",
+                         "关键词命中不会自动成为可执行原则；legacy_bundle_sha256 不代表源文档身份。"])
 
     def recommend_next_directions(self, state: Dict[str, Any], judgment_graph: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Read real state and supplied graph; recommend a review, never a causal ranking."""
         recommendations = []
         if state.get("advisor_context"):
             from rds_advisor_search import search_directions
-            search = search_directions(judgment_graph, state["advisor_context"])
+            options = {"templates": state["advisor_templates"]} if state.get("advisor_templates") else {}
+            search = search_directions(judgment_graph, state["advisor_context"], **options)
             recommendations.append(_advice("STRATEGIC_RESEARCH_ADVICE", type="EXECUTABLE_DIRECTION_SEARCH", urgency="REVIEW",
                 reason="按明确的下一决策、带来源事实和图中结构化前置条件组合有界候选。",
                 search=search, observations=search["candidates"], limitations=search["limitations"],
@@ -332,17 +462,26 @@ class RDSAdvisor:
                     ("id", "scope", "trigger", "correction", "alternatives", "discriminator", "primary_gate", "falsifier", "sources")}
                     for node in nodes], limitations=["这是候选规则清单，未断言每条规则已触发或必然有效。"],
                 evidence=[{"kind": "judgment_graph", "rule_id": node.get("id"), "sources": node.get("sources", [])} for node in nodes]))
-        knowledge_file = self.root_dir / ".rds/advisor_knowledge.json"
-        if knowledge_file.exists():
+        if self.knowledge_db.exists():
             try:
-                knowledge = json.loads(knowledge_file.read_text(encoding="utf-8-sig"))
-                if not isinstance(knowledge, list) or not all(isinstance(item, dict) for item in knowledge):
-                    raise ValueError("Knowledge must be a list of objects")
-                if knowledge:
+                db = sqlite3.connect(self.knowledge_db.as_uri() + "?mode=ro", uri=True,
+                                     timeout=0.05, isolation_level=None)
+                try:
+                    db.execute("PRAGMA query_only=ON")
+                    db.execute("BEGIN")
+                    count = db.execute("SELECT COUNT(*) FROM knowledge").fetchone()[0]
+                    latest = db.execute("SELECT body FROM knowledge ORDER BY rowid DESC LIMIT 1").fetchone()
+                finally:
+                    db.close()
+                if count:
+                    record = json.loads(latest[0])
+                    if not isinstance(record, dict):
+                        raise ValueError("Stored excerpt must be an object")
+                    record["adoption_status"] = "UNREVIEWED"
                     recommendations.append(_advice("STRATEGIC_RESEARCH_ADVICE", type="DOC_REVIEW_CANDIDATES", urgency="INFO",
-                        reason=f"存在 {len(knowledge)} 条摘录候选，需核实来源与适用范围。", latest_insight=knowledge[-1].get("excerpt"),
-                        adoption_status="UNREVIEWED", limitations=["关键字摘录和旧记录均不自动成为已采纳原则。"], evidence=[knowledge[-1]]))
-            except (OSError, ValueError) as exc:
+                        reason=f"存在 {count} 条摘录候选，需核实来源与适用范围。", latest_insight=record.get("excerpt"),
+                        adoption_status="UNREVIEWED", limitations=["关键字摘录和旧记录均不自动成为已采纳原则。"], evidence=[record]))
+            except (sqlite3.Error, ValueError, KeyError, TypeError, AttributeError) as exc:
                 recommendations.append(_advice("STRATEGIC_RESEARCH_ADVICE", type="KNOWLEDGE_LOAD_ERROR", urgency="REVIEW",
                     reason="文档知识库不可读，未用其产生研究结论。", limitations=[str(exc)]))
         if self.literature_principles:
@@ -355,4 +494,6 @@ class RDSAdvisor:
         if self.literature_load_errors:
             recommendations.append(_advice("STRATEGIC_RESEARCH_ADVICE", type="LITERATURE_LOAD_ERROR", urgency="REVIEW",
                 reason="文献库格式或读取失败；未加载替代库。", limitations=self.literature_load_errors))
+        for recommendation in recommendations:
+            recommendation["assurance"] = "HEURISTIC_ONLY"
         return recommendations

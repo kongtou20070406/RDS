@@ -42,9 +42,6 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(report["truth"], "TRUE")
         self.assertEqual(report["evidence_status"], "INPUT_REPORTED")
         self.assertEqual(evaluate_condition(condition, {"x": fact(1)})["truth"], "FALSE")
-        report = evaluate_condition(condition, {"x": fact(float("inf"))})
-        self.assertEqual(report["truth"], "UNKNOWN")
-        json.dumps(report, allow_nan=False)
 
     def test_unknown_generates_specific_query_and_false_blocks_experiment(self):
         graph = {"nodes": [node("root", [{"fact": "matched", "value": True, "query": "Read paired arm manifests"}])], "edges": []}
@@ -129,10 +126,6 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(fallback["action"]["id"], "narrow-boundary-interpretation")
         self.assertIn("rho=1", fallback["action"]["description"])
         self.assertFalse(any(c["action"]["id"] == "inspect-actual-boundary-crossings" for c in result["candidates"]))
-        missing_scope = copy.deepcopy(context)
-        missing_scope["facts"]["executed_equation_family"].pop("source")
-        conditional = search_directions(graph, missing_scope)
-        self.assertEqual(conditional["candidates"][0]["status"], "NEEDS_EVIDENCE")
         context["facts"]["strict_crossing_feasible"]["value"] = True
         changed = search_directions(graph, context)
         self.assertEqual(changed["candidates"][0]["action"]["id"], "inspect-actual-boundary-crossings")

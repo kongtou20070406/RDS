@@ -8,6 +8,7 @@ JSON cannot certify manipulation, metric gain, final authorization or success.
 import argparse
 import ast
 from contextlib import contextmanager
+from fractions import Fraction
 import hashlib
 import importlib.metadata
 import json
@@ -20,8 +21,9 @@ import time
 import uuid
 
 from rds_probe import parse_source, rational, read_rows, formal_requirement
+from rds_formal_kernel import bounded
 
-VERSION = "5.3.0"
+VERSION = "5.6.0-rc.1"
 RESOURCES = {"runtime_ms", "runs"}
 SELF_SIGNED = {"manipulation_verified", "falsifier_triggered", "primary_metric_gain",
                "final_run_authorized", "matched_recipe", "matched_compute"}
@@ -56,8 +58,6 @@ def strict_json(raw):
 
 
 def load_spec(path):
-    if isinstance(path, str) and (path.strip().startswith("{") or path.strip().startswith("[")):
-        return strict_json(path)
     return strict_json(Path(path).read_text(encoding="utf-8-sig"))
 
 
@@ -102,8 +102,11 @@ def engine_id():
     except importlib.metadata.PackageNotFoundError:
         sympy_version = None
     here = Path(__file__).resolve().parent
+    from rds_verify import verifier_id
     return digest({"cli": digest((here / "rds_cli.py").read_bytes()),
                    "probe": digest((here / "rds_probe.py").read_bytes()),
+                   "formal_kernel": digest((here / "rds_formal_kernel.py").read_bytes()),
+                   "declarative_verifier": verifier_id(),
                    "python": sys.version, "sympy": sympy_version})
 
 
@@ -123,22 +126,48 @@ def formal_gate(hypothesis, source):
     return probe
 
 
+def cached_admission(state, binding, hypothesis, source):
+    """Existing admitted certificates are an optional, independently checked cache."""
+    from rds_formal_kernel import check_certificate
+
+    formal = formal_requirement(hypothesis)
+    if formal is None:
+        return None
+    identity_keys = ("source_sha256", "hypothesis_sha256", "engine_sha256")
+    for plan in state["plans"].values():
+        old = plan["binding"]
+        if not all(old.get(key) == binding[key] for key in identity_keys):
+            continue
+        probe = old.get("admission_probe", {})
+        certificate = probe.get("certificate")
+        if probe.get("status") == "PASS" and isinstance(certificate, dict) and certificate.get("verdict") == "PASS":
+            if formal["kind"] == "declarative":
+                from rds_verify import check_certificate as check_declarative
+                valid = check_declarative(formal["statement"], certificate)
+            else:
+                valid = check_certificate(parse_source(source), formal, certificate)
+            if valid:
+                return probe
+    return None
+
+
 class RDSState:
     def __init__(self, root_dir):
         self.root = Path(root_dir).resolve()
         self.directory = self.root / ".rds"
         self.db_path = self.directory / "state.sqlite3"
 
-    def connect(self, create=False):
+    def connect(self, create=False, readonly=False):
         if create:
             require(not (self.directory / "contract.json").exists(),
                     "Legacy v5 JSON state found; preserve it and initialize a new root")
             self.directory.mkdir(parents=True, exist_ok=True)
         require(create or self.db_path.exists(), "RDS is not initialized")
-        db = sqlite3.connect(self.db_path, timeout=30, isolation_level=None)
+        target = self.db_path.as_uri() + "?mode=ro" if readonly else self.db_path
+        db = sqlite3.connect(target, uri=readonly, timeout=15, isolation_level=None)
         db.execute("PRAGMA foreign_keys=ON")
-        db.execute("PRAGMA journal_mode=WAL")
-        db.execute("PRAGMA synchronous=NORMAL")
+        if not readonly:
+            db.execute("PRAGMA synchronous=FULL")
         if create:
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS state (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL);
@@ -160,29 +189,43 @@ class RDSState:
             """)
         return db
 
+    @staticmethod
+    def read_state(db):
+        row = db.execute("SELECT body FROM state WHERE id=1").fetchone()
+        state = strict_json(row[0]) if row else {}
+        if state:
+            require(state["version"] in {VERSION, "5.1.0", "5.2.0", "5.3.0", "5.4.0", "5.5.0-rc.1", "5.5.0-rc.2"},
+                    "Incompatible state version")
+            require(digest(state["contract"]) == state["contract_sha256"], "Contract integrity failure")
+            if "branches" not in state:
+                state["branches"] = {
+                    "main": {
+                        "id": "main", "parent_id": None, "orthogonal_dimension": "baseline",
+                        "rationale": "Initial primary exploration branch", "status": "ACTIVE",
+                        "stagnation_count": 0, "created_ns": 0,
+                        "hypotheses": list(state.get("hypotheses", {}).keys())
+                    }
+                }
+            state.setdefault("active_branch", "main")
+            state.setdefault("baseline_cache", {})
+        return state
+
+    @contextmanager
+    def snapshot(self):
+        """Read a consistent state without taking a writer lock or rewriting it."""
+        db = self.connect(readonly=True)
+        try:
+            db.execute("BEGIN")
+            yield db, self.read_state(db)
+        finally:
+            db.close()
+
     @contextmanager
     def transaction(self, create=False):
         db = self.connect(create)
         try:
             db.execute("BEGIN IMMEDIATE")
-            row = db.execute("SELECT body FROM state WHERE id=1").fetchone()
-            state = strict_json(row[0]) if row else {}
-            if state:
-                require(state["version"] in {VERSION, "5.1.0"}, "Incompatible state version")
-                require(digest(state["contract"]) == state["contract_sha256"], "Contract integrity failure")
-                if "branches" not in state:
-                    state["branches"] = {
-                        "main": {
-                            "id": "main", "parent_id": None, "orthogonal_dimension": "baseline",
-                            "rationale": "Initial primary exploration branch", "status": "ACTIVE",
-                            "stagnation_count": 0, "created_ns": 0,
-                            "hypotheses": list(state.get("hypotheses", {}).keys())
-                        }
-                    }
-                if "active_branch" not in state:
-                    state["active_branch"] = "main"
-                if "baseline_cache" not in state:
-                    state["baseline_cache"] = {}
+            state = self.read_state(db)
             yield db, state
             if state:
                 self.invariants(state)
@@ -317,7 +360,7 @@ def clean_confirmation(state, split_id, own_run=None):
                    for e in state["exposures"])
 
 
-def validate_plan(plan, state, rds):
+def validate_plan(plan, state, rds, admission=None):
     reject_self_signatures(plan)
     require(set(plan) == {"id", "hypothesis_id", "split_id", "purpose", "source", "resources"},
             "Plan fields: id, hypothesis_id, split_id, purpose, source, resources; no imported permits")
@@ -348,26 +391,42 @@ def validate_plan(plan, state, rds):
     require(ast.dump(functions["control"]) == state["contract"]["baseline_control_ast"],
             "Baseline computation changed from the locked contract")
     require(engine_id() == state["engine_sha256"], "Verifier version changed; a new contract is required")
-    probe = formal_gate(state["hypotheses"][plan["hypothesis_id"]]["spec"], source.decode("utf-8-sig"))
-    return {"source_path": str(path), "source_sha256": digest(source), "source": source.decode("utf-8-sig"),
-            "admission_probe": probe,
-            "engine_sha256": state["engine_sha256"], "contract_sha256": state["contract_sha256"],
-            "hypothesis_sha256": state["hypotheses"][plan["hypothesis_id"]]["sha256"],
-            "dataset_sha256": split["sha256"], "plan_sha256": digest(plan)}
+    binding = {"source_path": str(path), "source_sha256": digest(source), "source": source.decode("utf-8-sig"),
+               "engine_sha256": state["engine_sha256"], "contract_sha256": state["contract_sha256"],
+               "hypothesis_sha256": state["hypotheses"][plan["hypothesis_id"]]["sha256"],
+               "dataset_sha256": split["sha256"], "plan_sha256": digest(plan)}
+    if admission is not None:
+        require(all(admission.get(key) == value for key, value in binding.items()),
+                "Admission binding changed while formal verification was running")
+        probe = admission["admission_probe"]
+    else:
+        hypothesis = state["hypotheses"][plan["hypothesis_id"]]["spec"]
+        probe = cached_admission(state, binding, hypothesis, binding["source"])
+        if probe is None:
+            probe = formal_gate(hypothesis, binding["source"])
+    return {**binding, "admission_probe": probe}
 
 
 def cmd_plan(args, rds, advisory=False):
     plan = load_spec(args.plan if advisory else args.spec)
+    # Solver work is deliberately outside the reservation transaction. The
+    # committing transaction rechecks every resource and source binding.
+    with rds.snapshot() as (_, state):
+        existing = state["plans"].get(plan.get("id"))
+        if existing:
+            require(digest(plan) == existing["binding"]["plan_sha256"], "Plan ID reused with changed contents")
+            return {"plan_id": plan["id"], "run_status": existing["run_status"], "idempotent": True}
+    binding = validate_plan(plan, state, rds)
+    if advisory:
+        return {"status": "ADMISSIBLE_NOW", "reserved": False,
+                "probe": binding["admission_probe"],
+                "note": "Admission is rechecked atomically by plan create"}
     with rds.transaction() as (db, state):
         existing = state["plans"].get(plan.get("id"))
         if existing:
             require(digest(plan) == existing["binding"]["plan_sha256"], "Plan ID reused with changed contents")
             return {"plan_id": plan["id"], "run_status": existing["run_status"], "idempotent": True}
-        binding = validate_plan(plan, state, rds)
-        if advisory:
-            return {"status": "ADMISSIBLE_NOW", "reserved": False,
-                    "probe": binding["admission_probe"],
-                    "note": "Admission is rechecked atomically by plan create"}
+        binding = validate_plan(plan, state, rds, admission=binding)
         state["plans"][plan["id"]] = {"spec": plan, "binding": binding, "run_status": "RESERVED",
                                        "run_id": "RUN-" + uuid.uuid4().hex, "assessment": None}
         for key, value in plan["resources"].items():
@@ -450,7 +509,8 @@ def cmd_run(args, rds):
     try:
         data_raw = read_bounded(dataset_path, 2_000_000)
         require(digest(data_raw) == binding["dataset_sha256"], "Dataset changed after contract lock")
-        payload = {"source": binding["source"], "data": data_raw.decode("utf-8-sig"), "hypothesis": hypothesis}
+        payload = {"source": binding["source"], "data": data_raw.decode("utf-8-sig"), "hypothesis": hypothesis,
+                   "admission_probe": binding["admission_probe"]}
         if cached_control:
             payload["cached_control"] = cached_control
         worker = Path(__file__).resolve().with_name("rds_probe.py")
@@ -516,20 +576,29 @@ def merge_axis(old, new):
 
 
 def assess(result, contract, purpose, clean, formal):
-    gain = rational(result["gain"])
+    gain = bounded(Fraction(result["gain"]))
     useful = gain > rational(contract["primary_metric"]["min_useful_delta"])
     final = purpose == "confirm" and clean and contract["evaluation_scope"] == "finite_locked_dataset"
     task = ("CONFIRMED" if useful else "REFUTED") if final else ("EXPLORATORY" if useful else "INCONCLUSIVE")
     probe, mechanism = result["probe"], "UNTESTED"
-    if formal:
+    side_condition = formal and formal.get("kind") == "declarative"
+    if side_condition:
+        mechanism = "NOT_TESTED"
+    elif formal:
         mechanism = "NOT_TESTED" if probe["status"] == "FAIL" else "INCONCLUSIVE"
         # Passing manipulation never supports causality. This adapter can refute
         # ONLY its typed necessity claim with an executed exact counterexample.
-        if probe["status"] == "PASS" and probe["necessity_counterexamples"]:
+        necessity = formal_requirement({"formal": formal}).get("statement") == "threshold_necessity"
+        if necessity and probe["status"] == "PASS" and probe.get("necessity_counterexamples"):
             mechanism = "REFUTED"
-    return {"task_gain": task, "mechanism": mechanism, "search_policy": "UNTESTED",
-            "scope": contract["evaluation_scope"], "gain": result["gain"], "manipulation": probe["status"],
+    outcome = {"task_gain": task, "mechanism": mechanism, "search_policy": "UNTESTED",
+            "scope": contract["evaluation_scope"], "gain": result["gain"],
+            "manipulation": "NOT_APPLICABLE" if side_condition else probe["status"],
             "note": "Finite benchmark comparison only; no population inference or causal support"}
+    if side_condition:
+        outcome.update(formal_status=probe["status"], formal_assurance=probe.get("assurance", "NONE"),
+                       claim_relation="declared_side_condition_only")
+    return outcome
 
 
 def cmd_decide(args, rds):
@@ -580,7 +649,7 @@ def cmd_decide(args, rds):
         branch_info = state.get("branches", {}).get(active_b)
         stagnation_report = None
         if branch_info is not None:
-            gain_val = rational(receipt["result"]["gain"])
+            gain_val = bounded(Fraction(receipt["result"]["gain"]))
             min_delta = rational(state["contract"]["primary_metric"]["min_useful_delta"])
             useful = gain_val > min_delta
             if useful and outcome["task_gain"] in {"CONFIRMED", "EXPLORATORY"}:
@@ -608,7 +677,7 @@ def cmd_decide(args, rds):
 
 
 def cmd_status(args, rds):
-    with rds.transaction() as (db, state):
+    with rds.snapshot() as (db, state):
         result = dict(state)
         result["receipts"] = [strict_json(r[0]) for r in db.execute("SELECT body FROM receipts ORDER BY run_id")]
         result["event_count"] = db.execute("SELECT COUNT(*) FROM events").fetchone()[0]
@@ -697,23 +766,45 @@ def cmd_meta(args, rds):
         reject_self_signatures(spec)
         res = apply_rule(spec, graph_path=getattr(args, "graph", None),
                          force=getattr(args, "force", False),
-                         dry_run=getattr(args, "dry_run", False))
+                         dry_run=getattr(args, "dry_run", False),
+                         evaluation=getattr(args, "evaluation", None),
+                         cases=getattr(args, "cases", None),
+                         record_dir=rds.directory / "rsi")
         try:
             with rds.transaction() as (db, state):
                 rds.event(db, "RULE_APPLIED", **res)
         except Exception:
             pass
         return res
+    elif args.action == "evaluate-rule":
+        from rds_rsi import evaluate_candidate
+        spec = load_spec(args.rule)
+        reject_self_signatures(spec)
+        _, graph = load_judgment_graph(args.graph)
+        result = evaluate_candidate(spec, graph, load_spec(args.cases))
+        if args.output:
+            Path(args.output).write_text(canonical(result), encoding="utf-8")
+        return result
+    elif args.action == "rollback-rule":
+        from rds_meta import rollback_rule
+        return rollback_rule(args.record, graph_path=args.graph, dry_run=args.dry_run)
     elif args.action == "reflect":
-        with rds.transaction() as (db, state):
-            receipts = [strict_json(r[0]) for r in db.execute("SELECT body FROM receipts ORDER BY run_id")]
-            evidence = None
-            if getattr(args, "terms", None):
-                evidence = {"terms": args.terms, "scope": state["contract"].get("project_id", "project")}
-            proposals = reflect_from_state(state, receipts, evidence)
-            if getattr(args, "output", None):
-                Path(args.output).write_text(json.dumps(proposals, indent=2, ensure_ascii=False), encoding="utf-8")
-            return {"proposed_rules_count": len(proposals), "proposals": proposals}
+        if (rds.directory / "project.sqlite3").is_file():
+            from rds_project import ProjectStore
+            state = ProjectStore(args.root).snapshot()
+            receipts = state["receipts"]
+        else:
+            with rds.snapshot() as (db, state):
+                receipts = [strict_json(r[0]) for r in db.execute("SELECT body FROM receipts ORDER BY run_id")]
+        # Search terms are a retrieval request, not retrieved Obelisk evidence.
+        proposals = reflect_from_state(state, receipts)
+        if getattr(args, "output", None):
+            Path(args.output).write_text(json.dumps(proposals, indent=2, ensure_ascii=False), encoding="utf-8")
+        result = {"proposed_rules_count": len(proposals), "proposals": proposals, "auto_apply": False}
+        if getattr(args, "terms", None):
+            result["history_request"] = {"terms": args.terms, "project_path": str(Path(args.root).resolve()),
+                                         "evidence_status": "NOT_RETRIEVED"}
+        return result
     elif args.action == "fuzz":
         from rds_adversary import AdversarialMutator
         plan = load_spec(args.plan)
@@ -739,60 +830,123 @@ def cmd_advise(args, rds):
     from rds_advisor import RDSAdvisor
     from rds_meta import load_judgment_graph
     advisor = RDSAdvisor(Path(args.root))
-    
-    # Standalone Scenario 1: Literature Principle Search
-    if getattr(args, "literature", None):
-        res = advisor.query_literature_principles(args.literature)
-        return {
-            "advisor_type": "LITERATURE_PRINCIPLES_SURVEY",
-            "query": args.literature,
-            "matches_count": len(res),
-            "principles": res
-        }
 
-    # Standalone Scenario 2: Fit status diagnosis (Underfitting vs Overfitting)
+    if getattr(args, "literature", None):
+        principles = advisor.query_literature_principles(args.literature)
+        return {"advisor_type": "LITERATURE_PRINCIPLES_SURVEY", "query": args.literature,
+                "matches_count": len(principles), "principles": principles,
+                "assurance": "HEURISTIC_ONLY"}
+    
+    # These branches do not read research state. In particular, a solver must
+    # not inherit an outer SQLite reader that would block another writer's commit.
+    if getattr(args, "telemetry", None):
+        return advisor.advise_on_loss_dynamics(load_spec(args.telemetry))
     if getattr(args, "train_loss", None) is not None and getattr(args, "val_loss", None) is not None:
         b_loss = float(args.baseline_loss) if getattr(args, "baseline_loss", None) is not None else None
-        return advisor.diagnose_fit_status(float(args.train_loss), float(args.val_loss), b_loss)
-
-    # Standalone Scenario 3: Telemetry diagnosis
-    if getattr(args, "telemetry", None):
-        telemetry = load_spec(args.telemetry)
-        return advisor.advise_on_loss_dynamics(telemetry)
-
-    # Standalone Scenario 4: Document Ingestion & Learning
+        fit_telemetry = load_spec(args.fit_telemetry) if getattr(args, "fit_telemetry", None) else None
+        return advisor.diagnose_fit_status(float(args.train_loss), float(args.val_loss), b_loss,
+                                          telemetry=fit_telemetry)
     if getattr(args, "doc", None):
         return advisor.ingest_document(Path(args.doc), topic=getattr(args, "topic", None))
-
-    # Project-State Scenarios: Plan pre-check and Strategic Research Advice
-    with rds.transaction() as (db, state):
-        _, graph = load_judgment_graph(getattr(args, "graph", None))
-        
-        # Scenario D: Plan advice (pre-check simulation)
-        if getattr(args, "plan", None):
-            plan = load_spec(args.plan)
-            try:
-                cmd_plan(argparse.Namespace(plan=args.plan, action="check"), rds, advisory=True)
-                gate_err = None
-            except Exception as e:
-                gate_err = str(e)
-
-            if gate_err:
-                return advisor.advise_on_rejection(gate_err, plan)
-            return {
-                "advisor_type": "PLAN_COMPLIANCE_PASS",
-                "status": "APPROVED",
-                "actionable_suggestion": "方案通过门禁安全检查。空白对照将自动复用已验证缓存，可安全提交执行。"
-            }
-
-        # Scenario E: Global strategic directions
-        recommendations = advisor.recommend_next_directions(state, graph)
+    if getattr(args, "plan", None):
+        plan = load_spec(args.plan)
+        try:
+            cmd_plan(argparse.Namespace(plan=args.plan, action="check"), rds, advisory=True)
+        except Exception as exc:
+            return advisor.advise_on_rejection(str(exc), plan)
         return {
-            "advisor_type": "STRATEGIC_RESEARCH_ADVICE",
-            "active_branch": state.get("active_branch", "main"),
-            "recommendations_count": len(recommendations),
-            "recommendations": recommendations
+            "advisor_type": "PLAN_COMPLIANCE_PASS",
+            "status": "APPROVED",
+            "actionable_suggestion": "方案通过门禁安全检查，可提交计划；正式提交时将重新核验预算和数据暴露。"
         }
+    if (rds.directory / "project.sqlite3").exists():
+        from rds_project import ProjectStore
+        state = ProjectStore(args.root).snapshot()
+    elif rds.db_path.exists():
+        with rds.snapshot() as (_, snapshot):
+            state = snapshot
+    else:
+        require(getattr(args, "research_context", None) or getattr(args, "artifacts", None), "RDS is not initialized")
+        state = {}
+    if getattr(args, "research_context", None):
+        state["advisor_context"] = load_spec(args.research_context)
+    imported = None
+    if getattr(args, "artifacts", None):
+        from rds_artifacts import ingest_manifest
+        imported = ingest_manifest(args.artifacts, root=args.root, receipts=state.get("receipts"))
+        context = dict(imported["context"])
+        manual = state.get("advisor_context", {})
+        require(isinstance(manual, dict) and isinstance(manual.get("facts", {}), dict),
+                "Research context and facts must be objects")
+        for key in ("decision", "targets", "budget", "max_depth", "max_candidates", "target_types"):
+            if key in manual:
+                context[key] = manual[key]
+        facts = dict(context.get("facts", {}))
+        for name, record in manual.get("facts", {}).items():
+            require(isinstance(record, dict), "Each manual fact must be an object")
+            if name in facts and facts[name].get("value") != record.get("value"):
+                imported["conflicts"].append({"fact_id": name, "reason": "Manual declaration conflicts with imported record"})
+                facts[name] = {"value": None, "reliable": False, "source": "conflicting records"}
+            elif name in facts and (record.get("reliable") is False or record.get("reliability") in {"UNRELIABLE", "UNKNOWN"}):
+                imported["conflicts"].append({"fact_id": name, "field": "reliability", "reason": "Manual context explicitly disputes this record's reliability"})
+                facts[name] = {**facts[name], "reliable": False, "reliability": "UNRELIABLE"}
+            elif name not in facts:
+                facts[name] = record
+        context["facts"] = facts
+        if imported["conflicts"]:
+            imported["status"] = "CONFLICT"
+        state["advisor_context"] = context
+    if getattr(args, "templates", None):
+        state["advisor_templates"] = load_spec(args.templates)
+    _, graph = load_judgment_graph(getattr(args, "graph", None))
+    recommendations = advisor.recommend_next_directions(state, graph)
+    result = {
+        "advisor_type": "STRATEGIC_RESEARCH_ADVICE",
+        "active_branch": state.get("active_branch", "main"),
+        "recommendations_count": len(recommendations),
+        "recommendations": recommendations
+    }
+    if imported is not None:
+        result["artifact_import"] = imported
+    return result
+
+
+def cmd_project(args):
+    """Run a locked external project without claiming task or mechanism gains."""
+    from rds_project import ProjectStore
+    store = ProjectStore(args.root)
+    if args.action == "init":
+        return store.initialize(load_spec(args.contract))
+    if args.action == "create":
+        return store.register(load_spec(args.manifest))
+    if args.action == "execute":
+        return store.execute(args.id, background=args.background)
+    if args.action == "recover":
+        return store.recover(args.id)
+    if args.action == "costs":
+        from rds_costs import summarize_costs
+        return summarize_costs(store.snapshot().get("receipts", []))
+    if args.action == "control-check":
+        from rds_costs import check_control_reuse
+        return check_control_reuse(load_spec(args.candidate), load_spec(args.current), root=args.root)
+    return store.snapshot()
+
+
+def cmd_checkpoint(args, rds):
+    from rds_checkpoints import restore_checkpoint, save_checkpoint
+    kind = args.kind
+    if kind == "auto":
+        kind = "project" if (rds.directory / "project.sqlite3").is_file() else "reference"
+    if kind == "project":
+        from rds_project import ProjectStore
+        snapshot = ProjectStore(args.root).snapshot(check_bindings=args.action == "restore")
+    else:
+        with rds.snapshot() as (_, snapshot):
+            snapshot = dict(snapshot)
+    if args.action == "save":
+        return save_checkpoint(args.root, args.id, snapshot, kind=kind,
+                               decision=load_spec(args.decision) if args.decision else None)
+    return restore_checkpoint(args.root, args.id, snapshot, kind=kind)
 
 
 def parser():
@@ -819,6 +973,47 @@ def parser():
     commands.add_parser("decide").add_argument("--run", required=True)
     commands.add_parser("status")
 
+    project = commands.add_parser("project", help="Locked local project runner with receipts and resource accounting")
+    pr_actions = project.add_subparsers(dest="action", required=True)
+    pr_actions.add_parser("init").add_argument("--contract", required=True)
+    pr_actions.add_parser("create").add_argument("--manifest", required=True)
+    pr_exec = pr_actions.add_parser("execute")
+    pr_exec.add_argument("--id", required=True)
+    pr_exec.add_argument("--background", action="store_true", help="Use a tool-owned Windows Task Scheduler task")
+    pr_actions.add_parser("recover").add_argument("--id", required=True)
+    pr_actions.add_parser("status")
+    pr_actions.add_parser("costs")
+    pr_control = pr_actions.add_parser("control-check")
+    pr_control.add_argument("--candidate", required=True)
+    pr_control.add_argument("--current", required=True)
+
+    checkpoints = commands.add_parser("checkpoint", help="Record decisions and recover against live project state")
+    cp_actions = checkpoints.add_subparsers(dest="action", required=True)
+    for action in ("save", "restore"):
+        cp = cp_actions.add_parser(action)
+        cp.add_argument("--id", required=True)
+        cp.add_argument("--kind", choices=["auto", "project", "reference"], default="auto")
+        if action == "save":
+            cp.add_argument("--decision", help="Decision context; this input does not create execution authority")
+
+    artifacts = commands.add_parser("artifacts", help="Read bounded local records with field-level provenance")
+    ai = artifacts.add_subparsers(dest="action", required=True).add_parser("import")
+    ai.add_argument("--manifest", required=True)
+
+    formal = commands.add_parser("formal", help="Declare, prove and replay bounded mathematical statements")
+    f_actions = formal.add_subparsers(dest="action", required=True)
+    f_actions.add_parser("rules")
+    f_verify = f_actions.add_parser("verify")
+    f_verify.add_argument("--spec", required=True)
+    f_verify.add_argument("--output")
+    f_verify.add_argument("--no-cache", action="store_true")
+    f_verify.add_argument("--tactics", nargs="+", choices=["rule", "gershgorin", "spectral_radius",
+                                                         "scale_invariance", "lean4", "interval"],
+                          help="Run a bounded explicit tactic chain without the default proof cache")
+    f_check = f_actions.add_parser("check")
+    f_check.add_argument("--spec", required=True)
+    f_check.add_argument("--certificate", required=True)
+
     # Policy RSI: Branch & Stagnation Engine
     branch = commands.add_parser("branch", help="RSI Policy Stagnation & Branching engine")
     b_actions = branch.add_subparsers(dest="action", required=True)
@@ -840,6 +1035,18 @@ def parser():
     m_app.add_argument("--rule", required=True)
     m_app.add_argument("--graph", default=None)
     m_app.add_argument("--force", action="store_true")
+    m_app.add_argument("--dry-run", action="store_true")
+    m_app.add_argument("--evaluation", help="Hash-bound independently replayed adoption report")
+    m_app.add_argument("--cases", help="Original held-out case pack; replayed again before adoption")
+    m_eval_rule = m_actions.add_parser("evaluate-rule")
+    m_eval_rule.add_argument("--rule", required=True)
+    m_eval_rule.add_argument("--graph")
+    m_eval_rule.add_argument("--cases", required=True)
+    m_eval_rule.add_argument("--output")
+    m_rollback = m_actions.add_parser("rollback-rule")
+    m_rollback.add_argument("--record", required=True)
+    m_rollback.add_argument("--graph")
+    m_rollback.add_argument("--dry-run", action="store_true")
     m_ref = m_actions.add_parser("reflect")
     m_ref.add_argument("--terms", default=None)
     m_ref.add_argument("--output", default=None)
@@ -871,7 +1078,11 @@ def parser():
     adv.add_argument("--train-loss", default=None)
     adv.add_argument("--val-loss", default=None)
     adv.add_argument("--baseline-loss", default=None)
-    adv.add_argument("--literature", default=None, help="Query peer-reviewed deep learning tuning principles")
+    adv.add_argument("--fit-telemetry", default=None, help="Paired, comparable curve observations for fit diagnosis")
+    adv.add_argument("--literature", default=None, help="Search scoped local primary-source records")
+    adv.add_argument("--research-context", default=None, help="Sourced facts and the decision for bounded graph search")
+    adv.add_argument("--artifacts", help="Hash-bound artifact manifest; reread originals at advice time")
+    adv.add_argument("--templates", help="Versioned finite experiment template pack")
     adv.add_argument("--graph", default=None)
     return p
 
@@ -884,8 +1095,40 @@ def main():
             from rds_obelisk import history_command
             history_command(args)
             return 0
+        if args.command == "formal":
+            from rds_verify import checked_result, rules, verify
+            from rds_verify_types import MAX_CERTIFICATE_BYTES
+            if args.action == "rules":
+                result = {"rules": rules()}
+            else:
+                spec = strict_json(read_bounded(args.spec, MAX_CERTIFICATE_BYTES).decode("utf-8-sig"))
+                if args.action == "check":
+                    artifact = strict_json(read_bounded(args.certificate, MAX_CERTIFICATE_BYTES).decode("utf-8-sig"))
+                    certificate = artifact.get("certificate", artifact) if isinstance(artifact, dict) else artifact
+                    result = checked_result(spec, certificate)
+                elif args.tactics:
+                    from rds_verify import LeanFormalEngine
+                    result = LeanFormalEngine().verify(spec, args.tactics)
+                elif args.no_cache:
+                    result = verify(spec)
+                else:
+                    from rds_proof_cache import ProofCache
+                    result = ProofCache(rds.directory / "proofs.sqlite3").verify(spec)
+                if args.action == "verify" and args.output:
+                    raw = canonical(result).encode("utf-8")
+                    require(len(raw) <= MAX_CERTIFICATE_BYTES, "Proof artifact exceeds byte limit")
+                    Path(args.output).write_bytes(raw)
+            print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
+            return {"PASS": 0, "FAIL": 1, "UNKNOWN": 2}.get(result.get("status"), 0)
         if args.command == "advise":
             result = cmd_advise(args, rds)
+        elif args.command == "project":
+            result = cmd_project(args)
+        elif args.command == "checkpoint":
+            result = cmd_checkpoint(args, rds)
+        elif args.command == "artifacts":
+            from rds_artifacts import ingest_manifest
+            result = ingest_manifest(args.manifest, root=args.root)
         elif args.command == "branch":
             result = cmd_branch(args, rds)
         elif args.command == "meta":
@@ -907,6 +1150,12 @@ def main():
         else:
             result = cmd_status(args, rds)
         print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
+        if args.command == "project" and args.action in {"execute", "recover"} and result.get("run_status") in {"FAILED", "INTERRUPTED", "TIMED_OUT"}:
+            return 1
+        if args.command == "meta" and args.action == "evaluate-rule" and not result.get("adoption_eligible"):
+            return 1
+        if args.command == "checkpoint" and args.action == "restore" and result.get("status") == "CONFLICT":
+            return 1
     except (ValueError, KeyError, TypeError, OSError, sqlite3.Error, SyntaxError, ImportError, subprocess.SubprocessError) as exc:
         print("[RDS-REJECT] " + str(exc), file=sys.stderr)
         return 1

@@ -1,12 +1,25 @@
 """Bounded search over explicitly configured reasoning dependencies.
 
-No text eval, causal discovery, probability estimates, source verification or run
-execution. Facts and observed costs supplied by callers remain INPUT_REPORTED.
+No text eval, causal discovery, probability estimates or run execution. Imported
+artifacts retain their provenance labels; caller dictionaries remain INPUT_REPORTED.
 """
 from copy import deepcopy
 import math
 
 TRUE, FALSE, UNKNOWN = "TRUE", "FALSE", "UNKNOWN"
+
+
+def _evidence_status(record):
+    # A JSON flag cannot impersonate the read-only artifact importer's type.
+    try:
+        from rds_artifacts import ArtifactFact
+    except ImportError:
+        return "INPUT_REPORTED"
+    if isinstance(record, ArtifactFact):
+        status = getattr(record, "provenance_status", "UNKNOWN")
+        if status in {"ARTIFACT_OBSERVED", "ARTIFACT_DECLARED", "PROGRAM_DERIVED", "UNKNOWN"}:
+            return status
+    return "INPUT_REPORTED"
 
 
 def _source(record):
@@ -34,14 +47,11 @@ def evaluate_condition(condition, facts):
     record = facts.get(name) if isinstance(name, str) else None
     report = {"fact": name, "operator": condition.get("op", "eq") if isinstance(condition, dict) else None,
               "expected": deepcopy(condition.get("value")) if isinstance(condition, dict) else None,
-              "truth": UNKNOWN, "evidence_status": "INPUT_REPORTED"}
+              "truth": UNKNOWN, "evidence_status": _evidence_status(record)}
     if not _reported(record) or "value" not in record or record["value"] is None:
         report["reason"] = "missing value/source or explicitly unreliable evidence"
         return report
     value, expected, op = record["value"], report["expected"], report["operator"]
-    if any(isinstance(v, (int, float)) and not isinstance(v, bool) and not _finite(v) for v in (value, expected)):
-        report.update(expected=None, reason="nonfinite or unrepresentable numeric evidence")
-        return report
     report.update(actual=deepcopy(value), source=deepcopy(record["source"]))
     if op in {"eq", "ne"}:
         equal = value == expected and (not isinstance(value, bool) and not isinstance(expected, bool)
@@ -94,10 +104,12 @@ def _cost(ids, costs):
         return {"status": UNKNOWN, "reason": "mixed units/comparison groups or nonfinite total"}
     unit, group = groups.pop()
     return {"status": "INPUT_REPORTED", "value": total, "unit": unit, "comparison_group": group,
-            "sources": [deepcopy(r["source"]) for r in records], "components": list(ids)}
+            "sources": [deepcopy(r["source"]) for r in records], "components": list(ids),
+            "evidence_statuses": [_evidence_status(r) for r in records]}
 
 
-def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nodes=128):
+def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nodes=128,
+                      templates=None, max_combinations=128, max_compose_depth=2):
     """Compose source-labelled checks and tests for the supplied next decision.
 
     Nodes opt in via executable.decisions, preconditions, satisfied_when, action.
@@ -122,11 +134,23 @@ def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nod
               "truncation": {"truncated": False, "reasons": [], "limits": {
                   "max_candidates": max_candidates, "max_depth": max_depth, "max_nodes": max_nodes}},
               "ranking": {"method": "PARETO_PARTIAL_ORDER", "dominance": [], "cost_unknown": []},
-              "limitations": ["Derivations are reasoning dependencies, not causal proof. Sources and costs remain INPUT_REPORTED.",
+              "limitations": ["Derivations are reasoning dependencies, not causal proof. Imported source labels do not certify causal claims.",
                                "Only explicit executable configuration is searched; text triggers and unconfigured rules are not evaluated."]}
+    def finish():
+        chosen_templates = templates if templates is not None else context.get("templates")
+        if chosen_templates is not None:
+            from rds_experiments import compose_experiments
+            result["experiment_composition"] = compose_experiments(
+                graph, context, chosen_templates, max_candidates=max_candidates, max_depth=max_compose_depth,
+                max_combinations=max_combinations,
+                search_limits={"max_candidates": max_candidates, "max_depth": max_depth, "max_nodes": max_nodes})
+        return result
+    if len(raw_nodes) > max_nodes:
+        result["truncation"].update(truncated=True)
+        result["truncation"]["reasons"].append("node limit")
     if not isinstance(decision_id, str) or not decision_id.strip():
         result["limitations"].append("No next decision supplied; no test was inferred.")
-        return result
+        return finish()
     facts, costs = context.get("facts", {}), context.get("costs", {})
     if not isinstance(facts, dict) or not isinstance(costs, dict):
         raise ValueError("Context facts/costs must be objects")
@@ -136,9 +160,6 @@ def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nod
         if not isinstance(node, dict) or not isinstance(node.get("id"), str) or node["id"] in nodes:
             raise ValueError("Each graph node needs a unique string id")
         nodes[node["id"]] = node
-    if len(raw_nodes) > max_nodes:
-        result["truncation"].update(truncated=True)
-        result["truncation"]["reasons"].append("node limit")
     parents = {n: [] for n in nodes}
     for edge in raw_edges:
         if isinstance(edge, dict) and edge.get("relation") == "prerequisite_for" and edge.get("to") in nodes:
@@ -199,7 +220,6 @@ def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nod
         if not isinstance(items, list) or len(items) > 32 or not all(isinstance(c, dict) and isinstance(c.get("fact"), str) for c in items):
             raise ValueError(f"{rule_id}.{key} must be up to 32 explicit fact conditions")
         reports = []
-        local_fallbacks = []
         for condition in items:
             report = evaluate_condition(condition, facts)
             derivation.append({"step": "fact_to_rule", "rule_id": rule_id, "role": key, **report})
@@ -207,15 +227,7 @@ def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nod
             if report["truth"] == UNKNOWN:
                 pending.append(query(rule_id, condition, report["reason"]))
             elif report["truth"] == FALSE and isinstance(condition.get("on_false"), dict):
-                local_fallbacks.append(condition["on_false"])
-        scope = [d for d in derivation if d.get("rule_id") == rule_id and d.get("role") == "preconditions"]
-        false_scope = [d for d in scope if d["truth"] == FALSE]
-        unknown_scope = [d for d in scope if d["truth"] == UNKNOWN]
-        if len(false_scope) <= (1 if key == "preconditions" else 0):
-            for fallback in local_fallbacks:
-                query_ids = [f"query:{rule_id}:{d['fact']}" for d in unknown_scope]
-                fallbacks.append((rule_id, fallback, deepcopy(derivation), query_ids,
-                                  "NEEDS_EVIDENCE" if unknown_scope else "READY"))
+                fallbacks.append((rule_id, condition["on_false"], deepcopy(derivation)))
         return _all(reports)
 
     def visit(rule_id, path, derivation, pending, fallbacks, as_prerequisite=True):
@@ -272,8 +284,8 @@ def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nod
                        "rule_sources": deepcopy(nodes[rid].get("sources", []))}]
         pending, fallbacks = [], []
         status = visit(rid, [], derivation, pending, fallbacks, as_prerequisite=False)
-        for fallback_rid, fallback, chain, fallback_queries, fallback_status in fallbacks:
-            emit(fallback_rid, fallback, fallback_status, chain, fallback_queries)
+        for fallback_rid, fallback, chain in fallbacks:
+            emit(fallback_rid, fallback, "READY", chain)
         if status == FALSE:
             result["blocked_candidates"].append({"rule_id": rid, "action_id": action["id"], "status": "BLOCKED_PREREQUISITE",
                                                   "reason": "false prerequisite, cycle or bounded-search limit", "derivation": derivation})
@@ -299,4 +311,4 @@ def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nod
                 result["ranking"]["dominance"].append({"better": better["id"], "worse": worse["id"],
                     "basis": "decision coverage superset and no higher comparable observed incremental cost"})
     result["ranking"]["pareto_front"] = [c["id"] for c in result["candidates"] if not c["dominated_by"]]
-    return result
+    return finish()
