@@ -26,25 +26,35 @@ def main():
     sys.stderr.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workspace", required=True, help="New empty development workspace; original source is read-only")
+    parser.add_argument("--all-tests", action="store_true", help="Run every public test module, including benchmark-backed checks")
     args = parser.parse_args()
+    patterns = sorted(p.name for p in (REPO / "tests").glob("test_*.py")) if args.all_tests else PATTERNS
     root = Path(args.workspace).resolve()
     if root == REPO or root.is_relative_to(REPO):
         parser.error("Choose a workspace outside this checkout to avoid recursive source copying")
     if root.exists() and any(root.iterdir()):
         parser.error("Use a new empty workspace; existing research state is never overwritten")
     root.mkdir(parents=True, exist_ok=True)
-    for folder in ("scripts", "tests", "references", "examples"):
+    for folder in ("scripts", "tests", "references", "examples", "benchmark"):
         shutil.copytree(REPO / folder, root / folder, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     shutil.copyfile(Path(__file__).with_name("test_driver.py"), root / "test_driver.py")
-    config = {"test_patterns": PATTERNS, "goal": "Validate actual RDS development behavior", "scientific_claim": None}
+    config = {"test_patterns": patterns, "goal": "Validate actual RDS development behavior", "scientific_claim": None}
     write(root / "development-config.json", config)
     bindings = [{"path": p.relative_to(root).as_posix(), "sha256": file_sha(p), "role": "code"}
                 for p in sorted((root / "scripts").glob("*.py"))]
     data = [{"path": "tests/" + pattern, "sha256": file_sha(root / "tests" / pattern), "role": "data"}
-            for pattern in PATTERNS]
+            for pattern in patterns]
     fixture_paths = ["examples/experiment-templates/templates.json", "examples/rsi/base-graph.json",
                      "examples/rsi/candidate-rule.json", "examples/rsi/cases.json"]
     data.extend({"path": path, "sha256": file_sha(root / path), "role": "data"} for path in fixture_paths)
+    if args.all_tests:
+        bindings.extend({"path": p.relative_to(root).as_posix(), "sha256": file_sha(p), "role": "code"}
+                        for p in sorted((root / "benchmark").rglob("*.py")))
+        data.extend({"path": p.relative_to(root).as_posix(), "sha256": file_sha(p), "role": "data"}
+                    for p in sorted((root / "examples/formal").glob("*.json")))
+        data.extend({"path": path, "sha256": file_sha(root / path), "role": "data"}
+                    for path in ("references/judgment-graph.yaml", "references/scientific_tuning_principles.json",
+                                 "examples/advisor-search/boundary-context.json"))
     bindings.extend(data)
     bindings.extend({"path": path, "sha256": file_sha(root / path), "role": role}
                     for path, role in (("development-config.json", "config"), ("test_driver.py", "evaluator")))
@@ -53,7 +63,7 @@ def main():
     from rds_project import ProjectStore
     protocol = {role + "_sha256": ProjectStore._role_sha({"bindings": bindings}, role) for role in ("code", "config", "data")}
     protocol.update(data_split="development-regression", init="fresh-process", seed="not-applicable",
-                    checkpoint="none", schedule="one-regression-pass", sample_work=PATTERNS,
+                    checkpoint="none", schedule="one-regression-pass", sample_work=patterns,
                     numeric_protocol="python-unittest; counts", metric={"definition": "unittest failure and error count", "reduction": "count"})
     write(root / "development-protocol.json", protocol)
     bindings.append({"path": "development-protocol.json", "sha256": file_sha(root / "development-protocol.json"), "role": "protocol"})

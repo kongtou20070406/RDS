@@ -8,6 +8,8 @@ From the repository root:
 python -B examples/self-development/run.py --workspace C:\rds-development\iteration-1
 ```
 
+Add `--all-tests` to run every public test module. The copied workspace includes the benchmark support package required by the full suite; its test inputs are bound at admission along with the program.
+
 Choose a new, empty directory outside the repository. The example rejects an existing or nested directory. It uses the current Python executable and standard-library process runner; the selected tests may use the repository's optional formal dependencies.
 
 The saved workflow includes:
@@ -29,3 +31,5 @@ Reflection emits an execution-review candidate tied to the registered run, attem
 For v5.6.0-rc.1 on 2026-09-30, the first actual iteration ran 49 checks and recorded two failures. They exposed an incomplete control fixture and a test that searched explanatory prose for the word `probability` rather than checking output fields. After these fixes and additional acceptance coverage, the second iteration ran 65 checks with no failures or skips. Artifact import, Advisor output, four finite rule cases, isolated adoption and rollback all completed. The case replay passed 1/4 baseline cases and 4/4 candidate cases, with two improvements on its declared held-out cases and no regressions.
 
 The iterations use different test sets; this is a development feedback record, not a controlled research-policy comparison. Its held-out cases are declared software fixtures, not sealed external scientific evaluations. `task_gain` and `mechanism` remain `UNKNOWN`; no GPU run, paid model call or multi-seed experiment is launched. Runtime records stay in the selected workspace and should not be committed with private paths or data.
+
+The subsequent public-CLI audit exposed control identity, continuation, failure-exit and dashboard integration bugs. The first attempt at the full suite also found a missing benchmark support package in this copied workspace. After repairs, `--all-tests` ran all 286 cases: 282 passed, four optional-dependency checks skipped, and no failures. The same workflow imported those counts, produced advice and completed the isolated rule replay, adoption and rollback.

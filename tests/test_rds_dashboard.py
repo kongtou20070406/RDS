@@ -2,6 +2,7 @@
 import hashlib
 from contextlib import closing
 import json
+import os
 from pathlib import Path
 import re
 import sqlite3
@@ -9,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -62,6 +64,52 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(hypothesis["search_policy"], "UNTESTED")
         self.assertIn("['task_gain','mechanism','search_policy']", page)
         self.assertNotIn("innerHTML", page)
+
+    def test_project_store_runs_unknown_costs_and_original_receipts_are_read_only(self):
+        # Reuse the existing real CPU runner fixture; do not maintain a second
+        # handwritten project schema or treat process success as scientific gain.
+        sys.path.insert(0, str(ROOT / "tests"))
+        from test_rds_project import ProjectTests
+        fixture = ProjectTests()
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        good = fixture.run_spec(fixture.spec())
+        failed = fixture.run_spec(fixture.spec("r2", "nonzero"))
+        original = fixture.store.snapshot()
+        path = fixture.store.path
+        before = path.read_bytes()
+        files = {p.relative_to(fixture.root) for p in fixture.root.rglob("*")}
+        with patch("rds_project.file_sha", side_effect=AssertionError("Display must not hash inputs")):
+            snapshot = read_snapshot(fixture.root)
+        self.assertTrue(snapshot["available"])
+        self.assertEqual(snapshot["ledger_type"], "PROJECT")
+        self.assertEqual(snapshot["state"], original)
+        self.assertEqual([r["run_status"] for r in snapshot["receipts"]], ["SUCCEEDED", "FAILED"])
+        self.assertEqual(snapshot["receipts"], [good, failed])
+        self.assertEqual(snapshot["state"]["budget"]["cpu_seconds"]["charged_estimate"], 2)
+        self.assertIsNone(snapshot["receipts"][0]["resources"]["cpu_seconds"]["measured"])
+        self.assertEqual(good["assessment"], {"task_gain": "UNKNOWN", "mechanism": "UNKNOWN"})
+        self.assertEqual(snapshot["receipt_sources"]["r1"], {"database": str(path), "table": "receipts", "run_id": "r1"})
+        self.assertTrue(all((fixture.root / a["path"]).is_file() for a in good["artifacts"]))
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual({p.relative_to(fixture.root) for p in fixture.root.rglob("*")}, files)
+        self.assertEqual(snapshot["event_count"], 2)
+        # An unrelated reference ledger must not hide or merge project receipts.
+        (fixture.root / ".rds/state.sqlite3").write_bytes(b"unrelated reference ledger")
+        self.assertEqual(read_snapshot(fixture.root)["ledger_type"], "PROJECT")
+
+    def test_cli_outputs_utf8_even_with_legacy_windows_stream_encoding(self):
+        root, path = self.project()
+        output = root / "科研工作台.html"
+        result = subprocess.run([sys.executable, "-B", str(ROOT / "scripts/rds_dashboard.py"),
+                                 "--root", str(root), "--output", str(output)],
+                                capture_output=True, timeout=10, env={**os.environ, "PYTHONIOENCODING": "gbk"})
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8"))
+        response = json.loads(result.stdout.decode("utf-8"))
+        self.assertEqual(response["output"], str(output.resolve()))
+        self.assertEqual(response["ledger_type"], "REFERENCE")
+        self.assertEqual(response["source"], str(path.resolve()))
+        self.assertTrue(response["available"])
 
     def test_script_injection_is_encoded_and_roundtrips(self):
         attack = '</script><script>alert("owned")</script>&\u2028\u2029'

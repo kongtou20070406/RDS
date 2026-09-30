@@ -69,6 +69,43 @@ class DevelopmentCLITests(unittest.TestCase):
         self.assertEqual(answer["artifact_import"]["status"], "CONFLICT")
         self.assertEqual(search["candidates"][0]["status"], "NEEDS_EVIDENCE")
 
+    def call_advisor(self, *args):
+        return subprocess.run([sys.executable, "-B", str(ROOT / "scripts/rds_cli.py"),
+                               "--root", str(self.root), "advise", *args],
+                              capture_output=True, text=True, encoding="utf-8", timeout=10)
+
+    def test_incomplete_fit_and_unscoped_templates_are_rejected(self):
+        for args in [("--train-loss", "1"), ("--val-loss", "1"),
+                     ("--fit-telemetry", "missing.json"), ("--baseline-loss", "1"),
+                     ("--templates", "missing.json")]:
+            with self.subTest(args=args):
+                result = self.call_advisor(*args)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn("STRATEGIC_RESEARCH_ADVICE", result.stdout)
+
+    def test_corrupt_explicit_literature_is_distinct_from_no_matches(self):
+        library = self.root / "references/scientific_tuning_principles.json"
+        library.parent.mkdir()
+        library.write_text("{invalid", encoding="utf-8")
+        result = self.call_advisor("--literature", "lr")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        answer = json.loads(result.stdout)
+        self.assertEqual(answer["status"], "UNAVAILABLE")
+        self.assertTrue(answer["literature_load_errors"])
+        self.assertEqual(answer["principles"], [])
+        library.write_text("[]", encoding="utf-8")
+        answer = json.loads(self.call_advisor("--literature", "lr").stdout)
+        self.assertEqual(answer["status"], "LOADED")
+        self.assertEqual(answer["literature_load_errors"], [])
+
+    def test_early_mode_cannot_silently_discard_research_context(self):
+        for args in [("--literature", "lr", "--research-context", "missing.json"),
+                     ("--literature", "lr", "--graph", "missing.json"),
+                     ("--topic", "ignored-topic")]:
+            with self.subTest(args=args):
+                result = self.call_advisor(*args)
+                self.assertNotEqual(result.returncode, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

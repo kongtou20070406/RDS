@@ -126,7 +126,11 @@ class KernelTests(unittest.TestCase):
         project.contract["claim"] = "失败执行不等于科学反驳"
         project.init()
         project.call("plan", "create", spec=project.plan())
-        run = project.call("run", "execute", "--id", "P1")
+        process = subprocess.run([sys.executable, "-B", str(ROOT / "scripts/rds_cli.py"),
+                                  "--root", str(project.root), "run", "execute", "--id", "P1"],
+                                 capture_output=True, text=True, encoding="utf-8", timeout=30)
+        self.assertEqual(process.returncode, 1, process.stderr + process.stdout)
+        run = json.loads(process.stdout)
         self.assertEqual(run["run_status"], "FAILED")
         self.assertIn("not scientific refutation", project.call("decide", "--run", run["run_id"], ok=False))
         state = project.call("status")
