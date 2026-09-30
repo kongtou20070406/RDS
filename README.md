@@ -29,11 +29,45 @@ The researcher sets the goal and resources, the model designs candidate routes, 
 
 ## Our goal
 
+RDS's core goal is to automate assistance to human research: investigate evidence, generate and select experiments, arrange execution, assess results, reflect and continue. The researcher's goals and decisions remain central; Lean compatibility serves suitable mathematical subproblems within this process.
+
 Help researchers make the next experiment worth its full cost, carry it through an inspectable process, and resume from the evidence when work is interrupted. The long-term goal is a research loop that can improve its decision policy through tested feedback, while the researcher retains control of goals, resources, and interpretation.
 
 Every proposed experiment should answer three questions: **which explanations does it distinguish, what makes the comparison fair and affordable, and what would each possible result change?**
 
+## For researchers and their AI
+
+1. Install the [Skill](SKILL.md) using the instructions below, then open your research project with your AI assistant.
+2. Describe the question, metric, current baseline and available budget; point to code, logs and previous results. You can start with an uncertain idea.
+3. Review the recommended next experiment, what it can distinguish and its full cost. After execution, ask what the evidence supports and how the next decision changes.
+
+Copy this starting instruction to your AI:
+
+```text
+Use RDS for this research project. Recover existing evidence and decisions first.
+Clarify my goal, metric, baseline and budget; reuse valid controls and logs.
+Recommend the next experiment that can distinguish competing explanations.
+Explain the expected observations, falsifier, full cost and decision consequences.
+Keep mathematical checks, actual execution and mechanism evidence separate.
+Do not default to more seeds; consider them only if observed instability matters
+to the decision and the additional budget is authorized.
+```
+
+## Five components
+
+| Component | Responsibility |
+| --- | --- |
+| **1 · Skill** | Research procedures: clarify goals, frame hypotheses, choose controls and interpret evidence. |
+| **2 · Execution and acceptance kernel** | Manage runs, check budgets and evidence, collect receipts and invoke supported mathematical checks. |
+| **3 · Research state and memory** | Preserve goals, configurations, results and failure conditions through `.rds/`, Obelisk and the judgment graph. |
+| **4 · Advisor** | Use observations and scoped rules to suggest diagnostics and candidate actions; develop evidence-driven candidate generation. |
+| **5 · RSI** | Propose changes to RDS's own rules and policies, evaluate them and retain only supported improvements. |
+
+The first three support the basic research loop; Advisor and RSI enhance it. Memory supplies evidence to Advisor, while the kernel checks the chosen action. These are functional responsibilities and can share a local implementation. L1–L4 are workflow levels, not additional components.
+
 ## L1–L4
+
+RDS works through ordinary conversation and can be used by a single model. Its five components are the **Skill**, **execution and acceptance kernel**, **research state and memory**, **Advisor**, and **RSI**: three foundations plus two enhancements. L1–L4 describe the research workflow. The loop is: clarify the goal → choose an experiment → check its design → manage execution → assess results → accumulate evidence and continue. Each round should explain **what we know, what remains unknown, what comes next, and why it is worth doing**. Current execution coverage is bounded below.
 
 These are RDS's working levels for explaining its roadmap, not an industry standard or a score for a model's scientific ability.
 
@@ -56,6 +90,45 @@ RDS currently provides **L2 research guidance and building blocks for L3 through
 | **Budget and data-use gates** | Reference kernel | Reserve reference-run allocations in SQLite transactions, track data exposure, and bind plans, code, data, and verifier versions to execution receipts. |
 | **Reuse of existing work** | Scalar cache + history bridge | Cache scalar controls by control AST and dataset SHA-256; retrieve relevant research history through the installed Obelisk CLI. |
 | **Feedback for the next proposal** | Advisor + judgment rules | Advisor supplies gate-error hints, loss and log diagnostics; scoped judgment rules help review subsequent proposals. |
+
+## Formal verification and rule obligations
+
+The architecture separates declared propositions, backend search, independent checking, and scientific assessment. Public `main` has the scalar AST/SymPy path. [PR #2](https://github.com/kongtou20070406/RDS/pull/2), at `995e8eb`, adds a declarative registry, independently checked mathematical certificates and a narrow native Lean4 interface; it is open and unmerged. The older experimental `LeanFormalEngine`/Tactic dispatcher is a separate prototype: `RULE_ALIGNED` checks metadata, and tactic success labels do not establish a proof of the declared goal. See [verification scope](docs/formal-verification.md).
+
+Each of the 23 scoped judgment nodes now has explicit **preconditions, a falsifier and a feasible-domain expression**. The table maps obligations rather than claiming 23 proved causal theorems. Full variable definitions, required evidence and candidate tactic mappings are in the [rule obligation guide](docs/rule-obligations.md); none of the added metadata is currently enforced by the dispatcher.
+
+<details>
+<summary>View all 23 rule obligations</summary>
+
+| Rule ID | Preconditions and feasible-domain obligation | Falsifier |
+| --- | --- | --- |
+| [locked-test-selection](docs/rule-obligations.md#locked-test-selection) | selection frozen; clean confirmation cohort; `clean(T) and selection_data intersect T = empty` | confirmation reused or useful gain unsupported |
+| [deployment-information](docs/rule-obligations.md#deployment-information) | audited deployment input lineage; `inputs(model) subseteq I_deploy` | target-only input required |
+| [preserve-quantifiers](docs/rule-obligations.md#preserve-quantifiers) | explicit quantifiers and policy class; `fixed-action failure does_not_imply all-policy failure` | quantifier scope is widened |
+| [computation-graph-identity](docs/rule-obligations.md#computation-graph-identity) | bound tensor graph and checkpoint; `pool(z1)=pool(z2) => h(pool(z1))=h(pool(z2))` | claimed identity is erased |
+| [proxy-primary-bridge](docs/rule-obligations.md#proxy-primary-bridge) | matched route intervention; `Delta_task and Delta_route are separate` | gain survives route removal |
+| [short-budget-fidelity](docs/rule-obligations.md#short-budget-fidelity) | matched short/full endpoint protocols; `early_rank versus full_rank on measured candidates` | ranks reverse |
+| [method-recipe-variance](docs/rule-obligations.md#method-recipe-variance) | existing records and a matched same-seed contrast; extra seeds only after observed decision-relevant instability; `Delta_i=s*(M_T(seed_i)-M_C(seed_i))` | recipe or implementation explains gain |
+| [realized-boundary-not-knob](docs/rule-obligations.md#realized-boundary-not-knob) | finite S>=0; rho>=0; exact modeled equation; `m=rho*S/(1+S); rho>1: m>=1 iff S>=1/(rho-1)` | no realized crossing or source differs |
+| [depth-versus-trajectory](docs/rule-obligations.md#depth-versus-trajectory) | one checkpoint and the same examples; `M_k=M(F_theta_star^k(X),Y)` | different checkpoints replace a trajectory |
+| [reuse-baseline-control](docs/rule-obligations.md#reuse-baseline-control) | successful receipt and full control identity; `H(AST_new)=H(AST_receipt); H(data_new)=H(data_receipt)` | result-affecting binding drifts |
+| [trained-anchor-not-method-win](docs/rule-obligations.md#trained-anchor-not-method-win) | measured anchor plus matched control; `feasible(anchor) does_not_imply Delta>delta_min` | only the anchor completed |
+| [resource-canary-before-campaign](docs/rule-obligations.md#resource-canary-before-campaign) | measured run configuration and overhead; `memory_peak<=limit; makespan+overhead<=B_remaining` | canary invalidates feasibility |
+| [bundled-change-needs-component-control](docs/rule-obligations.md#bundled-change-needs-component-control) | component intervention manifest; `changed_factors={target_component}` | multiple effective components change |
+| [ablation-is-intervention-specific](docs/rule-obligations.md#ablation-is-intervention-specific) | precise executed ablation manifest; `manifest_executed=manifest_declared` | actual arm differs or scope is widened |
+| [transfer-requires-matched-protocol](docs/rule-obligations.md#transfer-requires-matched-protocol) | matched target-task comparison; `Delta_target=s*(M_target(T)-M_target(C))` | matched target gain disappears |
+| [protocol-versioned-evidence](docs/rule-obligations.md#protocol-versioned-evidence) | artifact and protocol lineage; `signatures match except the declared intervention` | historical rows cannot be reconciled |
+| [normalization-removal-confound](docs/rule-obligations.md#normalization-removal-confound) | normalization retained; initial operator matched; `rho*raw/(1+S) versus raw changes the equation` | amplitude or optimization remains confounded |
+| [executed-manipulation-validity](docs/rule-obligations.md#executed-manipulation-validity) | source-derived domain plus observed property; `exists x in D with the declared manipulation` | no realized manipulation |
+| [learned-support-not-allowed-support](docs/rule-obligations.md#learned-support-not-allowed-support) | fitted operator and matched learned/fixed arms; `realized_support differs from allowed_support` | fitted operators never cross |
+| [hard-budget-reallocation](docs/rule-obligations.md#hard-budget-reallocation) | spent/reserved work; protected confirmation floor; `spent+reserved+new+overhead<=total` | replacement exceeds authorized cap |
+| [adaptive-test-reuse](docs/rule-obligations.md#adaptive-test-reuse) | exposure lineage and frozen selection; `used_for_choice(T) => exploratory(T)` | exposed data called independent |
+| [implementation-equivalence-before-speedup](docs/rule-obligations.md#implementation-equivalence-before-speedup) | declared inputs, norms and tolerances; `forward_error<=eps_f; gradient_error<=eps_g` | discrepancies exceed tolerance |
+| [source-aware-evaluator-check](docs/rule-obligations.md#source-aware-evaluator-check) | source-aware audit without later sealed outcomes; `judge_score does_not_imply source_feasibility` | claimed distinction is unattainable |
+
+</details>
+
+[Documentation](docs/README.md) includes the L1–L4 experiment flow, bilingual terminology and contributor guidance. [Lean4/mathlib compatibility](docs/lean-integration.md) serves suitable mathematical subproblems within RDS's human research-assistance loop. PR #2 reuses the native Lean kernel for closed rational obligations; broader mathlib model translation remains planned. C++ is an optional adapter optimization after profiling.
 
 ## Workflow
 
@@ -151,6 +224,8 @@ The [log summary helper](scripts/rds_compress.py) extracts loss trends, throughp
 
 These diagnostics use fixed thresholds, string classification, and suggestion templates. Treat them as hypotheses to check against raw curves, code, and discriminating experiments. Advisor is separate from the symbolic probe that performs declared scalar threshold checks.
 
+Advisor's development goal is to use real observations, the judgment graph and scoped rules to generate and combine candidate actions that distinguish competing explanations and can change the next decision, then filter them by budget and cost. The current `main` implementation remains heuristic; decision quality requires independent evaluation. Reuse existing evidence and matched same-seed controls first. Additional seeds are considered only when observed instability matters to the decision and the extra budget is authorized.
+
 ## Resume research with Obelisk
 
 When a missing prior decision, rejected route, or experiment setting could change the next step, RDS retrieves relevant history through the installed Obelisk public CLI. Source identities and pagination are retained; current files and instructions take priority.
@@ -186,7 +261,7 @@ Unit tests check kernel behavior; historical replays check packet integrity and 
 
 Historical training scores are session reports, and automated replays use synthetic scalar inputs. These cases have informed skill development. Passing regression checks does not establish autonomous research quality or replace real GPU experiments and independent prospective evaluation. See the [benchmark protocol](benchmark/README.md) for evaluation and information-separation conventions.
 
-## Current scope
+## Current scope on public main
 
 | Component | Supported scope |
 | --- | --- |
@@ -212,6 +287,8 @@ The ledger accounts for allocated worker runtime; setup, validation, and control
 
 | Start here | What it covers |
 | --- | --- |
+| [Documentation index](docs/README.md) | English/Chinese guides for the workflow, verification, all 23 rule obligations and terminology. |
+| [Tuning principle obligations](references/scientific_tuning_principles.json) | Scoped diagnostic hypotheses, formal subclaims and empirical checks. |
 | [SKILL.md](SKILL.md) | Research collaboration, direction selection, and evidence interpretation. |
 | [Executable contract](references/l3-state-machine.md) | CLI commands, state, data use, formal declarations, and trust boundaries. |
 | [Judgment rules](references/judgment-graph.yaml) | Scoped decision rules with competing explanations and falsifiers. |
@@ -220,6 +297,17 @@ The ledger accounts for allocated worker runtime; setup, validation, and control
 | [Reference example](examples/reference-run/) | Runnable contract, hypothesis, plan, and scalar dataset. |
 | [Benchmark protocol](benchmark/README.md) | Decision packets, regression checks, and prospective response evaluation. |
 | [Kernel tests](tests/test_rds_l3.py) | Execution, budgets, data exposure, formal routing, and receipt regressions. |
+
+## Roadmap and acceptance criteria
+
+These are priorities, not completed capabilities or promised dates.
+
+| Priority | Next milestone | Evidence required |
+| --- | --- | --- |
+| **Advisor** | Generate discriminating candidates from observations, graph dependencies and scoped rules; filter by total cost. | Public cases with provenance, competitive explanations and decision consequences; compare recommendation quality and cost. |
+| **Actual training observations** | Bind supported trainer configurations and logs to intervention checks and receipts. | Reproducible runs showing that the intended intervention occurred; explicit unsupported cases. |
+| **Rule regressions and RSI** | Evaluate rule/policy changes and retain negative results. | Held-out cases and prospective whole-trajectory comparisons at equal total budgets. Historical replay alone is insufficient. |
+| **Lean collaboration** | Extend the narrow reviewed native interface to suitable mathlib model obligations. | Expected-theorem binding, axiom audit, independent checking and separately verified model correspondence. |
 
 ## Contribute
 
@@ -243,4 +331,4 @@ RDS branding and copy are original. These links identify a dependency and design
 
 ## Search terms
 
-Research direction selection · AI-assisted research · experiment design · hypothesis testing · reproducible research · agent skills · Codex · CLI · Obelisk.
+Research direction selection · AI-assisted research · experiment design · hypothesis testing · causal inference · reproducible research · Advisor · proof obligations · Lean4 interoperability · agent skills · Codex · CLI · Obelisk.

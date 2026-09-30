@@ -12,7 +12,7 @@
 [![Checks](https://github.com/kongtou20070406/RDS/actions/workflows/test.yml/badge.svg)](https://github.com/kongtou20070406/RDS/actions/workflows/test.yml)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white&style=flat-square)
 ![Agent Skill](https://img.shields.io/badge/Codex-Agent_Skill-111827?style=flat-square)
-[![Contribute](https://img.shields.io/badge/Contributions-Welcome-0F766E?style=flat-square)](CONTRIBUTING.md)
+[![Contribute](https://img.shields.io/badge/Contributions-Welcome-0F766E?style=flat-square)](CONTRIBUTING.zh-CN.md)
 [![Stars](https://img.shields.io/github/stars/kongtou20070406/RDS?style=flat-square)](https://github.com/kongtou20070406/RDS/stargazers)
 
 [English](README.md) · **简体中文** · [日本語](README.ja-JP.md)
@@ -29,11 +29,44 @@ RDS 是面向 Codex 的科研协作技能，配有可执行的本地参考内核
 
 ## 我们的目标
 
+RDS 的主体是自动化辅助人类科研：调查证据、生成与筛选实验、安排执行、评估结果、复盘接续。研究者的目标与决定始终居于中心；Lean 兼容服务于这条流程中适合数学检查的子问题。
+
 帮助研究者选择值得付出完整成本的下一次实验，通过可检查的过程完成它，并在工作中断后依据证据继续推进。长期目标是形成能够通过经验证的反馈改进决策策略的研究循环，由研究者掌握目标、资源与解释权。
 
 每个实验提案都应回答三个问题：**它区分哪些竞争解释，怎样保证比较公平且预算可行，以及不同结果会改变什么决定？**
 
+## 给研究者和研究者的 AI
+
+1. 按下文安装 [Skill](SKILL.md)，在 AI 助手中打开你的科研项目。
+2. 说明研究问题、指标、当前基线和可投入预算，并指出代码、日志与已有结果。想法尚不明确也可以开始。
+3. 审阅推荐实验能区分什么、完整成本是多少；执行后继续追问证据支持哪些结论，以及下一步决定如何改变。
+
+可以将这段起始指令交给 AI：
+
+```text
+请用 RDS 协助这个科研项目，先恢复已有证据和决策。
+明确我的目标、指标、基线与预算，复用有效对照和日志。
+推荐能区分竞争解释的下一步实验。
+说明预期观测、可证伪条件、完整成本及不同结果对应的决定。
+分别记录数学检查、真实执行和机制证据。
+不要默认追加 seed；只有已观察的不稳定性影响决定且追加预算获授权时才考虑。
+```
+
+## 五个关键组件
+
+| 组件 | 职责 |
+| --- | --- |
+| **① 科研规程 Skill** | 明确目标、组织假说、选择对照、解释证据的研究规程。 |
+| **② 执行与验收内核** | 管理运行、检查预算与证据、收集收据、调用支持的数学检查。 |
+| **③ 研究状态与记忆** | 通过 `.rds/`、Obelisk 与判断图保存目标、配置、结果及失败条件。 |
+| **④ Advisor 建议引擎** | 根据观测与有适用范围的规则给出诊断和候选行动，发展证据驱动的候选生成。 |
+| **⑤ RSI 自改进** | 提出并评测 RDS 自身的规则和策略修改，只保留有证据支持的改进。 |
+
+前三个支撑基础科研闭环，Advisor 与 RSI 提供增强。记忆为 Advisor 提供依据，内核检查选定行动；这是功能职责，可以共享本地实现。L1–L4 是工作分级，不另算组件。
+
 ## L1–L4
+
+RDS 支持普通对话、单模型协作，按职责分为五个组件：**科研规程 Skill、执行与验收内核、研究状态与记忆、Advisor 建议引擎、RSI 自改进**，即三个基础组件加两个增强组件。L1–L4 描述科研工作流。科研流程是：明确目标 → 选择实验 → 检查设计 → 管理过程 → 判断结果 → 积累接续。每轮应说清**知道什么、不知道什么、下一步做什么、为什么值得做**。当前实际执行范围见下文。
 
 这是 RDS 用于说明发展路线的工作分级，不是行业通用标准，也不是对模型科研能力的评分。
 
@@ -56,6 +89,45 @@ RDS 当前提供的是 **L2 科研建议，以及通过标量参考内核实现�
 | **约束预算与数据使用** | 参考内核 | 以 SQLite 事务预留参考运行预算，记录数据暴露，并将计划、代码、数据和验证器版本绑定到执行收据。 |
 | **复用已有结果** | 标量缓存与历史桥接 | 参考内核按对照 AST 与数据 SHA-256 缓存标量对照结果；研究接续按需检索已有 Obelisk 历史。 |
 | **将反馈转成修订线索** | Advisor 与判断规则 | Advisor 提供门禁错误提示、损失与日志诊断；带适用范围的判断规则帮助审阅下一轮提案。 |
+
+## 形式化验证与规则义务
+
+架构将显式命题、后端搜索、独立检查与科学评估分开。公开 `main` 使用标量 AST/SymPy 路径；[PR #2](https://github.com/kongtou20070406/RDS/pull/2) 的 `995e8eb` 增加声明式注册表、可独立复核的数学证书及窄范围原生 Lean4 接口，目前开放且未合并。旧实验性 `LeanFormalEngine`／Tactic 分派器是另一条原型路径：`RULE_ALIGNED` 检查元数据，tactic 成功标识不能证明声明目标。详见[验证范围](docs/formal-verification.zh-CN.md)。
+
+23 个有范围的判断节点现已分别记录**前置门禁、可证伪判据与可行域表达式**。下表映射的是义务，并不声称已经证明 23 条因果定理。完整变量、证据与候选 tactic 映射见[规则义务指南](docs/rule-obligations.zh-CN.md)；当前分派器尚未强制检查新增元数据。
+
+<details>
+<summary>展开全部 23 个规则义务</summary>
+
+| 规则 ID | 前置条件与可行域义务 | 证伪判据 |
+| --- | --- | --- |
+| [locked-test-selection](docs/rule-obligations.zh-CN.md#locked-test-selection) | 冻结选择与干净确认数据; `clean(T) and selection_data intersect T = empty` | 确认数据被复用或收益证据不足 |
+| [deployment-information](docs/rule-obligations.zh-CN.md#deployment-information) | 核对部署输入来源; `inputs(model) subseteq I_deploy` | 需要目标专属输入 |
+| [preserve-quantifiers](docs/rule-obligations.zh-CN.md#preserve-quantifiers) | 明确量词与策略类; `fixed-action failure does_not_imply all-policy failure` | 错误扩大否定范围 |
+| [computation-graph-identity](docs/rule-obligations.zh-CN.md#computation-graph-identity) | 绑定张量图与检查点; `pool(z1)=pool(z2) => h(pool(z1))=h(pool(z2))` | 声称的信息身份被抹去 |
+| [proxy-primary-bridge](docs/rule-obligations.zh-CN.md#proxy-primary-bridge) | 匹配路线干预; `Delta_task and Delta_route are separate` | 删除路线后收益仍在 |
+| [short-budget-fidelity](docs/rule-obligations.zh-CN.md#short-budget-fidelity) | 匹配短跑与完整终点协议; `early_rank versus full_rank on measured candidates` | 排序反转 |
+| [method-recipe-variance](docs/rule-obligations.zh-CN.md#method-recipe-variance) | 优先已有记录与同 seed 匹配对照；仅已观察到影响决策的不稳定时追加 seed; `Delta_i=s*(M_T(seed_i)-M_C(seed_i))` | 收益由配方或实现解释 |
+| [realized-boundary-not-knob](docs/rule-obligations.zh-CN.md#realized-boundary-not-knob) | 有限 S>=0、rho>=0 与精确模型方程; `m=rho*S/(1+S); rho>1: m>=1 iff S>=1/(rho-1)` | 没有实际跨越或源码方程不同 |
+| [depth-versus-trajectory](docs/rule-obligations.zh-CN.md#depth-versus-trajectory) | 同一检查点与同一批样本; `M_k=M(F_theta_star^k(X),Y)` | 用不同检查点代替轨迹 |
+| [reuse-baseline-control](docs/rule-obligations.zh-CN.md#reuse-baseline-control) | 成功收据与完整对照身份; `H(AST_new)=H(AST_receipt); H(data_new)=H(data_receipt)` | 影响结果的绑定发生变化 |
+| [trained-anchor-not-method-win](docs/rule-obligations.zh-CN.md#trained-anchor-not-method-win) | 实测锚点与匹配对照; `feasible(anchor) does_not_imply Delta>delta_min` | 只有锚点完成 |
+| [resource-canary-before-campaign](docs/rule-obligations.zh-CN.md#resource-canary-before-campaign) | 实测运行配置与开销; `memory_peak<=limit; makespan+overhead<=B_remaining` | 探针推翻可行性估计 |
+| [bundled-change-needs-component-control](docs/rule-obligations.zh-CN.md#bundled-change-needs-component-control) | 分量干预清单; `changed_factors={target_component}` | 多个有效分量同时变化 |
+| [ablation-is-intervention-specific](docs/rule-obligations.zh-CN.md#ablation-is-intervention-specific) | 准确的执行消融清单; `manifest_executed=manifest_declared` | 实际干预不同或结论扩大 |
+| [transfer-requires-matched-protocol](docs/rule-obligations.zh-CN.md#transfer-requires-matched-protocol) | 匹配目标任务比较; `Delta_target=s*(M_target(T)-M_target(C))` | 匹配后的目标任务收益消失 |
+| [protocol-versioned-evidence](docs/rule-obligations.zh-CN.md#protocol-versioned-evidence) | 产物与协议来源; `signatures match except the declared intervention` | 历史结果无法匹配比较 |
+| [normalization-removal-confound](docs/rule-obligations.zh-CN.md#normalization-removal-confound) | 保留归一化并匹配初始算子; `rho*raw/(1+S) versus raw changes the equation` | 幅度或优化仍与边界混杂 |
+| [executed-manipulation-validity](docs/rule-obligations.zh-CN.md#executed-manipulation-validity) | 源码可行域与实际性质观测; `exists x in D with the declared manipulation` | 实际干预未成立 |
+| [learned-support-not-allowed-support](docs/rule-obligations.zh-CN.md#learned-support-not-allowed-support) | 拟合算子与匹配的学习/固定对照; `realized_support differs from allowed_support` | 拟合算子始终未跨界 |
+| [hard-budget-reallocation](docs/rule-obligations.zh-CN.md#hard-budget-reallocation) | 核算已花费与预留并保护确认底线; `spent+reserved+new+overhead<=total` | 替代方案超过授权上限 |
+| [adaptive-test-reuse](docs/rule-obligations.zh-CN.md#adaptive-test-reuse) | 记录暴露来源并冻结选择; `used_for_choice(T) => exploratory(T)` | 暴露数据被称为独立 |
+| [implementation-equivalence-before-speedup](docs/rule-obligations.zh-CN.md#implementation-equivalence-before-speedup) | 声明输入、范数与容差; `forward_error<=eps_f; gradient_error<=eps_g` | 输出或梯度差异超出容差 |
+| [source-aware-evaluator-check](docs/rule-obligations.zh-CN.md#source-aware-evaluator-check) | 不看密封后验结果的源码审计; `judge_score does_not_imply source_feasibility` | 声称的区分无法实现 |
+
+</details>
+
+[文档导航](docs/README.zh-CN.md)包含 L1–L4 实验流、双语术语和贡献说明。[Lean4/mathlib 兼容](docs/lean-integration.zh-CN.md)服务于 RDS 自动化辅助人类科研循环中的合适数学子问题。PR #2 已在闭合有理数义务上复用原生 Lean 内核；通用 mathlib 模型翻译仍待实现。C++ 仅用于测量后确认的适配性能瓶颈。
 
 ## 工作流程
 
@@ -151,6 +223,8 @@ python -B scripts/rds_cli.py --root $RdsDemo advise --train-loss 0.9 --val-loss 
 
 这些诊断采用固定阈值、字符串分类与建议模板，应作为待验证的线索，结合原始曲线、代码和区分性实验审阅。Advisor 与负责正式标量阈值检查的符号探针是不同模块。
 
+Advisor 的发展重点是沿真实观测、判断图和有适用范围的规则，生成并组合能够区分竞争解释、改变下一步决定的候选行动，再按预算与成本筛选。当前 `main` 的实现仍是启发式，建议质量需要独立评估。先复用已有证据和同 seed 的匹配对照；仅当已观察到的不稳定性影响决定且追加预算获授权时，才考虑更多 seed。
+
 ## 历史接续：复用 Obelisk
 
 当旧决定、已否路线或实验设置可能改变下一步，而当前上下文缺失时，RDS 通过已安装的 Obelisk 公共 CLI 检索相关历史。它保留来源身份与分页信息，当前文件和当前指令优先。
@@ -186,7 +260,7 @@ python -B benchmark/redteam/runner.py
 
 历史训练分数属于会话报告，自动回放使用合成标量输入。这些案例已参与技能开发，通过回归检查不能证明自主科研质量，也不能替代真实 GPU 实验或独立前瞻评估。评测方法与信息隔离约定见 [benchmark/README.md](benchmark/README.md)。
 
-## 当前能力与边界
+## 公开 main 的能力与边界
 
 | 部分 | 当前范围 |
 | --- | --- |
@@ -212,6 +286,8 @@ python -B benchmark/redteam/runner.py
 
 | 入口 | 内容 |
 | --- | --- |
+| [中英文文档导航](docs/README.zh-CN.md) | 科研工作流、形式化验证、23 节点义务与统一术语。 |
+| [调参原则与义务](references/scientific_tuning_principles.json) | 有范围的诊断假说、形式子命题与实证检查。 |
 | [SKILL.md](SKILL.md) | 科研协作、方向选择与证据解释协议。 |
 | [执行契约](references/l3-state-machine.md) | CLI 命令、状态、数据使用、形式声明和信任边界。 |
 | [判断规则库](references/judgment-graph.yaml) | 带适用范围、竞争解释与证伪条件的决策规则。 |
@@ -221,9 +297,20 @@ python -B benchmark/redteam/runner.py
 | [历史评测协议](benchmark/README.md) | 决策包、回归检查与前瞻响应评估方法。 |
 | [内核测试](tests/test_rds_l3.py) | 执行、预算、数据暴露、形式路由与收据回归。 |
 
+## 未来计划与验收依据
+
+以下是优先顺序，不代表已经完成，也不承诺发布日期。
+
+| 优先项 | 下一里程碑 | 所需证据 |
+| --- | --- | --- |
+| **Advisor** | 沿观测、判断依赖与有适用范围的规则生成区分性候选，再按总成本筛选。 | 可公开且有来源的案例、竞争解释及决策后果，比较建议质量与成本。 |
+| **真实训练观测** | 将支持的训练器配置和日志绑定到干预检查与收据。 | 可复现运行证明预定干预实际发生，明确不支持情况。 |
+| **规则回归与 RSI** | 评测规则／策略修改并保留负结果。 | 独立保留案例与等总预算的前瞻研究轨迹比较；历史回放本身不足。 |
+| **Lean 协作** | 将审阅中的窄范围原生接口扩展到合适的 mathlib 模型义务。 | 期望定理绑定、公理审计、独立复核，以及单独验证的模型对应关系。 |
+
 ## 参与贡献
 
-第一次参与可以从修正文档、改进翻译或增加最小可复现示例开始。完整的 **Fork → 分支 → 验证 → PR** 流程与检查命令见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+第一次参与可以从修正文档、改进翻译或增加最小可复现示例开始。完整的 **Fork → 分支 → 验证 → PR** 流程与检查命令见[中文贡献指南](CONTRIBUTING.zh-CN.md)。
 
 | 你想贡献什么 | 建议从哪里开始 |
 | --- | --- |
@@ -243,4 +330,4 @@ python -B benchmark/redteam/runner.py
 
 ## 检索关键词
 
-科研方向选择 · 人机科研协作 · 实验设计 · 假说检验 · 可复现研究 · Agent Skills · Codex · CLI · Obelisk。英文检索词：research direction selection、AI-assisted research、experiment design、hypothesis testing、reproducible research。
+科研方向选择 · 人机科研协作 · 实验设计 · 假说检验 · 因果推断 · 可复现研究 · Advisor · 证明义务 · Lean4 兼容 · Agent Skills · Codex · CLI · Obelisk。英文检索词：research direction selection、AI-assisted research、experiment design、hypothesis testing、causal inference、proof obligations、Lean4 interoperability、reproducible research。
