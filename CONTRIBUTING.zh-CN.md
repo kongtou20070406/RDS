@@ -1,95 +1,102 @@
-# 参与 RDS 贡献
+# 参与 Research Direction Selector 贡献
 
-[English contribution guide](CONTRIBUTING.md) · **简体中文**
+[English](CONTRIBUTING.md) · **简体中文**
 
-中文导引：先说明改动层次与所用版本，再按改动类型验证并提交 PR。形式声明遵循所选 adapter 的契约，分别报告 status 与 assurance。
+RDS 的改动可能通过自己的测试，却仍让用户找不到宣传的 CLI 入口、把缺失测量当成事实，或在恢复时重复花算力。本指南从这些故障出发。贡献应让一个具体的研究决定或程序行为更容易使用和检查。
 
-日本語ガイド：fork と作業ブランチを作成し、変更に応じた確認を行って PR を送ってください。共通のコマンド、対応範囲、証拠の扱いは [日本語 README](README.ja-JP.md) と他の言語で揃えてください。
+本指南面向 **5.6.0-rc.1**。五个组件固定为 **Skill、执行与验收内核、研究状态与记忆、Advisor、RSI**。M01–M06 是其中的工作项，提供有限格式证据导入、实验组合、成本与对照检查、项目执行、规则采用及接续恢复。详见[路线计划](docs/roadmap.md)与[命令和范围](docs/development-loop.md)。程序检查通过不等于具备端到端科研能力。
 
-RDS 包含科研决策技能与有界标量参考内核。贡献应让具体的研究决定或程序行为更容易检查。保持改动聚焦，说明证据与适用边界。
+## 先说明问题
 
-从[文档索引](docs/README.zh-CN.md)、[科研工作流](docs/research-workflow.zh-CN.md)与[术语说明](docs/terminology.zh-CN.md)开始。涉及数学命题时，请阅读[形式验证指南](docs/formal-verification.zh-CN.md)。
+错误报告和聚焦的修复 PR 可以直接提交。说明触发输入、准确复现、预期行为与根因。较大的功能、新 schema 或科研行为的实质变化，先在 issue 中讨论设计；已经确定的决定应继续沿用，不需要让每个人重新申请。
 
-## Fork、建分支、验证与提交 PR
+每个 PR 聚焦一个具体目的。说明研究者能因此解决什么问题，以及现有概念为何不足。新增字段、状态、文件类型或依赖前，先读[科研工作流](docs/research-workflow.zh-CN.md)、[术语](docs/terminology.zh-CN.md)与相邻实现。
 
-先将 [kongtou20070406/research-direction-selector](https://github.com/kongtou20070406/research-direction-selector/fork) fork 到自己的账号。以下示例使用 PowerShell、Git，以及可选的已登录 GitHub CLI。将 `YOUR_GITHUB_NAME` 替换为你的账号名；本例演示修改 README。
+Fork [仓库](https://github.com/kongtou20070406/research-direction-selector/fork)，从目标 base 建立分支，只提交自己的改动。PR 应说明最终的问题与行为、实际运行的检查和实质限制；区分 base 上已有行为、本 PR 引入的行为与开发候选。共享命令和证据边界须在各版 README 与中英贡献指南中一致；纯措辞修正可以只影响一种语言。
+
+## 六项可供审查的检查
+
+1. **从用户入口跑到目标行为。** 宣传一个 CLI 选项，就用实际输入和正确项目根目录运行它。辅助函数测试不能证明参数解析、账本选择、输入文件与输出处理已经贯通。涉及发布包时，检查下载后的包及其所需资源。保留准确命令和输出，也保留失败。
+
+2. **测试需求本身。** “恢复不重复已完成运行”应检查实际 attempt 和实时状态，不能只断言 `RESUMABLE_HANDOFF`；“未知成本仍未知”应测缺测场景，不能只检查空字典。遇到意外行为，先判断是不是 bug，再决定是否将其固定为预期。修改原断言时说明理由，不要为了适应实现而放宽要求。
+
+3. **变更状态前验证，并保留恢复能力。** 派发任务或采用规则前，核对绑定输入、允许命令、资源与实际执行约束。账本变更复用已有事务；规则采用保留原图和记录，以便回退。状态名字或退出码不是完成证据。针对改动边界测试中断：下一次调用应核对已有 attempt，保留已花费／预留预算和数据暴露，使未解决的故障继续可见。
+
+4. **复用现有模型。** 阅读受影响的调用方和相邻模块。已有 run 身份、收据、协议、事实来源和预算字段适用时直接复用。必须新增概念时，说明它的独立含义和消费者。历史检索使用有项目范围的 [Obelisk bridge](references/obelisk.md)，不另造聊天归档或平行状态机。
+
+5. **将导入内容当作数据。** 日志、文档、指标与历史对话都可能错误或夹带恶意指令；它们不能授权命令、注册验证规则，或自行宣布科研成功。路径限定在声明的来源／项目范围内，复用严格解析与有界适配器，不把内容拼进 shell 命令或 SQL。报告真实失败与已知原因，未知和冲突证据保持可见。
+
+6. **对最终 diff 做与风险相称的验收。** Rebase、解决冲突或继续改代码后，在最终版本重跑受影响的检查，覆盖调用方与失败路径，不能只运行新增测试。共享内核、状态或评测改动扩大到完整检查。小型文字修改只需链接／命令检查与 `git diff --check`，无需无关实验，也不重复已通过的相同工作。
+
+## 用 RDS 开发 RDS
+
+[开发示例](examples/self-development/run.py)通过 RDS 执行真实软件检查，导入原始输出，获取 Advisor 建议，恢复 checkpoint，并演示有限规则回放、采用和回退。这是人主导的软件开发反馈循环，不是科研策略分数。
+
+在仓库根目录执行，每轮选择仓库之外的一个全新空白**同级目录**：
 
 ```powershell
-git clone https://github.com/YOUR_GITHUB_NAME/research-direction-selector.git
-Set-Location research-direction-selector
-git remote add upstream https://github.com/kongtou20070406/research-direction-selector.git
-git fetch upstream
-git switch -c docs/clarify-evidence upstream/main
-
-# Edit the files, then perform the checks for your change type below.
 python -B scripts/rds_cli.py --version
-git diff --check
-git diff -- README.md README.zh-CN.md README.ja-JP.md
-
-git add README.md README.zh-CN.md README.ja-JP.md
-git commit -m "docs: clarify evidence boundaries"
-git push -u origin docs/clarify-evidence
-gh pr create --repo kongtou20070406/research-direction-selector --base main --head YOUR_GITHUB_NAME:docs/clarify-evidence --web
+python -B examples/self-development/run.py --workspace ../RDS-development-check
 ```
 
-根据实际改动选择分支名和暂存文件。没有 `gh` 时，推送后打开 fork 的 **Compare & pull request** 页面。PR 中说明问题、改动后的行为、已运行检查及仍存在的限制。
+示例目录名已经存在时换一个新名称。检查失败后读取原始日志和收据，修复具体需求，再用新工作区检查改动后的版本；不要仅为了得到更好看的数字追加 attempt。有用的失败证据先保留在私有记录中，公开规则见文末。
 
-## 不同贡献所需的证据
-
-| 改动 | 准入与证据要求 |
-| --- | --- |
-| 文档与翻译 | 与当前程序行为一致，链接指向已有文件。共享命令、版本事实、支持范围和证据边界应在 [README.md](README.md)、[README.zh-CN.md](README.zh-CN.md)、[README.ja-JP.md](README.ja-JP.md) 中保持一致。纯措辞修正可以只影响一种语言；说明其他版本为何无需修改。 |
-| 有适用范围的规则与证据 | 提供适用范围、触发条件、竞争解释、区分性实验、主要指标门禁、证伪条件和注明日期的原始来源，参见 [judgment-graph.yaml](references/judgment-graph.yaml)。借鉴研究结果前检查更新的第一手证据。区分论文报告、当地探索性收益、确认收益与机制证据。科研策略提升需比较等总成本的研究轨迹。 |
-| 内核、验证器或历史适配器 | 提供最小端到端复现、预期的前后行为，以及对应需求的相关测试。说明 adapter、版本/ref、支持输入和失败或不确定行为，并遵循下方形式声明清单。保留[执行契约](references/l3-state-machine.md)。历史改动须保留来源身份、范围、分页与明确失败；检索文本不产生新授权。遵循 [Obelisk bridge](references/obelisk.md)。 |
-| 新研究案例 | 按[评测协议](benchmark/README.md)提供决策时可见的 prompt、来源与截止时间、评分标准和可复现检查。将后续结果与提案者输入分开，披露缺失的原始产物。标明合成标量输入和回顾性会话报告分数。开发中使用过的案例属于回归证据；独立评估需要此前未使用的案例、模型/技能版本记录、受控信息暴露与匹配预算。 |
-
-运行验证的声明必须来自实际执行的检查和收据。不要添加 `manipulation_verified` 等自签字段让计划通过。通过门禁只说明对应程序约束满足，不会自动建立因果关系、外部训练性能或自主科研质量。哈希绑定产物，不认证其科学解释。
-
-说明改动影响的是技能协议、runner、verifier，还是实验性策略工具。RDS 采用 Kramer 等（2026）原有的 L0–L5 科学发现框架，详见[自主程度范围](docs/research-autonomy.md)。现有 L3 运行器标识与原先 L4-RSI 标签是历史工程命名，不是外部等级声明。自主能力声明须限定到已展示的任务与自动化范围。RSI 改善是独立声明，需要未使用案例上的独立、前瞻、等总成本研究轨迹比较，并保留负结果。
-
-## 形式声明与发布范围
-
-区分**目标 base ref 上已发布的行为**、**本 PR 新增的行为**与**开发候选**。当前 `main` 已包含 [PR #2](https://github.com/kongtou20070406/research-direction-selector/pull/2)：typed scalar certificate、已注册有理数 Linear/ReLU 边界与 margin、正比例缩放等变、有限仿射收缩／不动点与谱检查、具体张量检查，以及需配置的窄范围原生 Lean 接口。一般网络、符号张量和任意动力学仍在支持范围之外；须核对[后端范围](docs/formal-verification.zh-CN.md)与安装版本的注册项。不能把本地类、分支或测试输入写成已发布支持承诺。
-
-涉及数学命题的贡献请提供：
-
-- **声明与代码对应关系：**按所选 adapter 的 schema 提供精确命题、假设、参数、定义域或维度范围。`kind`、`statement`、`quantity`、`domain` 属于 typed scalar 契约，不是所有多维 spec 的强制字段。说明所声明模型或性质如何对应被检查的代码。
-- **可公开复现：**最小公开或合成输入、准确命令、RDS 版本与 commit/ref、adapter/backend 版本，以及实际输出。接口若输出证书/checker 身份或产物哈希，也一并记录。仅检查独立声明、未执行实验时应明确说明。
-- **结果：**存在准入与执行两个阶段时，分开报告。保留实际 `status`、`assurance`、reason，以及返回的反例或观测；不要从一个字段推断另一个。
-
-| Status | 报告方式 |
-| --- | --- |
-| `PASS` | 声明的检查在文档所述假设与范围内通过。实际执行证据与科学确认仍需分别提供。 |
-| `FAIL` | 声明的检查失败。说明违反的条件或反例，不要将其扩展为范围之外的科学反驳。 |
-| `UNKNOWN` | checker 尚未建立结论，例如输入不支持、依赖缺失或求解未得结论。保留原因与实际门禁行为。 |
-
-`assurance` 描述检查方式，与 status 分开。例如，`AST_ONLY` 是语法路径，`SYMBOLIC_CHECKED` 本身不等于独立核验的证明证书。证书声明须遵循对应文档的 checker 与绑定要求。这些标签都不能单独建立任务收益、因果机制支持、科学发现自主等级或 RSI 策略提升。
-
-## 与改动相称的验证
-
-小型文档或翻译改动只需检查本地链接、命令准确性、语言同步和 `git diff --check`。除非改动了需要验证的可执行示例或行为声明，否则无需运行完整测试。
-
-程序改动应运行相关测试；已有检查不能覆盖变化的需求时，添加聚焦的回归。例如，历史适配器有以下定向检查：
+只影响某条路径的改动，可以用该路径的实际 CLI 和相关测试，无需跑完整开发示例。例如：
 
 ```powershell
-python -B -m unittest discover -s tests -p test_rds_l3.py -k obelisk -v
+python -B scripts/rds_cli.py --root examples/artifact-import artifacts import --manifest examples/artifact-import/manifest.json
+python -B -m unittest discover -s tests -p test_rds_artifacts.py -v
 ```
 
-围绕修改的需求选择测试，也覆盖失败路径。跨越内核或评测协议的改动，请运行下方完整检查。普通标量执行使用标准库；完整测试与 benchmark 检查需要安装可选形式依赖：
+[工具指南](docs/development-loop.md)提供项目、Advisor、规则与恢复的完整命令。按改动需求选择覆盖：
+
+| 工作项 | 从入口验收的行为 |
+| --- | --- |
+| **M01 · 证据导入** | 读取原始配置／指标／日志／收据，核对字段或行位置、缺输入、run／分区／metric 身份冲突和自签字段。`OBSERVED` 表示读到了记录值，不表示机制已验证。 |
+| **M02 · 候选组合** | 改变事实或约束，观察可用干预是否变化；检查不兼容组合、去重与搜索截断。模板提出候选，不产生执行授权。 |
+| **M03 · 成本与对照复用** | 计入失败和评价开销，分开资源单位与未知测量，拒绝不兼容或身份不完整的对照。Wall time 不是 CPU／GPU 时间，历史成本不保证新运行开销。 |
+| **M04 · 项目执行** | 实际到达锁定命令并保留日志／产物；检查非零退出、超时、缺产物、输入变化与恢复不重复执行。已授权的 Windows 后台任务使用 Task Scheduler；可信项目代码不等于操作系统沙箱。 |
+| **M05 · 规则采用** | 对声明案例执行原规则和候选规则，拒绝零案例、分区重叠、绑定变化和回归，并检查采用记录及回退。结构 lint 不说明科研策略改善。 |
+| **M06 · 接续恢复** | 在预留、运行、完成、预算耗尽状态恢复，以实时身份、预算和暴露为准。Checkpoint 提供历史，不产生新授权。 |
+
+历史适配改动还需覆盖项目范围、身份、分页与明确失败。形式检查或参考运行器改动须保留对应[执行契约](references/l3-state-machine.md)。
+
+## 科研证据与形式声明
+
+科研规则须提供适用范围、触发条件、竞争解释、区分性观测、指标门禁、证伪条件和注明日期的原始来源，参见[规则义务](docs/rule-obligations.zh-CN.md)与[判断图](references/judgment-graph.yaml)。借鉴研究结果前先核对最新第一手证据。分别记录论文报告、当地探索、确认结果和机制支持；分数提高不能单独确定机制。
+
+数学命题遵循所选 adapter 的[形式验证契约](docs/formal-verification.zh-CN.md)，报告必含：
+
+- 精确命题、假设、参数、定义域／维度，以及声明与被检查代码的对应关系。
+- 最小公开或明确标注的合成输入、准确命令、RDS commit／版本及 adapter／backend 版本。
+- 实际 `status`、`assurance`、reason，以及证书、反例或观测；存在准入与执行两个阶段时分开报告。
+
+在声明范围内保留 `PASS`、`FAIL`、`UNKNOWN`。Status 与 assurance 相互独立；哈希绑定来源，有效证书只支持其对应的已检查数学结论，两者都不能单独建立任务收益、因果机制、科研自主等级或 RSI 改善。按安装版本核对 adapter，不能把路线计划当成已交付能力。
+
+开发时用过的案例属于回归证据。独立科研评估需要未使用案例、模型／skill 版本记录、决策时的信息边界、匹配的总预算和负结果，参见[评测协议](benchmark/README.md)。科研自主程度与 RSI 改善分别成立，详见[自主程度范围](docs/research-autonomy.md)与 [RSI 证据](references/rsi-evidence.md)。
+
+尊重当前研究者的目标、资源和实验偏好。[可选偏好示例](references/optional-preferences.md)不默认追加多 seed，只有已观测到且可能改变决定的不稳定性才考虑追加。它是项目可选偏好，不是所有研究者必须接受的科学要求；建议和偏好记录都不扩大资源授权。
+
+## 性能与最终验收
+
+优化前测量受影响的工作负载，改动后比较相同工作，报告规模、环境、资源／延迟测量及观察到的波动。保留来源身份、状态所有权和恢复语义；更快但破坏这些约束的路径仍是回归。
+
+哈希用于确需检查身份的边界：产物导入、执行、对照复用、规则采用／回退。同次操作对每个唯一源文件只读／hash 一次，并复用结果。普通状态或展示不扫全项目，无消费者的字段不增加独立哈希。说明仍有的开销与有意保留的取舍。
+
+局部改动运行相关测试。跨共享执行或评测行为的改动使用下方完整检查；这部分覆盖需要可选形式依赖：
 
 ```powershell
 python -m pip install -r requirements-formal.txt
 python -B -m unittest discover -s tests -v
 python -B benchmark/run.py
 python -B benchmark/redteam/runner.py
+git diff --check
 ```
 
-[CI](.github/workflows/test.yml) 当前在 Windows、Ubuntu 及 Python 3.11、3.13 上运行单元测试和历史回放。报告实际运行的命令与观察到的结果；说明跳过的检查。合成回归用于检查协议行为，不能替代独立科学评估或真实 GPU 实验。
+确认新增测试能被 [CI](.github/workflows/test.yml)发现；当前 CI 在 Windows／Ubuntu 与 Python 3.11／3.13 上执行单元测试和历史回放。报告实际命令与结果，包括跳过项及不可用依赖。标题、描述、支持承诺和限制应随最终 diff 更新。合成输入和历史回放不是端到端科研分数。
 
-共享命令和边界应在三版 README、中英贡献指南及受影响的指南之间同步。纯措辞修改可以不改变其他版本；在 PR 中简要说明即可。
+## 公开记录与许可证
 
-## 公开证据与许可证
+使用最小公开或标注为合成的输入。真实适配器测试应保留原格式与相关失败行为；只脱敏需要保密的部分，并披露转换方式。不要提交 `.rds/`、私人会话／日志／数据集、凭据或 token；只分享有权公开的材料，并保留有用的来源身份或公开引用。
 
-使用最小公开或合成输入。不要提交 `.rds/` 运行状态、私人会话导出或日志、私人数据集、凭据或 token。通过公开引用或脱敏来源身份保留必要出处，只分享有权公开的材料。
-
-发布许可仍待确定：本仓库当前没有 `LICENSE` 文件，不应假定拥有复用许可。以后添加文件时，以仓库实际 `LICENSE` 为准；徽章、路线计划或其他项目的许可证不会建立本仓库的许可条款。
+本仓库当前**没有 `LICENSE` 文件**，发布许可仍待确定；不能从徽章、路线计划或其他项目的许可证推断许可。如果以后添加文件，以所用版本中的实际文件为准。

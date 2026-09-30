@@ -413,7 +413,8 @@ class RDSAdvisor:
         recommendations = []
         if state.get("advisor_context"):
             from rds_advisor_search import search_directions
-            search = search_directions(judgment_graph, state["advisor_context"])
+            options = {"templates": state["advisor_templates"]} if state.get("advisor_templates") else {}
+            search = search_directions(judgment_graph, state["advisor_context"], **options)
             recommendations.append(_advice("STRATEGIC_RESEARCH_ADVICE", type="EXECUTABLE_DIRECTION_SEARCH", urgency="REVIEW",
                 reason="按明确的下一决策、带来源事实和图中结构化前置条件组合有界候选。",
                 search=search, observations=search["candidates"], limitations=search["limitations"],

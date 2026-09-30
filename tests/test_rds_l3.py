@@ -147,8 +147,9 @@ class KernelTests(unittest.TestCase):
                 history_command(argparse.Namespace(subcommand="query", query="unused.mjs"))
 
     def test_meta_rule_lifecycle_and_reflection(self):
-        """RSI Step 1: Rule validation, atomic application to judgment graph, and failure reflection."""
+        """Rule lint, replay-gated application, duplicate update checks, and reflection."""
         from rds_meta import validate_rule, apply_rule
+        from rds_rsi import evaluate_candidate
         valid_rule = {
             "id": "test-rsi-rule",
             "scope": "image_restoration",
@@ -170,21 +171,29 @@ class KernelTests(unittest.TestCase):
         # Apply rule to temporary graph
         project = self.project()
         temp_graph = project.root / "judgment-graph.yaml"
-        original_graph = ROOT / "references/judgment-graph.yaml"
+        original_graph = ROOT / "examples/rsi/base-graph.json"
         temp_graph.write_text(original_graph.read_text(encoding="utf-8"), encoding="utf-8")
-
-        res = apply_rule(valid_rule, graph_path=str(temp_graph))
+        rule = json.loads((ROOT / "examples/rsi/candidate-rule.json").read_text(encoding="utf-8"))
+        cases = json.loads((ROOT / "examples/rsi/cases.json").read_text(encoding="utf-8"))
+        graph = json.loads(original_graph.read_text(encoding="utf-8"))
+        with self.assertRaises(ValueError):
+            apply_rule(rule, graph_path=str(temp_graph))
+        evaluation = evaluate_candidate(rule, graph, cases)
+        res = apply_rule(rule, graph_path=str(temp_graph), evaluation=evaluation, cases=cases)
         self.assertEqual(res["status"], "APPLIED")
         self.assertEqual(res["action"], "CREATED")
 
         # Duplicate ID rejection without force
         with self.assertRaisesRegex(ValueError, "already exists"):
-            apply_rule(valid_rule, graph_path=str(temp_graph), force=False)
+            apply_rule(rule, graph_path=str(temp_graph), force=False)
 
         # Update with force
-        updated_rule = {**valid_rule, "scope": "generalized_restoration"}
-        res_up = apply_rule(updated_rule, graph_path=str(temp_graph), force=True)
+        updated_rule = {**rule, "scope": "generalized_restoration"}
+        with self.assertRaises(ValueError):
+            apply_rule(updated_rule, graph_path=str(temp_graph), force=True)
+        res_up = apply_rule(updated_rule, graph_path=str(temp_graph), force=True, dry_run=True)
         self.assertEqual(res_up["action"], "UPDATED")
+        self.assertFalse(res_up["adopted"])
 
         # CLI list-rules & validate-rule
         rule_path = project.root / "new-rule.json"
@@ -192,7 +201,7 @@ class KernelTests(unittest.TestCase):
         val_cli = project.call("meta", "validate-rule", "--rule", str(rule_path))
         self.assertEqual(val_cli["status"], "VALID")
         list_cli = project.call("meta", "list-rules", "--graph", str(temp_graph))
-        self.assertTrue(any(n["id"] == "test-rsi-rule" for n in list_cli["nodes"]))
+        self.assertTrue(any(n["id"] == rule["id"] for n in list_cli["nodes"]))
 
         # Meta reflect from refuted C7 boundary
         c7_crossing = C7_CONTROL + "def treatment(x): return 25*x/(20*(1+x))\n"

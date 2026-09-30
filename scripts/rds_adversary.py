@@ -64,13 +64,18 @@ class AdversarialMutator:
 
 
 class AlignmentEvaluator:
-    """Heuristic lint only; actual case replay is required for rule acceptance."""
+    """Lint without cases; bounded CPU replay when a graph and casepack are supplied."""
 
     def __init__(self, root_dir: Path):
         self.root_dir = root_dir.resolve()
 
-    def evaluate_rule(self, candidate_rule: Dict[str, Any]) -> Dict[str, Any]:
-        """Report structural checks without inventing benchmark measurements."""
+    def evaluate_rule(self, candidate_rule: Dict[str, Any], *, graph=None, cases=None) -> Dict[str, Any]:
+        """Run the supplied cases or report structural checks without measurements."""
+        if graph is not None or cases is not None:
+            if graph is None or cases is None:
+                raise ValueError("Actual rule replay requires both graph and original casepack")
+            from rds_rsi import evaluate_candidate
+            return evaluate_candidate(candidate_rule, graph, cases)
         report = {
             "rule_id": candidate_rule.get("id", "unknown") if isinstance(candidate_rule, dict) else "unknown",
             "assurance": "HEURISTIC_ONLY",

@@ -1,12 +1,25 @@
 """Bounded search over explicitly configured reasoning dependencies.
 
-No text eval, causal discovery, probability estimates, source verification or run
-execution. Facts and observed costs supplied by callers remain INPUT_REPORTED.
+No text eval, causal discovery, probability estimates or run execution. Imported
+artifacts retain their provenance labels; caller dictionaries remain INPUT_REPORTED.
 """
 from copy import deepcopy
 import math
 
 TRUE, FALSE, UNKNOWN = "TRUE", "FALSE", "UNKNOWN"
+
+
+def _evidence_status(record):
+    # A JSON flag cannot impersonate the read-only artifact importer's type.
+    try:
+        from rds_artifacts import ArtifactFact
+    except ImportError:
+        return "INPUT_REPORTED"
+    if isinstance(record, ArtifactFact):
+        status = getattr(record, "provenance_status", "UNKNOWN")
+        if status in {"ARTIFACT_OBSERVED", "ARTIFACT_DECLARED", "PROGRAM_DERIVED", "UNKNOWN"}:
+            return status
+    return "INPUT_REPORTED"
 
 
 def _source(record):
@@ -34,7 +47,7 @@ def evaluate_condition(condition, facts):
     record = facts.get(name) if isinstance(name, str) else None
     report = {"fact": name, "operator": condition.get("op", "eq") if isinstance(condition, dict) else None,
               "expected": deepcopy(condition.get("value")) if isinstance(condition, dict) else None,
-              "truth": UNKNOWN, "evidence_status": "INPUT_REPORTED"}
+              "truth": UNKNOWN, "evidence_status": _evidence_status(record)}
     if not _reported(record) or "value" not in record or record["value"] is None:
         report["reason"] = "missing value/source or explicitly unreliable evidence"
         return report
@@ -91,10 +104,12 @@ def _cost(ids, costs):
         return {"status": UNKNOWN, "reason": "mixed units/comparison groups or nonfinite total"}
     unit, group = groups.pop()
     return {"status": "INPUT_REPORTED", "value": total, "unit": unit, "comparison_group": group,
-            "sources": [deepcopy(r["source"]) for r in records], "components": list(ids)}
+            "sources": [deepcopy(r["source"]) for r in records], "components": list(ids),
+            "evidence_statuses": [_evidence_status(r) for r in records]}
 
 
-def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nodes=128):
+def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nodes=128,
+                      templates=None, max_combinations=128, max_compose_depth=2):
     """Compose source-labelled checks and tests for the supplied next decision.
 
     Nodes opt in via executable.decisions, preconditions, satisfied_when, action.
@@ -119,11 +134,23 @@ def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nod
               "truncation": {"truncated": False, "reasons": [], "limits": {
                   "max_candidates": max_candidates, "max_depth": max_depth, "max_nodes": max_nodes}},
               "ranking": {"method": "PARETO_PARTIAL_ORDER", "dominance": [], "cost_unknown": []},
-              "limitations": ["Derivations are reasoning dependencies, not causal proof. Sources and costs remain INPUT_REPORTED.",
+              "limitations": ["Derivations are reasoning dependencies, not causal proof. Imported source labels do not certify causal claims.",
                                "Only explicit executable configuration is searched; text triggers and unconfigured rules are not evaluated."]}
+    def finish():
+        chosen_templates = templates if templates is not None else context.get("templates")
+        if chosen_templates is not None:
+            from rds_experiments import compose_experiments
+            result["experiment_composition"] = compose_experiments(
+                graph, context, chosen_templates, max_candidates=max_candidates, max_depth=max_compose_depth,
+                max_combinations=max_combinations,
+                search_limits={"max_candidates": max_candidates, "max_depth": max_depth, "max_nodes": max_nodes})
+        return result
+    if len(raw_nodes) > max_nodes:
+        result["truncation"].update(truncated=True)
+        result["truncation"]["reasons"].append("node limit")
     if not isinstance(decision_id, str) or not decision_id.strip():
         result["limitations"].append("No next decision supplied; no test was inferred.")
-        return result
+        return finish()
     facts, costs = context.get("facts", {}), context.get("costs", {})
     if not isinstance(facts, dict) or not isinstance(costs, dict):
         raise ValueError("Context facts/costs must be objects")
@@ -133,9 +160,6 @@ def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nod
         if not isinstance(node, dict) or not isinstance(node.get("id"), str) or node["id"] in nodes:
             raise ValueError("Each graph node needs a unique string id")
         nodes[node["id"]] = node
-    if len(raw_nodes) > max_nodes:
-        result["truncation"].update(truncated=True)
-        result["truncation"]["reasons"].append("node limit")
     parents = {n: [] for n in nodes}
     for edge in raw_edges:
         if isinstance(edge, dict) and edge.get("relation") == "prerequisite_for" and edge.get("to") in nodes:
@@ -287,4 +311,4 @@ def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nod
                 result["ranking"]["dominance"].append({"better": better["id"], "worse": worse["id"],
                     "basis": "decision coverage superset and no higher comparable observed incremental cost"})
     result["ranking"]["pareto_front"] = [c["id"] for c in result["candidates"] if not c["dominated_by"]]
-    return result
+    return finish()

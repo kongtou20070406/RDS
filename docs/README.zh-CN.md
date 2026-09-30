@@ -1,6 +1,8 @@
 # Research Direction Selector 文档
 
-本指南面向 `main` 上的 v5.5.0-rc.2，已包含 PR #2 引入的数学实现和 PR #3 引入的 Advisor／工作台集成。能力表保留 `f020b2c` 作为历史对照，本版对应当前实现列；更广泛的计划能力仍未实现。参见[五组件](rds-purpose.md)、[Advisor 设计](advisor-graph-design.md)、[工作台](dashboard.md)、[组件基准](advisor-benchmark.md)和[未来计划](roadmap.md)。
+[真实记录、项目执行、规则采用与用 RDS 开发 RDS](development-loop.md)提供 M01–M06 首版工具的命令和范围。
+
+本指南面向 v5.6.0-rc.1，包含 PR #2 引入的数学实现、PR #3 引入的 Advisor／工作台，以及首版 [M01–M06 工具闭环](development-loop.md)。数学能力表保留 `f020b2c` 作为历史对照，原有支持范围没有扩大；更广泛的计划能力仍未实现。参见[五组件](rds-purpose.md)、[Advisor 设计](advisor-graph-design.md)、[工作台](dashboard.md)、[组件基准](advisor-benchmark.md)和[未来计划](roadmap.md)。
 
 [English](README.md) · [项目首页](../README.zh-CN.md) · [贡献指南](../CONTRIBUTING.zh-CN.md)
 

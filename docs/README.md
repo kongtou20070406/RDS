@@ -4,7 +4,7 @@
 
 Start with the research workflow, then read the verifier guide for mathematical claims. The terminology guide keeps protocols, program checks and scientific conclusions consistent across languages.
 
-This guide targets v5.5.0-rc.2 on `main`, including the mathematical implementation introduced in PR #2 and the Advisor/dashboard integration introduced in PR #3. Capability tables retain `f020b2c` as a historical comparison; the current column applies to this release. Broader planned adapters remain unimplemented. See the [five components](rds-purpose.md), [Advisor design](advisor-graph-design.md), [dashboard](dashboard.md), [component benchmark](advisor-benchmark.md), and [roadmap](roadmap.md).
+This guide targets v5.6.0-rc.1, including the mathematical implementation introduced in PR #2, the Advisor/dashboard integration introduced in PR #3, and the first [M01–M06 tool workflow](development-loop.md). Mathematical capability tables retain `f020b2c` as a historical comparison; their supported scope is unchanged. Broader planned adapters remain unimplemented. See the [five components](rds-purpose.md), [Advisor design](advisor-graph-design.md), [dashboard](dashboard.md), [component benchmark](advisor-benchmark.md), and [roadmap](roadmap.md).
 
 | Guide | English | 简体中文 |
 | --- | --- | --- |
@@ -16,6 +16,7 @@ This guide targets v5.5.0-rc.2 on `main`, including the mathematical implementat
 | Shared language and exact code identifiers | [Terminology](terminology.md) | [术语表](terminology.zh-CN.md) |
 | Reproducers, evidence and pull requests | [Contributing](../CONTRIBUTING.md) | [贡献指南](../CONTRIBUTING.zh-CN.md) |
 | Concrete changes, deliverables and acceptance checks | [Development plan](roadmap.md) | [开发与验收计划](roadmap.md) |
+| Real records, locked project runs, rule replay and RDS self-development | [Tool and development loop](development-loop.md) | [工具与开发反馈循环](development-loop.md) |
 | Same-model skill comparison and benchmark selection | [Benchmark plan](benchmark-plan.md) | [基准选型与对比方案](benchmark-plan.md) |
 
 The [execution contract](../references/l3-state-machine.md) defines the runtime in the checkout being used. [SKILL.md](../SKILL.md) defines the research protocol. When the two differ, report the inconsistency instead of interpreting a protocol instruction as an implemented guarantee.
