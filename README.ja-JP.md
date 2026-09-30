@@ -11,11 +11,11 @@
 
 次の実験に、明確な問い、公平な比較、そして意思決定につながる結果を。
 
-[![Checks](https://github.com/kongtou20070406/RDS/actions/workflows/test.yml/badge.svg)](https://github.com/kongtou20070406/RDS/actions/workflows/test.yml)
+[![Checks](https://github.com/kongtou20070406/research-direction-selector/actions/workflows/test.yml/badge.svg)](https://github.com/kongtou20070406/research-direction-selector/actions/workflows/test.yml)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white&style=flat-square)
 ![Agent Skill](https://img.shields.io/badge/Codex-Agent_Skill-111827?style=flat-square)
 [![Contribute](https://img.shields.io/badge/Contributions-Welcome-0F766E?style=flat-square)](CONTRIBUTING.md)
-[![Stars](https://img.shields.io/github/stars/kongtou20070406/RDS?style=flat-square)](https://github.com/kongtou20070406/RDS/stargazers)
+[![Stars](https://img.shields.io/github/stars/kongtou20070406/research-direction-selector?style=flat-square)](https://github.com/kongtou20070406/research-direction-selector/stargazers)
 
 [English](README.md) · [简体中文](README.zh-CN.md) · **日本語**
 
@@ -23,7 +23,7 @@
 
 </div>
 
-> この版は `main` から公開する **v5.5.0-rc.2 プレリリース**です。研究者とその AI 向けの[ダウンロード](https://github.com/kongtou20070406/RDS/releases/tag/v5.5.0-rc.2)。五つの構成要素を固定し、[計画](docs/roadmap.md)で実装と今後の検証を分けています。
+> この版は `main` から公開する **v5.5.0-rc.2 プレリリース**です。研究者とその AI 向けの[ダウンロード](https://github.com/kongtou20070406/research-direction-selector/releases/tag/v5.5.0-rc.2)。五つの構成要素を固定し、[計画](docs/roadmap.md)で実装と今後の検証を分けています。
 
 Research Direction Selector（RDS）は、実行可能なローカル参照カーネルを備えた、Codex 向けの研究支援スキルです。研究目標、競合する説明、過去の経験、プログラムによるチェックを結び付け、**現在の証拠と予算のもとで、次にどの実験を行うべきか**という問いに取り組みます。
 
@@ -43,6 +43,8 @@ Research Direction Selector（RDS）は、実行可能なローカル参照カ�
 | [公開タスクを改編したコンポーネント課題](docs/advisor-benchmark.md) | **8/8 ケース、28/28 条件を確認** | 明示的な契約、証拠不足、依存関係、コスト、予算、出典の識別。 |
 
 公開タスク課題は ScienceAgentBench と CORE-Bench のメタデータを使い、人がルールを改編しました。八つのローカル fixture の処理と結果の組み立てに **83.0743 ms** を要しました。小規模なメタデータ検査の時間です。[入力](benchmark/advisor-public/source-facts.json)と[条件ごとの出力](benchmark/advisor-public/results.json)を公開しています。**科学タスク全体のスコアと研究品質の改善は未測定**です。件数が示すのは表の動作であり、他システムとの順位ではありません。
+
+skill 間の比較は延期し、実プロジェクトの使いやすさ、実用性、研究全段階の L2 支援を優先します。[ベンチマーク選定資料](docs/benchmark-plan.md)は後日の参考として残し、比較実験は実行も予定もしていません。
 
 次の研究判断を支援する具体的な動作を確認しました。
 
@@ -89,22 +91,26 @@ seed の追加は既定にせず、観測済みの不安定性が判断に影響
 | **4 · Advisor** | 観測と適用範囲を持つ規則から診断と行動候補を提案し、証拠に基づく候補生成を発展させる。 |
 | **5 · RSI** | RDS 自身の規則・方針の変更を提案して評価し、証拠に支えられた改善を採用。 |
 
-最初の三つが研究ループの基盤を担い、Advisor と RSI が拡張します。記憶が Advisor に根拠を供給し、カーネルが選択した行動を検査します。これは機能上の役割であり、ローカル実装を共有できます。L1–L4 はワークフローの段階で、追加の構成要素ではありません。
+最初の三つが研究ループの基盤を担い、Advisor と RSI が拡張します。記憶が Advisor に根拠を供給し、カーネルが選択した行動を検査します。これは機能上の役割であり、ローカル実装を共有できます。L1–L4 は自律性の段階で、追加の構成要素ではありません。
 
 ## L1–L4
 
-RDS は通常の対話を通じて単一モデルでも利用できます。五つの構成要素は **研究手順の Skill、実行と受け入れ判定のカーネル、研究状態と記憶、Advisor、RSI** です。三つの基盤と二つの拡張であり、L1–L4 は研究ワークフローを示します。研究の流れは、目標の明確化 → 実験選択 → 設計確認 → 実行管理 → 結果評価 → 証拠の蓄積と再開です。各ラウンドで、**分かったこと、未解決のこと、次の行動、それを行う理由**を示します。実装済みの実行範囲は以下に示します。
+RDS は通常の対話を通じて単一モデルでも利用できます。五つの構成要素が、目標の明確化 → 証拠の調査 → 実験選択と確認 → 実行 → 結果評価 → 証拠の蓄積と再開を支えます。各ラウンドで、**分かったこと、未解決のこと、次の行動、それを行う理由**を示します。
 
-これは、RDS のロードマップを説明するための独自の作業レベルです。業界標準でも、モデルの科学的能力を採点する指標でもありません。
+RDS は **Kramer ら（2026）の科学的発見の自動化フレームワーク**を採用します。論文は運転自動化を参考にしており、原尺度は **L0–L5 の六段階**です。ここでは番号や意味を変えずに L1–L4 を紹介します。[原名・出典と解釈の範囲（English）](docs/research-autonomy.md)を参照してください。
 
-| レベル | 担う役割 | 必要な証拠 |
-| --- | --- | --- |
-| **L1 · 証拠の収集支援** | 研究者が指示する課題に対して、文献、コード、ログ、過去の決定を探して整理します。 | 追跡可能な出典と、何が分かっていて何が欠けているかの明確な説明。 |
-| **L2 · 実験の助言** | 複数の方針を比較し、公平な対照と予算を備えた、範囲を明確にした反証可能な実験を提案します。 | 競合する説明を区別し、どちらの結果でも次の一手を示せる設計。 |
-| **L3 · 範囲を限定した実行ループ** | 承認済みの契約内でプランを受け入れ、実行し、成果物を収集して結果を判定し、中断した作業を復旧します。 | エンジンが生成する実行記録、プロトコル内で適用される予算とデータ利用の制約、再現可能な復旧手順。 |
-| **L4 · 検証に基づく方針の改善** | 失敗や反例をもとに適用範囲を持つ判断ルールを修正し、修正後の研究方針が以降の作業を改善するか検証します。 | 同じ総予算で研究軌跡全体を前向きに比較し、独立した事例と否定的な結果も含めた評価。 |
+| レベル | 採用したフレームワークの範囲 |
+| --- | --- |
+| **L1 · 機械による支援** | 科学的作業の一側面を計算機が支援します。 |
+| **L2 · 部分的な自動化** | 発見の重要な一部分を完全に自動化します。 |
+| **L3 · 条件付き自動化** | 限定した分野で発見サイクル全体を自動化します。 |
+| **L4 · 高度な自動化** | 複数分野で発見サイクルを実行し、限定的に目標も自ら設定します。 |
 
-RDS が現在提供するのは、**L2 に相当する研究助言と、スカラー参照カーネルによる L3 の構成要素**です。ルール、分岐、修復ツールは、L4 に向けた実験的な基盤です。GPU 研究の一連のループは確立しておらず、独立した研究軌跡間で研究方針の改善を実測した実績もありません。どのレベルでも、目標、予算、承認、科学的解釈は研究者の管理下にあります。
+自律性の説明であり、科学的品質のスコア、SAE 適合、安全認証を意味しません。**現在の RDS は参照計算と明示的に接続した候補探索に局所的な L2 機能を備え、人間向けの研究手順も提供します。この記述は限定した作業に対するもので、汎用の研究等級ではありません。科学的な L3・L4 の完全なループや、一連の GPU 研究サービスは実証していません。** 参照ランナーの L3 識別子は過去の実装上の名称であり、外部尺度の達成を意味しません。
+
+**短期の製品目標は六つの研究段階すべてへの L2 支援です。** 各段階で利用できる自動化を用意し、研究方向、重要な判断、科学的結果の受け入れは研究者が決めます。これは対象範囲の目標であり、論文の L2 の再定義や完全な L3 ループの実装済み主張ではありません。長期の研究方向は原尺度の L4 と L5、すなわち複数分野での発見と限定的な目標設定、および全面的な自律です。納期や実装済み能力の約束ではありません。成果物と検証条件は[ロードマップ](docs/roadmap.md)に示します。
+
+**RSI は独立した構成要素と評価軸です。** 方針改善の主張には、未使用の独立事例で研究軌跡全体を同じ総予算で前向きに比較し、失敗と否定的な結果を保存する必要があります。これは L4 の定義ではなく、改善もまだ実証していません。
 
 ## 実装済みの機能
 
@@ -119,7 +125,7 @@ RDS が現在提供するのは、**L2 に相当する研究助言と、スカ�
 
 ## 形式検証とルールの義務
 
-宣言した命題、バックエンドによる探索、独立した検査、科学的評価を分けて扱います。`main` はスカラー AST/SymPy と、[PR #2](https://github.com/kongtou20070406/RDS/pull/2) の宣言型レジストリ、独立検査可能な数学的証明書、限定的なネイティブ Lean4 接続を含みます。Python アダプターは証明書の検査を報告します。ネイティブ Lean 検査は対応する閉じた有理数の義務に限り、実行ファイルの設定が必要です。旧実験版 `LeanFormalEngine`/Tactic ディスパッチャーは別のプロトタイプです。`RULE_ALIGNED` はメタデータの確認であり、tactic の成功ラベルは宣言した命題の証明を意味しません。[検証範囲（English）](docs/formal-verification.md)と[アダプター時間の生データ](benchmark/results/formal-windows-python313.json)を参照してください。
+宣言した命題、バックエンドによる探索、独立した検査、科学的評価を分けて扱います。`main` はスカラー AST/SymPy と、[PR #2](https://github.com/kongtou20070406/research-direction-selector/pull/2) の宣言型レジストリ、独立検査可能な数学的証明書、限定的なネイティブ Lean4 接続を含みます。Python アダプターは証明書の検査を報告します。ネイティブ Lean 検査は対応する閉じた有理数の義務に限り、実行ファイルの設定が必要です。旧実験版 `LeanFormalEngine`/Tactic ディスパッチャーは別のプロトタイプです。`RULE_ALIGNED` はメタデータの確認であり、tactic の成功ラベルは宣言した命題の証明を意味しません。[検証範囲（English）](docs/formal-verification.md)と[アダプター時間の生データ](benchmark/results/formal-windows-python313.json)を参照してください。
 
 23 個の判断ルールに、前提条件・反証条件・実行可能領域の式を記録しました。表は義務の対応関係を示し、23 個の因果定理の証明を主張するものではありません。変数・証拠・候補 tactic は[義務ガイド（English）](docs/rule-obligations.md)に記載しています。追加メタデータは現在のディスパッチャーでは強制検査されません。
 
@@ -154,7 +160,7 @@ RDS が現在提供するのは、**L2 に相当する研究助言と、スカ�
 
 </details>
 
-[ドキュメント](docs/README.md)には L1–L4 の実験フロー、英中の用語とコントリビュートガイドがあります。[Lean4/mathlib との互換性](docs/lean-integration.md)は、人間の研究を自動化支援する RDS のループ内で適切な数学的部分問題を扱います。ネイティブアダプターは閉じた有理数の義務で Lean カーネルを再利用し、汎用 mathlib モデル変換は今後の課題です。C++ は測定済みのアダプター性能問題に限る選択肢です。
+[ドキュメント](docs/README.md)には採用した自律性の尺度と実験フロー、英中の用語とコントリビュートガイドがあります。[Lean4/mathlib との互換性](docs/lean-integration.md)は、人間の研究を自動化支援する RDS のループ内で適切な数学的部分問題を扱います。ネイティブアダプターは閉じた有理数の義務で Lean カーネルを再利用し、汎用 mathlib モデル変換は今後の課題です。C++ は測定済みのアダプター性能問題に限る選択肢です。
 
 ## ワークフロー
 
@@ -180,7 +186,7 @@ flowchart LR
 
 ```powershell
 New-Item -ItemType Directory -Path "$env:USERPROFILE/.agents/skills" -Force | Out-Null
-git clone --branch v5.5.0-rc.2 https://github.com/kongtou20070406/RDS.git "$env:USERPROFILE/.agents/skills/research-direction-selector"
+git clone --branch v5.5.0-rc.2 https://github.com/kongtou20070406/research-direction-selector.git "$env:USERPROFILE/.agents/skills/research-direction-selector"
 ```
 
 研究プロジェクトの `.agents/skills/research-direction-selector/` に配置することもできます。スキルの配置場所と呼び出し方は、[OpenAI 公式スキルドキュメント](https://learn.chatgpt.com/docs/build-skills)を参照してください。
@@ -196,8 +202,8 @@ RDS は、現在のファイルと会話から目標と制約を整理し、1 �
 **Python 3.11+** が必要です。通常のスカラー実行は Python 標準ライブラリのみに依存し、GPU は不要です。実際に履歴を検索するには、Obelisk が別途インストールされている必要があります。
 
 ```powershell
-git clone --branch v5.5.0-rc.2 https://github.com/kongtou20070406/RDS.git
-Set-Location RDS
+git clone --branch v5.5.0-rc.2 https://github.com/kongtou20070406/research-direction-selector.git
+Set-Location research-direction-selector
 python -B scripts/rds_cli.py --version
 ```
 
@@ -284,7 +290,7 @@ python -B benchmark/run.py
 python -B benchmark/redteam/runner.py
 ```
 
-単体テストはカーネルの動作を検証し、過去の事例のリプレイは意思決定パケットの整合性と関連する実行条件チェックを検証します。red-team runner は、あらかじめ用意したプロトコル攻撃のシナリオを検証します。[GitHub Actions](https://github.com/kongtou20070406/RDS/actions) は、Windows / Ubuntu、Python 3.11 / 3.13 で単体テストと過去の事例のリプレイを実行します。
+単体テストはカーネルの動作を検証し、過去の事例のリプレイは意思決定パケットの整合性と関連する実行条件チェックを検証します。red-team runner は、あらかじめ用意したプロトコル攻撃のシナリオを検証します。[GitHub Actions](https://github.com/kongtou20070406/research-direction-selector/actions) は、Windows / Ubuntu、Python 3.11 / 3.13 で単体テストと過去の事例のリプレイを実行します。
 
 過去の学習スコアは会話内の報告であり、自動リプレイは合成スカラー入力を使用します。これらの事例はスキル開発に使用済みです。回帰チェックの通過は自律研究の品質を証明せず、実際の GPU 実験や独立した前向き評価の代わりにもなりません。評価方法と情報隔離の取り決めは、[benchmark/README.md](benchmark/README.md)を参照してください。
 
@@ -346,7 +352,7 @@ python -B benchmark/redteam/runner.py
 | カーネルと検証器 | 最小再現と関連する回帰テストを提出し、対応する型、定義域、`UNKNOWN` の動作を明記します。 |
 | 新しい研究事例 | 公開可能な当時の情報、意思決定上の問い、評価プロトコルを提示し、後の結果を提案者への入力から分離します。 |
 
-[問題の報告](https://github.com/kongtou20070406/RDS/issues/new/choose)または[PR の提出](https://github.com/kongtou20070406/RDS/compare)から参加できます。目標、証拠の意味、主要な実行インターフェースを変更する前には、issue で設計をすり合わせることを推奨します。否定的な結果と証拠の限界を保持し、`.rds/` の実行状態、認証情報、非公開の会話、公開できないデータをコミットしないでください。
+[問題の報告](https://github.com/kongtou20070406/research-direction-selector/issues/new/choose)または[PR の提出](https://github.com/kongtou20070406/research-direction-selector/compare)から参加できます。目標、証拠の意味、主要な実行インターフェースを変更する前には、issue で設計をすり合わせることを推奨します。否定的な結果と証拠の限界を保持し、`.rds/` の実行状態、認証情報、非公開の会話、公開できないデータをコミットしないでください。
 
 ## 関連エコシステムと設計上の参考
 

@@ -6,7 +6,7 @@ RDS separates a mathematical proposition from the experiment that tests utility 
 
 ## Implementation status
 
-Current `main` includes the mathematical implementation introduced by [PR #2](https://github.com/kongtou20070406/RDS/pull/2) at `995e8eb`, together with the Advisor/dashboard integration. The table retains the older `f020b2c` base for historical comparison. Check the actual ref before using an interface; a roadmap entry is not an installed capability.
+Current `main` includes the mathematical implementation introduced by [PR #2](https://github.com/kongtou20070406/research-direction-selector/pull/2) at `995e8eb`, together with the Advisor/dashboard integration. The table retains the older `f020b2c` base for historical comparison. Check the actual ref before using an interface; a roadmap entry is not an installed capability.
 
 | Area | Historical base (`f020b2c`) | Current `main` (implementation from `995e8eb`) | Further work |
 | --- | --- | --- | --- |
@@ -18,7 +18,7 @@ Current `main` includes the mathematical implementation introduced by [PR #2](ht
 | Native Lean | No native Lean adapter. | Registered fixed-template closed Rat `eq`/`lt`/`le` obligations, checked by an explicitly configured Lean4 executable. | mathlib and quantified model/property adapters. |
 | Framework, tensors and exports | No general theorem command or model export. | `formal` CLI, finite theorem modules, concrete exact tensor checks and a restricted Python model-export API. | General symbolic tensors and further checked translations. |
 
-The interfaces below are included in `main`. The [pinned implementation contract](https://github.com/kongtou20070406/RDS/blob/995e8eb98f75697ef1ce43a9991f0686e5c29caa/references/formal_framework.md) records their source revision; use the installed revision's registrations and tests. The initial PR commit `8eadae9` covered only the scalar certificate path and is not the interface snapshot described here.
+The interfaces below are included in `main`. The [pinned implementation contract](https://github.com/kongtou20070406/research-direction-selector/blob/995e8eb98f75697ef1ce43a9991f0686e5c29caa/references/formal_framework.md) records their source revision; use the installed revision's registrations and tests. The initial PR commit `8eadae9` covered only the scalar certificate path and is not the interface snapshot described here.
 
 ## Declaration and independent checking
 
@@ -55,7 +55,7 @@ The receipt identifies `claim_relation: declared_side_condition_only` and `obser
 
 ### Native Lean: the implemented narrow interface
 
-The registered `lean_obligation` adapter accepts exactly `schema`, `kind`, `relation`, `left` and `right`. `schema` is 1, `relation` is `eq`, `lt` or `le`, and both sides are exact rational literals; numeric JSON floats are rejected. The [existing example](https://github.com/kongtou20070406/RDS/blob/995e8eb98f75697ef1ce43a9991f0686e5c29caa/examples/formal/lean_obligation.json) is:
+The registered `lean_obligation` adapter accepts exactly `schema`, `kind`, `relation`, `left` and `right`. `schema` is 1, `relation` is `eq`, `lt` or `le`, and both sides are exact rational literals; numeric JSON floats are rejected. The [existing example](https://github.com/kongtou20070406/research-direction-selector/blob/995e8eb98f75697ef1ce43a9991f0686e5c29caa/examples/formal/lean_obligation.json) is:
 
 ```json
 {"schema":1,"kind":"lean_obligation","relation":"lt","left":"1/2","right":"3/4"}
@@ -159,7 +159,7 @@ Declared formal admission requires `PASS`; both `FAIL` and `UNKNOWN` block it. M
 
 An admission witness can exist outside the samples selected for execution. The current implementation therefore records `admission_status` / `admission_assurance` separately from `observed_status` / `execution_assurance`. A missed observed crossing does not invalidate the earlier existence certificate. A failed worker does not refute the mathematical or scientific claim.
 
-Verifier outputs remain separate from `run_status`, `assessment.task_gain` and `assessment.mechanism`. `PASS` does not establish better task performance, causal isolation, population generalization or L4 policy improvement.
+Verifier outputs remain separate from `run_status`, `assessment.task_gain` and `assessment.mechanism`. `PASS` does not establish better task performance, causal isolation, population generalization or RSI policy improvement. Scientific autonomy uses the [published framework](research-autonomy.md), independently of these checks.
 
 ## Multidimensional adapter scope
 

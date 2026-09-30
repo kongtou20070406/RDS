@@ -12,12 +12,12 @@ RDS 包含科研决策技能与有界标量参考内核。贡献应让具体的�
 
 ## Fork、建分支、验证与提交 PR
 
-先将 [kongtou20070406/RDS](https://github.com/kongtou20070406/RDS/fork) fork 到自己的账号。以下示例使用 PowerShell、Git，以及可选的已登录 GitHub CLI。将 `YOUR_GITHUB_NAME` 替换为你的账号名；本例演示修改 README。
+先将 [kongtou20070406/research-direction-selector](https://github.com/kongtou20070406/research-direction-selector/fork) fork 到自己的账号。以下示例使用 PowerShell、Git，以及可选的已登录 GitHub CLI。将 `YOUR_GITHUB_NAME` 替换为你的账号名；本例演示修改 README。
 
 ```powershell
-git clone https://github.com/YOUR_GITHUB_NAME/RDS.git
-Set-Location RDS
-git remote add upstream https://github.com/kongtou20070406/RDS.git
+git clone https://github.com/YOUR_GITHUB_NAME/research-direction-selector.git
+Set-Location research-direction-selector
+git remote add upstream https://github.com/kongtou20070406/research-direction-selector.git
 git fetch upstream
 git switch -c docs/clarify-evidence upstream/main
 
@@ -29,7 +29,7 @@ git diff -- README.md README.zh-CN.md README.ja-JP.md
 git add README.md README.zh-CN.md README.ja-JP.md
 git commit -m "docs: clarify evidence boundaries"
 git push -u origin docs/clarify-evidence
-gh pr create --repo kongtou20070406/RDS --base main --head YOUR_GITHUB_NAME:docs/clarify-evidence --web
+gh pr create --repo kongtou20070406/research-direction-selector --base main --head YOUR_GITHUB_NAME:docs/clarify-evidence --web
 ```
 
 根据实际改动选择分支名和暂存文件。没有 `gh` 时，推送后打开 fork 的 **Compare & pull request** 页面。PR 中说明问题、改动后的行为、已运行检查及仍存在的限制。
@@ -45,11 +45,11 @@ gh pr create --repo kongtou20070406/RDS --base main --head YOUR_GITHUB_NAME:docs
 
 运行验证的声明必须来自实际执行的检查和收据。不要添加 `manipulation_verified` 等自签字段让计划通过。通过门禁只说明对应程序约束满足，不会自动建立因果关系、外部训练性能或自主科研质量。哈希绑定产物，不认证其科学解释。
 
-说明改动影响的是技能协议、runner、verifier，还是实验性策略工具。L1–L4 描述工作职责，不是行业标准，也不是可执行状态机的四个状态。面向 L4 的工具可以用普通回归测试验证；若声称它提升科研策略，则需要独立、前瞻、等总成本的研究轨迹比较，并保留负结果。
+说明改动影响的是技能协议、runner、verifier，还是实验性策略工具。RDS 采用 Kramer 等（2026）原有的 L0–L5 科学发现框架，详见[自主程度范围](docs/research-autonomy.md)。现有 L3 运行器标识与原先 L4-RSI 标签是历史工程命名，不是外部等级声明。自主能力声明须限定到已展示的任务与自动化范围。RSI 改善是独立声明，需要未使用案例上的独立、前瞻、等总成本研究轨迹比较，并保留负结果。
 
 ## 形式声明与发布范围
 
-区分**目标 base ref 上已发布的行为**、**本 PR 新增的行为**与**开发候选**。[PR #2](https://github.com/kongtou20070406/RDS/pull/2) 中的 typed scalar certificate 工作尚未合并到 `main`。更通用的网络、矩阵和动力学后端，在接入公开接口、完成测试并形成文档前，仍是开发候选。不能把本地类、分支或测试输入写成已发布支持承诺。
+区分**目标 base ref 上已发布的行为**、**本 PR 新增的行为**与**开发候选**。当前 `main` 已包含 [PR #2](https://github.com/kongtou20070406/research-direction-selector/pull/2)：typed scalar certificate、已注册有理数 Linear/ReLU 边界与 margin、正比例缩放等变、有限仿射收缩／不动点与谱检查、具体张量检查，以及需配置的窄范围原生 Lean 接口。一般网络、符号张量和任意动力学仍在支持范围之外；须核对[后端范围](docs/formal-verification.zh-CN.md)与安装版本的注册项。不能把本地类、分支或测试输入写成已发布支持承诺。
 
 涉及数学命题的贡献请提供：
 
@@ -63,7 +63,7 @@ gh pr create --repo kongtou20070406/RDS --base main --head YOUR_GITHUB_NAME:docs
 | `FAIL` | 声明的检查失败。说明违反的条件或反例，不要将其扩展为范围之外的科学反驳。 |
 | `UNKNOWN` | checker 尚未建立结论，例如输入不支持、依赖缺失或求解未得结论。保留原因与实际门禁行为。 |
 
-`assurance` 描述检查方式，与 status 分开。例如，`AST_ONLY` 是语法路径，`SYMBOLIC_CHECKED` 本身不等于独立核验的证明证书。证书声明须遵循对应文档的 checker 与绑定要求。这些标签都不能单独建立任务收益、因果机制支持或 L4 科研策略提升。
+`assurance` 描述检查方式，与 status 分开。例如，`AST_ONLY` 是语法路径，`SYMBOLIC_CHECKED` 本身不等于独立核验的证明证书。证书声明须遵循对应文档的 checker 与绑定要求。这些标签都不能单独建立任务收益、因果机制支持、科学发现自主等级或 RSI 策略提升。
 
 ## 与改动相称的验证
 

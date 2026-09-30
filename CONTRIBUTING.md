@@ -12,12 +12,12 @@ Start with the [documentation index](docs/README.md), [research workflow](docs/r
 
 ## Fork, branch, validate, and open a PR
 
-Fork [kongtou20070406/RDS](https://github.com/kongtou20070406/RDS/fork) into your account. The example below uses PowerShell, Git, and an optional authenticated GitHub CLI. Replace `YOUR_GITHUB_NAME` with your account name, then edit the README files for this example.
+Fork [kongtou20070406/research-direction-selector](https://github.com/kongtou20070406/research-direction-selector/fork) into your account. The example below uses PowerShell, Git, and an optional authenticated GitHub CLI. Replace `YOUR_GITHUB_NAME` with your account name, then edit the README files for this example.
 
 ```powershell
-git clone https://github.com/YOUR_GITHUB_NAME/RDS.git
-Set-Location RDS
-git remote add upstream https://github.com/kongtou20070406/RDS.git
+git clone https://github.com/YOUR_GITHUB_NAME/research-direction-selector.git
+Set-Location research-direction-selector
+git remote add upstream https://github.com/kongtou20070406/research-direction-selector.git
 git fetch upstream
 git switch -c docs/clarify-evidence upstream/main
 
@@ -29,7 +29,7 @@ git diff -- README.md README.zh-CN.md README.ja-JP.md
 git add README.md README.zh-CN.md README.ja-JP.md
 git commit -m "docs: clarify evidence boundaries"
 git push -u origin docs/clarify-evidence
-gh pr create --repo kongtou20070406/RDS --base main --head YOUR_GITHUB_NAME:docs/clarify-evidence --web
+gh pr create --repo kongtou20070406/research-direction-selector --base main --head YOUR_GITHUB_NAME:docs/clarify-evidence --web
 ```
 
 Choose a branch name and staged files that fit your actual change. Without `gh`, open the fork's **Compare & pull request** page after pushing. State the problem, resulting behavior, checks run, and remaining limits in the PR.
@@ -45,11 +45,11 @@ Choose a branch name and staged files that fit your actual change. Without `gh`,
 
 Runtime-verified claims must come from the executed checks and their receipts. Do not add self-signed fields such as `manipulation_verified` to make a plan pass. Passing a gate establishes its stated program constraint; it does not by itself establish causality, external training performance, or autonomous research quality. Hashes bind artifacts and do not certify their scientific interpretation.
 
-Identify whether the change affects the skill protocol, runner, verifier, or an experimental policy tool. L1–L4 describe working responsibilities, not an industry standard or four states in the executable state machine. A tool aimed at L4 can have ordinary regression tests; a claim that it improves research policy needs independent, prospective research trajectories compared at equal total cost, including negative results.
+Identify whether the change affects the skill protocol, runner, verifier, or an experimental policy tool. RDS adopts Kramer et al. (2026)'s original L0–L5 scientific-discovery framework; see [autonomy scope](docs/research-autonomy.md). Existing L3 runner identifiers and the former L4-RSI label are historical engineering names, not claims of external levels. Restrict an autonomy claim to the demonstrated task and automation scope. RSI improvement is a separate claim requiring independent, prospective trajectories on unused cases at equal total cost, including negative results.
 
 ## Formal claims and release scope
 
-Distinguish **released behavior on the target base ref**, **behavior introduced by this PR**, and **development candidates**. The typed scalar certificate work in [PR #2](https://github.com/kongtou20070406/RDS/pull/2) is not yet merged into `main`. More general network, matrix, and dynamics backends are development candidates until connected to the public interface, tested, and documented. Do not turn a local class, branch, or fixture into a released support promise.
+Distinguish **released behavior on the target base ref**, **behavior introduced by this PR**, and **development candidates**. Current `main` includes [PR #2](https://github.com/kongtou20070406/research-direction-selector/pull/2): typed scalar certificates, registered rational Linear/ReLU bounds, margins and positive-scale equivariance, scoped affine contraction/fixed-point and spectral checks, concrete tensor checks, and a narrow configured native Lean interface. General networks, symbolic tensors and arbitrary dynamics remain outside that support; use the [backend scope](docs/formal-verification.md) and installed registrations. Do not turn a local class, branch, or fixture into a released support promise.
 
 For a contribution involving a mathematical claim, provide:
 
@@ -63,7 +63,7 @@ For a contribution involving a mathematical claim, provide:
 | `FAIL` | The declared check failed. State the violated condition or counterexample; do not generalize it into a scientific refutation beyond that scope. |
 | `UNKNOWN` | The checker did not establish a result, for example because the input is unsupported, a dependency is absent, or solving is inconclusive. Preserve the reason and actual gate behavior. |
 
-`assurance` describes the kind of checking, independently of status. For example, `AST_ONLY` is a syntax path, and `SYMBOLIC_CHECKED` alone is not an independently checked proof certificate. A certificate claim must follow its documented checker and binding requirements. None of these labels establishes task gain, causal mechanism support, or an L4 research-policy improvement.
+`assurance` describes the kind of checking, independently of status. For example, `AST_ONLY` is a syntax path, and `SYMBOLIC_CHECKED` alone is not an independently checked proof certificate. A certificate claim must follow its documented checker and binding requirements. None of these labels establishes task gain, causal mechanism support, a scientific-discovery autonomy level, or RSI policy improvement.
 
 ## Validation proportional to the change
 

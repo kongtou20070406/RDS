@@ -11,11 +11,11 @@
 
 Give every experiment a clear question, a fair control, and a result that changes the next decision.
 
-[![Checks](https://github.com/kongtou20070406/RDS/actions/workflows/test.yml/badge.svg)](https://github.com/kongtou20070406/RDS/actions/workflows/test.yml)
+[![Checks](https://github.com/kongtou20070406/research-direction-selector/actions/workflows/test.yml/badge.svg)](https://github.com/kongtou20070406/research-direction-selector/actions/workflows/test.yml)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white&style=flat-square)
 ![Agent Skill](https://img.shields.io/badge/Codex-Agent_Skill-111827?style=flat-square)
 [![Contribute](https://img.shields.io/badge/Contributions-Welcome-0F766E?style=flat-square)](CONTRIBUTING.md)
-[![Stars](https://img.shields.io/github/stars/kongtou20070406/RDS?style=flat-square)](https://github.com/kongtou20070406/RDS/stargazers)
+[![Stars](https://img.shields.io/github/stars/kongtou20070406/research-direction-selector?style=flat-square)](https://github.com/kongtou20070406/research-direction-selector/stargazers)
 
 **English** · [简体中文](README.zh-CN.md) · [日本語](README.ja-JP.md)
 
@@ -23,7 +23,7 @@ Give every experiment a clear question, a fair control, and a result that change
 
 </div>
 
-> This checkout is **v5.5.0-rc.2**, a pre-release from `main` for researchers and their AI. [Download the release](https://github.com/kongtou20070406/RDS/releases/tag/v5.5.0-rc.2). The five components below anchor the project; [the roadmap](docs/roadmap.md) separates implemented behavior from future validation.
+> This checkout is **v5.5.0-rc.2**, a pre-release from `main` for researchers and their AI. [Download the release](https://github.com/kongtou20070406/research-direction-selector/releases/tag/v5.5.0-rc.2). The five components below anchor the project; [the roadmap](docs/roadmap.md) separates implemented behavior from future validation.
 
 Research Direction Selector (RDS) is a research collaboration skill for Codex with an executable local reference kernel. It connects research goals, competing explanations, past evidence, and programmatic checks to answer: **given the evidence and budget, which experiment is worth doing next?**
 
@@ -43,6 +43,8 @@ The 2026-09-30 release checks produced these results:
 | [Public-task-adapted component challenge](docs/advisor-benchmark.md) | **8/8 cases; 28/28 checks passed** | Explicit contracts, missing evidence, dependencies, costs, budgets and source identity. |
 
 The public-task challenge used ScienceAgentBench and CORE-Bench metadata with manually adapted rules. It took **83.0743 ms** to process the eight local fixtures and assemble results; this is a small metadata check, not scientific task execution. [Raw inputs](benchmark/advisor-public/source-facts.json) and [per-check outputs](benchmark/advisor-public/results.json) are available. End-to-end scientific task scores and research-quality improvement remain **unmeasured**; these counts establish the listed behavior, not a comparative ranking.
+
+Cross-skill comparisons are deferred while RDS prioritizes usability on real projects and L2 support across the research workflow. The [benchmark selection notes](docs/benchmark-plan.md) retain candidate tasks for later consideration; no comparison has been run or scheduled.
 
 The checks show concrete benefits for the researcher's next decision:
 
@@ -90,22 +92,26 @@ to the decision and the additional budget is authorized.
 | **4 · Advisor** | Use observations and scoped rules to suggest diagnostics and candidate actions; develop evidence-driven candidate generation. |
 | **5 · RSI** | Propose changes to RDS's own rules and policies, evaluate them and retain only supported improvements. |
 
-The first three support the basic research loop; Advisor and RSI enhance it. Memory supplies evidence to Advisor, while the kernel checks the chosen action. These are functional responsibilities and can share a local implementation. L1–L4 are workflow levels, not additional components.
+The first three support the basic research loop; Advisor and RSI enhance it. Memory supplies evidence to Advisor, while the kernel checks the chosen action. These are functional responsibilities and can share a local implementation. L1–L4 are autonomy levels, not additional components.
 
 ## L1–L4
 
-RDS works through ordinary conversation and can be used by a single model. Its five components are the **Skill**, **execution and acceptance kernel**, **research state and memory**, **Advisor**, and **RSI**: three foundations plus two enhancements. L1–L4 describe the research workflow. The loop is: clarify the goal → choose an experiment → check its design → manage execution → assess results → accumulate evidence and continue. Each round should explain **what we know, what remains unknown, what comes next, and why it is worth doing**. Current execution coverage is bounded below.
+RDS supports ordinary conversation and single-model collaboration. Its five components support the loop: clarify the goal → investigate evidence → choose and check an experiment → execute → assess results → record evidence and continue. Each round should explain **what we know, what remains unknown, what comes next, and why it is worth doing**.
 
-These are RDS's working levels for explaining its roadmap, not an industry standard or a score for a model's scientific ability.
+RDS adopts **Kramer et al. (2026)'s scientific-discovery automation framework**, which draws an analogy with driving automation. The original scale has **six levels, L0–L5**; the table here highlights L1–L4 without changing their numbering or meaning. See the [original names, source and interpretation limits](docs/research-autonomy.md).
 
-| Level | Responsibility | Evidence needed |
-| --- | --- | --- |
-| **L1 · Evidence assistance** | Find and organize literature, code, logs, and prior decisions for a researcher-directed task. | Traceable sources and a clear account of what is known or missing. |
-| **L2 · Experiment advice** | Compare routes and propose a scoped, falsifiable experiment with a fair control and a budget. | A design that distinguishes competing explanations and states the next step for either result. |
-| **L3 · Bounded execution loop** | Within an authorized contract, admit plans, execute, collect artifacts, assess results, and recover interrupted work. | Engine-produced execution records, protocol-enforced budget and data-use constraints, and reproducible recovery. |
-| **L4 · Tested policy improvement** | Use failures and counterexamples to revise scoped decision rules and test whether the revised research policy improves subsequent work. | Prospective comparisons of whole research trajectories at equal total budgets, including independent cases and negative results. |
+| Level | Scope in the adopted framework |
+| --- | --- |
+| **L1** | Computer assistance in an aspect of scientific work. |
+| **L2** | Complete automation of one significant part of discovery. |
+| **L3** | An automated full discovery cycle in a limited domain. |
+| **L4** | Discovery cycles across multiple domains, with limited autonomous goal setting. |
 
-RDS currently provides **L2 research guidance and building blocks for L3 through its scalar reference kernel**. Its rules, branching, and repair tools are experimental foundations for L4. It has not established an end-to-end GPU research loop or measured a research-policy improvement across independent trajectories. At every level, goals, budgets, authorization, and scientific interpretation remain under the researcher's control.
+These are autonomy descriptions, not scientific-quality scores, SAE compliance or safety certification. **Current RDS has scoped L2 functionality in automated reference computations and explicitly bound candidate search, alongside a human-facing protocol. This describes those restricted tasks, not a general research grade. A complete scientific L3 or L4 loop and an end-to-end GPU research service have not been demonstrated.** The runner's existing L3 identifiers are historical engineering names, not an external level claim.
+
+**Near-term product goal: L2 support across all six research stages.** Each stage should offer usable automation while the researcher retains research direction, key judgments and acceptance of scientific results. This is a coverage goal, not a redefinition of the paper's L2 or a claim that the complete L3 loop is already implemented. Longer-term research targets are the original L4 and L5: multi-domain discovery with limited goal setting, and comprehensive autonomy, respectively. These are directions, not delivery dates or current capabilities. See the [roadmap](docs/roadmap.md) for stage-specific deliverables and evidence gates.
+
+**RSI is a separate component and evaluation axis.** A policy-improvement claim requires prospective comparisons of whole research trajectories on unused independent cases at equal total budgets, including failures and negative results. It is not the definition of L4, and that improvement has not yet been established.
 
 ## Implemented capabilities
 
@@ -120,7 +126,7 @@ RDS currently provides **L2 research guidance and building blocks for L3 through
 
 ## Formal verification and rule obligations
 
-The architecture separates declared propositions, backend search, independent checking, and scientific assessment. `main` now includes the scalar AST/SymPy path, a declarative registry, independently checked mathematical certificates and a narrow native Lean4 interface from [PR #2](https://github.com/kongtou20070406/RDS/pull/2). Python adapters report certificate checks; native Lean checking is limited to supported closed rational obligations and requires a configured executable. The older experimental `LeanFormalEngine`/Tactic dispatcher is a separate prototype: `RULE_ALIGNED` checks metadata, and tactic success labels do not establish a proof of the declared goal. See [verification scope](docs/formal-verification.md) and [raw adapter timing measurements](benchmark/results/formal-windows-python313.json).
+The architecture separates declared propositions, backend search, independent checking, and scientific assessment. `main` now includes the scalar AST/SymPy path, a declarative registry, independently checked mathematical certificates and a narrow native Lean4 interface from [PR #2](https://github.com/kongtou20070406/research-direction-selector/pull/2). Python adapters report certificate checks; native Lean checking is limited to supported closed rational obligations and requires a configured executable. The older experimental `LeanFormalEngine`/Tactic dispatcher is a separate prototype: `RULE_ALIGNED` checks metadata, and tactic success labels do not establish a proof of the declared goal. See [verification scope](docs/formal-verification.md) and [raw adapter timing measurements](benchmark/results/formal-windows-python313.json).
 
 Each of the 23 scoped judgment nodes now has explicit **preconditions, a falsifier and a feasible-domain expression**. The table maps obligations rather than claiming 23 proved causal theorems. Full variable definitions, required evidence and candidate tactic mappings are in the [rule obligation guide](docs/rule-obligations.md); none of the added metadata is currently enforced by the dispatcher.
 
@@ -155,7 +161,7 @@ Each of the 23 scoped judgment nodes now has explicit **preconditions, a falsifi
 
 </details>
 
-[Documentation](docs/README.md) includes the L1–L4 experiment flow, bilingual terminology and contributor guidance. [Lean4/mathlib compatibility](docs/lean-integration.md) serves suitable mathematical subproblems within RDS's human research-assistance loop. The native adapter reuses the Lean kernel for closed rational obligations; broader mathlib model translation remains planned. C++ is an optional adapter optimization after profiling.
+[Documentation](docs/README.md) includes the adopted autonomy framework and experiment flow, bilingual terminology and contributor guidance. [Lean4/mathlib compatibility](docs/lean-integration.md) serves suitable mathematical subproblems within RDS's human research-assistance loop. The native adapter reuses the Lean kernel for closed rational obligations; broader mathlib model translation remains planned. C++ is an optional adapter optimization after profiling.
 
 ## Workflow
 
@@ -181,7 +187,7 @@ Place the complete repository in a skill folder named `research-direction-select
 
 ```powershell
 New-Item -ItemType Directory -Path "$env:USERPROFILE/.agents/skills" -Force | Out-Null
-git clone --branch v5.5.0-rc.2 https://github.com/kongtou20070406/RDS.git "$env:USERPROFILE/.agents/skills/research-direction-selector"
+git clone --branch v5.5.0-rc.2 https://github.com/kongtou20070406/research-direction-selector.git "$env:USERPROFILE/.agents/skills/research-direction-selector"
 ```
 
 You can also place it in your research project's `.agents/skills/research-direction-selector/`. See the [official OpenAI skills documentation](https://learn.chatgpt.com/docs/build-skills) for discovery and invocation.
@@ -197,8 +203,8 @@ RDS extracts goals and constraints from the current files and conversation, then
 Requires **Python 3.11+**. Ordinary scalar execution uses only the Python standard library and needs no GPU. Live history retrieval separately requires an installed Obelisk CLI.
 
 ```powershell
-git clone --branch v5.5.0-rc.2 https://github.com/kongtou20070406/RDS.git
-Set-Location RDS
+git clone --branch v5.5.0-rc.2 https://github.com/kongtou20070406/research-direction-selector.git
+Set-Location research-direction-selector
 python -B scripts/rds_cli.py --version
 ```
 
@@ -285,7 +291,7 @@ python -B benchmark/run.py
 python -B benchmark/redteam/runner.py
 ```
 
-Unit tests check kernel behavior; historical replays check packet integrity and associated gates; the red-team runner checks predefined protocol attacks. [GitHub Actions](https://github.com/kongtou20070406/RDS/actions) runs the unit tests and historical replays on Windows / Ubuntu with Python 3.11 / 3.13.
+Unit tests check kernel behavior; historical replays check packet integrity and associated gates; the red-team runner checks predefined protocol attacks. [GitHub Actions](https://github.com/kongtou20070406/research-direction-selector/actions) runs the unit tests and historical replays on Windows / Ubuntu with Python 3.11 / 3.13.
 
 Historical training scores are session reports, and automated replays use synthetic scalar inputs. These cases have informed skill development. Passing regression checks does not establish autonomous research quality or replace real GPU experiments and independent prospective evaluation. See the [benchmark protocol](benchmark/README.md) for evaluation and information-separation conventions.
 
@@ -347,7 +353,7 @@ Start with a documentation fix, translation improvement, or minimal reproducible
 | Kernel & verifiers | Include a minimal reproduction and relevant regression checks; specify types, domains, and `UNKNOWN` behavior. |
 | Research cases | Provide shareable information available at the decision time, the question, and an evaluation protocol; separate later outcomes from proposer inputs. |
 
-[Report an issue](https://github.com/kongtou20070406/RDS/issues/new/choose) or [open a PR](https://github.com/kongtou20070406/RDS/compare). For changes to goals, evidence semantics, or major execution interfaces, discuss the design in an issue first. Preserve negative results and evidence limits; keep `.rds/` runtime state, credentials, private sessions, and non-public data out of submissions.
+[Report an issue](https://github.com/kongtou20070406/research-direction-selector/issues/new/choose) or [open a PR](https://github.com/kongtou20070406/research-direction-selector/compare). For changes to goals, evidence semantics, or major execution interfaces, discuss the design in an issue first. Preserve negative results and evidence limits; keep `.rds/` runtime state, credentials, private sessions, and non-public data out of submissions.
 
 ## Ecosystem & design references
 

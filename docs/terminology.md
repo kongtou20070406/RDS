@@ -6,7 +6,7 @@ This glossary aligns the vocabulary used by RDS's five components and documentat
 
 ## Component terms
 
-The research protocol Skill, execution and acceptance kernel, and research state and memory form the three foundational components. Advisor and RSI are the two enhancements. These are software responsibilities; L1–L4 are explanatory work levels across them.
+The research protocol Skill, execution and acceptance kernel, and research state and memory form the three foundational components. Advisor and RSI are the two enhancements. These are software responsibilities; the adopted L0–L5 levels describe scientific-discovery automation across them.
 
 | Component | 中文 | Meaning in RDS |
 | --- | --- | --- |
@@ -65,11 +65,19 @@ Current Advisor helpers provide diagnostic hints, scoped rule retrieval and boun
 
 These values are categories, not an ordered ladder or a list supported by every version. Read each value together with the check status, declared proposition, domain, and backend scope. For the precise support and acceptance conditions of each backend, use the [formal verification guide](formal-verification.md), which distinguishes the historical base, current mainline and future adapters.
 
-## L1–L4 and the research loop
+## Adopted autonomy levels and historical identifiers
 
-L1–L4 is an **explanatory responsibility framework** used in the overview and workflow documentation. These levels are not components, existing SQLite states, experiment stages that automatically increase, or scores for a research project's maturity. Do not derive a level from `PASS`, an assurance type, or a single evidence assessment.
+RDS adopts Kramer et al. (2026)'s six-level L0–L5 scientific-discovery automation framework, retaining its numbering and meaning. L1–L4 describe assistance, automation of a significant component, a complete domain-limited discovery cycle, and multi-domain cycles with limited autonomous goal setting, respectively. The [autonomy guide](research-autonomy.md) contains the original names and source.
 
-The actual experiment loop follows contracts, hypotheses, gates, execution, receipts, assessment, and the next decision. Task gain, mechanism evidence, and execution state remain separate within that loop. The [research workflow guide](research-workflow.md) explains how the responsibility framework relates to the experiment process and the current implementation.
+The scale is not a component list, SQLite state machine, scientific-quality score or safety certification. Existing L3 reference-runner names and the former L4 policy-improvement label are historical engineering identifiers; they do not establish the corresponding external autonomy level. Keep code and CLI identifiers compatible and describe those tools as the bounded reference runner or RSI.
+
+| Term | Meaning in RDS |
+| --- | --- |
+| Execution contract | The authorized actions, data, evaluators, environment, resources and evidence constraints for supported work. |
+| Stop and recovery conditions | Operational responses to failed or invalid work, including preserving artifacts, reconciling resources and recording what permits resumption. They are not autonomy-level definitions. |
+| RSI | A separate component for proposing and evaluating policy changes. Prospective gains at equal total budgets on unused independent cases are independent of autonomy. |
+
+Contracts, hypotheses, gates, execution, receipts, assessment and the next decision form the actual experiment loop. Task gain, mechanism evidence and execution state remain separate; `PASS` or one assessment cannot establish an autonomy level. See the [workflow](research-workflow.md) for current capabilities.
 
 ## Related documentation
 

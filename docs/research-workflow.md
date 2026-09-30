@@ -2,7 +2,7 @@
 
 [简体中文](research-workflow.zh-CN.md) · [Documentation](README.md) · [Formal verification](formal-verification.md)
 
-RDS automates parts of research collaboration to help a human researcher choose the next experiment, carry it out within an authorized scope, and use the evidence to decide what follows. The researcher sets the goal and resources; observed evidence determines the strength of a claim. Keep three things separate: components describe software responsibilities; L1–L4 describe levels of work; the CLI records execution states. Each claim has its own evidence assessment.
+RDS automates parts of research collaboration to help a human researcher choose the next experiment, carry it out within an authorized scope, and use the evidence to decide what follows. The researcher sets the goal and resources; observed evidence determines the strength of a claim. Keep three things separate: components describe software responsibilities; the adopted L0–L5 framework describes scientific-discovery automation; the CLI records execution states. Each claim has its own evidence assessment.
 
 ## Five components and their responsibilities
 
@@ -16,26 +16,28 @@ The first three components support the basic research loop; Advisor and RSI enha
 | Enhancement | Advisor | Use real observations, history, judgment dependencies and scoped rules to propose tests that distinguish competing explanations and change the next decision. |
 | Enhancement | RSI | Propose scoped revisions to rules and work policies, evaluate them, and retain or roll back changes according to evidence. |
 
-Budget checks, probes, log handling and applicable mathematical checks belong to the execution and acceptance kernel. The judgment graph and historical sources support research state and memory. Lean-compatible cooperation concerns suitable mathematical subtasks; it does not replace experimental evidence for the broader research claim. L1–L4 span these components and are not additional components.
+Budget checks, probes, log handling and applicable mathematical checks belong to the execution and acceptance kernel. The judgment graph and historical sources support research state and memory. Lean-compatible cooperation concerns suitable mathematical subtasks; it does not replace experimental evidence for the broader research claim. Autonomy levels describe discovery automation across these components and are not additional components.
 
 ## Advisor: current implementation and direction
 
 Advisor's intended process starts with real evidence and follows the judgment graph and scoped rules to generate or combine candidates. Each candidate should identify competing explanations, a discriminating observation, and how positive or negative results would change the next decision. Screen these candidates for authorized total cost after establishing their decision value; preserve their derivation and evidence sources.
 
-The current implementation combines diagnostic hints and scoped rule retrieval with bounded graph search over source-labelled facts and explicit executable bindings. It follows `prerequisite_for` dependencies, preserves unknown conditions as evidence queries, records competing explanations and result-dependent next decisions, and compares costs only when their units are comparable. The rules and candidate bindings are authored; general automatic discovery and combination of research ideas remain development directions. Rule matching does not establish a causal diagnosis. Claims about Advisor's scientific success rate, research quality or cost savings require independent research trajectories; the [component benchmark](advisor-benchmark.md) measures narrower contract checks. RSI likewise produces candidate policy changes, whose improvement needs the L4 evaluation described below.
+The current implementation combines diagnostic hints and scoped rule retrieval with bounded graph search over source-labelled facts and explicit executable bindings. It follows `prerequisite_for` dependencies, preserves unknown conditions as evidence queries, records competing explanations and result-dependent next decisions, and compares costs only when their units are comparable. The rules and candidate bindings are authored; general automatic discovery and combination of research ideas remain development directions. Rule matching does not establish a causal diagnosis. Claims about Advisor's scientific success rate, research quality or cost savings require independent research trajectories; the [component benchmark](advisor-benchmark.md) measures narrower contract checks. RSI likewise produces candidate policy changes, whose improvement needs the independent RSI evaluation described below.
 
-## L1–L4 responsibilities
+## Adopted scientific-discovery autonomy levels
 
-These are RDS's explanatory working levels, not an industry standard or four database states. An experiment can revisit earlier work, and successful execution never automatically promotes a project to L4.
+RDS adopts the framework formally published by Kramer et al. (2026), retaining the original six levels, L0–L5. The definitions were checked in author preprint v2, §5 / Table 2; the journal table is numbered Table 5. This overview focuses on L1–L4; it does not create a four-level RDS scale. The [autonomy guide](research-autonomy.md) provides original names, source links and concise scope summaries.
 
-| Level | Work and input | Deliverable | Condition for the next decision |
-| --- | --- | --- | --- |
-| L1 — Evidence assistance | Read the stated goal, relevant code, literature, logs and earlier decisions. Retrieve missing history through Obelisk. | Traceable evidence, competing explanations, missing information and uncertainty. | Sources are sufficient to specify a consequential question; missing evidence remains explicit. |
-| L2 — Experiment advice | Compare causally distinct routes under the available budget and deployment inputs. | A scoped hypothesis, a falsifier, fair control, data-use plan, useful gain threshold and positive/negative next actions. | The proposed test can distinguish the explanations and its full cost is authorized. |
-| L3 — Bounded execution loop | Bind the authorized contract, hypothesis, source, data, verifier and allocation. | Execution artifacts, engine receipts, separate evidence assessments and a recovery record. | Interpret only the observed result within its declared scope; continue, revise or stop. |
-| L4 — Tested policy improvement | Propose scoped rule changes from repeated failures or counterexamples. | Reviewable candidate rules and a prospective comparison of research trajectories. | Independent cases at equal total cost support the claimed policy improvement; retain failures and limits. |
+| Level | Scope |
+| --- | --- |
+| L1 | Computer assistance in an aspect of science. |
+| L2 | One significant discovery component is fully automated. |
+| L3 | A complete discovery cycle is automated in a limited domain. |
+| L4 | Discovery cycles span multiple domains, with limited autonomous goal setting. |
 
-Current public `main` supplies the L2 skill protocol, L3 scalar reference building blocks, checked mathematical interfaces from [PR #2](https://github.com/kongtou20070406/RDS/pull/2), and the bounded Advisor graph search and read-only dashboard from [PR #3](https://github.com/kongtou20070406/RDS/pull/3). Neither one model gain nor one mathematical certificate validates an L4 research policy.
+These levels are not software components, database states, quality scores, safety certification or SAE compliance. They do not define who takes over after a fault. RDS's contracts separately constrain actions, data and evaluators, environments, budgets, evidence gates, stopping, artifact preservation and recovery. Existing authorization and caps govern actions without a new blanket approval step.
+
+Current public `main` provides a human-facing protocol, a bounded scalar reference runner, checked mathematical interfaces from [PR #2](https://github.com/kongtou20070406/research-direction-selector/pull/2), and Advisor graph search and a read-only dashboard from [PR #3](https://github.com/kongtou20070406/research-direction-selector/pull/3). Automatic reference computations and explicitly bound candidate search provide scoped L2 functionality; this does not grade RDS as a general research system. It has not demonstrated a complete scientific L3 or L4 loop or an end-to-end GPU research service. Existing L3 runner identifiers and the former L4-RSI label are historical engineering names and do not map to the adopted levels.
 
 ## One experiment in the reference CLI
 
@@ -86,12 +88,12 @@ Use development data for choices. Freeze selection before independent confirmati
 
 For declared mathematical claims, `FAIL` and `UNKNOWN` both block formal admission. A successful mathematical check does not bypass budget, source-binding or data-use constraints. The verifier guide explains the distinction between admission certificates and observed execution.
 
-## Returning from L3 to L2, and evaluating L4
+## Revising the experiment, and evaluating RSI independently
 
 Prefer existing evidence and matched same-seed comparisons. Do not routinely add multi-seed campaigns. Recommend additional seeds only after observed seed instability threatens the current conclusion and the decision value justifies the authorized cost; state the uncertainty when existing evidence is insufficient.
 
 A failed or timed-out run first calls for execution diagnosis. A valid negative scientific result can instead narrow the hypothesis or change the route. A task gain with an untested mechanism supports only the gain statement at the corresponding evidence level.
 
-Keep policy updates as reviewable candidates. Compare old and revised policies prospectively on unused research cases, with the same total budget including unsuccessful trials, diagnosis, verification and evaluation. Record versions, information exposure, stopping rules and negative results. Reusing development cases or showing only the best model does not establish policy improvement.
+RSI is independent of the adopted autonomy levels: a supervised workflow can evaluate policy changes, and greater automation need not improve the policy. Keep policy updates as reviewable candidates. Compare old and revised policies prospectively on unused research cases, with the same total budget including unsuccessful trials, diagnosis, verification and evaluation. Record versions, information exposure, stopping rules and negative results. Reusing development cases or showing only the best model does not establish policy improvement.
 
 Obelisk supplies relevant historical source records; `.rds/state.sqlite3` supplies operational contracts and receipts. Retrieved text grants no new authorization, and the execution ledger is not a second conversational memory store.

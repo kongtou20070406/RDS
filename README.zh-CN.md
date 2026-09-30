@@ -11,11 +11,11 @@
 
 让下一次实验有明确的问题、公平的对照，以及能改变决策的结果。
 
-[![Checks](https://github.com/kongtou20070406/RDS/actions/workflows/test.yml/badge.svg)](https://github.com/kongtou20070406/RDS/actions/workflows/test.yml)
+[![Checks](https://github.com/kongtou20070406/research-direction-selector/actions/workflows/test.yml/badge.svg)](https://github.com/kongtou20070406/research-direction-selector/actions/workflows/test.yml)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white&style=flat-square)
 ![Agent Skill](https://img.shields.io/badge/Codex-Agent_Skill-111827?style=flat-square)
 [![Contribute](https://img.shields.io/badge/Contributions-Welcome-0F766E?style=flat-square)](CONTRIBUTING.zh-CN.md)
-[![Stars](https://img.shields.io/github/stars/kongtou20070406/RDS?style=flat-square)](https://github.com/kongtou20070406/RDS/stargazers)
+[![Stars](https://img.shields.io/github/stars/kongtou20070406/research-direction-selector?style=flat-square)](https://github.com/kongtou20070406/research-direction-selector/stargazers)
 
 [English](README.md) · **简体中文** · [日本語](README.ja-JP.md)
 
@@ -23,7 +23,7 @@
 
 </div>
 
-> 本版为从 `main` 发布的 **v5.5.0-rc.2 预发布版**，面向真人及真人交给 AI 使用。[下载版本](https://github.com/kongtou20070406/RDS/releases/tag/v5.5.0-rc.2)。下文固定五组件，[未来计划](docs/roadmap.md)区分当前实现和后续验收。
+> 本版为从 `main` 发布的 **v5.5.0-rc.2 预发布版**，面向真人及真人交给 AI 使用。[下载版本](https://github.com/kongtou20070406/research-direction-selector/releases/tag/v5.5.0-rc.2)。下文固定五组件，[未来计划](docs/roadmap.md)区分当前实现和后续验收。
 
 Research Direction Selector（简称 RDS）是面向 Codex 的科研协作技能，配有可执行的本地参考内核。它把研究目标、竞争解释、历史经验和程序检查连接起来，帮助研究者回答：**在当前证据和预算下，下一步最值得做哪个实验？**
 
@@ -43,6 +43,8 @@ Research Direction Selector（简称 RDS）是面向 Codex 的科研协作技能
 | [公开任务改编组件挑战](docs/advisor-benchmark.md) | **8/8 个案例、28/28 条检查通过** | 显式合同、缺失证据、依赖、成本、预算和来源身份。 |
 
 公开任务挑战采用 ScienceAgentBench、CORE-Bench 的元数据，由人手工改编规则。八个本地 fixture 的处理与结果组装耗时 **83.0743 ms**；这是小型元数据检查的耗时。可查看[原始输入](benchmark/advisor-public/source-facts.json)和[逐项输出](benchmark/advisor-public/results.json)。**端到端科学任务分数与科研质量提升尚未测量**；这些通过数支持表中的具体行为，不能作为与其它系统的排名比较。
+
+横向比较已暂缓，当前优先真实项目的使用体验、实用性与全环节 L2 支持。[基准选型资料](docs/benchmark-plan.md)保留候选任务供以后参考，没有执行或排期对比实验。
 
 这组检查展示了对下一步研究决定的具体帮助：
 
@@ -89,22 +91,26 @@ RDS 的主体是自动化辅助人类科研：调查证据、生成与筛选实�
 | **④ Advisor 建议引擎** | 根据观测与有适用范围的规则给出诊断和候选行动，发展证据驱动的候选生成。 |
 | **⑤ RSI 自改进** | 提出并评测 RDS 自身的规则和策略修改，只保留有证据支持的改进。 |
 
-前三个支撑基础科研闭环，Advisor 与 RSI 提供增强。记忆为 Advisor 提供依据，内核检查选定行动；这是功能职责，可以共享本地实现。L1–L4 是工作分级，不另算组件。
+前三个支撑基础科研闭环，Advisor 与 RSI 提供增强。记忆为 Advisor 提供依据，内核检查选定行动；这是功能职责，可以共享本地实现。L1–L4 是自主程度分级，不另算组件。
 
 ## L1–L4
 
-RDS 支持普通对话、单模型协作，按职责分为五个组件：**科研规程 Skill、执行与验收内核、研究状态与记忆、Advisor 建议引擎、RSI 自改进**，即三个基础组件加两个增强组件。L1–L4 描述科研工作流。科研流程是：明确目标 → 选择实验 → 检查设计 → 管理过程 → 判断结果 → 积累接续。每轮应说清**知道什么、不知道什么、下一步做什么、为什么值得做**。当前实际执行范围见下文。
+RDS 支持普通对话、单模型协作，五个组件支撑科研循环：明确目标 → 调查证据 → 选择并检查实验 → 执行 → 判断结果 → 积累接续。每轮应说清**知道什么、不知道什么、下一步做什么、为什么值得做**。
 
-这是 RDS 用于说明发展路线的工作分级，不是行业通用标准，也不是对模型科研能力的评分。
+RDS 直接采用 **Kramer 等（2026）的科学发现自动化框架**。该论文借鉴自动驾驶，原框架有 **L0–L5 六级**；这里重点介绍 L1–L4，不改编号或含义。[自主程度说明](docs/research-autonomy.md)列出原名、来源与解释边界。
 
-| 层级 | 承担的工作 | 所需证据 |
-| --- | --- | --- |
-| **L1 · 证据辅助** | 为研究者指定的任务查找和整理论文、代码、日志与旧决定。 | 来源可追溯，明确已知内容和缺失信息。 |
-| **L2 · 实验建议** | 比较候选路线，提出有范围、可证伪、有公平对照和预算的实验。 | 设计能区分竞争解释，正负结果都对应明确的下一步。 |
-| **L3 · 有界执行闭环** | 在已授权契约内检查计划、执行、收集产物、判断结果，并恢复中断的工作。 | 运行器生成的执行记录，协议内实际生效的预算与数据使用约束，以及可复现的恢复过程。 |
-| **L4 · 经验证的策略改进** | 根据失败与反例修订有适用范围的判断规则，并检验新策略是否改善后续研究。 | 等总预算下整条研究轨迹的前瞻比较，包含独立案例和负结果。 |
+| 层级 | 原框架的范围 |
+| --- | --- |
+| **L1 · 机器辅助** | 科研某一方面得到计算机辅助。 |
+| **L2 · 部分自动化** | 一个重要科学发现环节完全自动化。 |
+| **L3 · 有条件自动化** | 限定领域内完整科学发现循环自动化。 |
+| **L4 · 高度自动化** | 跨多个科研领域完成发现闭环，并能有限自主设置目标。 |
 
-RDS 当前提供的是 **L2 科研建议，以及通过标量参考内核实现的 L3 基础能力**。规则、分支与修复工具是面向 L4 的实验性基础；当前尚未完成端到端 GPU 科研闭环，也没有在独立研究轨迹上验证策略提升。四级都保留研究者对目标、预算、授权和科学解释的判断权。
+这些描述自主程度，不是科研质量评分、SAE 合规或安全认证。**当前 RDS 的参考计算与显式绑定候选搜索具有局部 L2 功能，同时仍提供面向人的科研规程。这只描述受限任务，不是通用科研等级认证；尚未证明完整 L3、L4 科研闭环或端到端 GPU 科研服务。** 参考运行器现有 L3 标识是历史工程命名，不表示达到外部框架等级。
+
+**近期产品目标是“全环节 L2”**：六个科研环节都有可用的自动化支持，研究者保留研究方向、关键判断与科学结果接受的决定权。这是覆盖目标，不重定义论文的 L2，也不表示已实现完整 L3 闭环。长期研究方向是原框架的 L4、L5，分别涉及多领域发现与有限自主设定目标，以及全面自主；不是交付时间或已实现承诺。各环节交付物与证据门槛见[路线图](docs/roadmap.md)。
+
+**RSI 是独立组件和评估轴。** 声称策略改善，需要在未使用的独立案例上按相同总预算前瞻比较完整研究轨迹，保留失败尝试与负结果；这不是 L4 的定义，当前也尚未建立该收益证据。
 
 ## 已实现的功能
 
@@ -119,7 +125,7 @@ RDS 当前提供的是 **L2 科研建议，以及通过标量参考内核实现�
 
 ## 形式化验证与规则义务
 
-架构将显式命题、后端搜索、独立检查与科学评估分开。`main` 已包含标量 AST/SymPy 路径，以及 [PR #2](https://github.com/kongtou20070406/RDS/pull/2) 的声明式注册表、可独立复核的数学证书及窄范围原生 Lean4 接口。Python 适配器报告证书检查；原生 Lean 检查限于支持的闭合有理数义务，并需要配置可执行文件。旧实验性 `LeanFormalEngine`／Tactic 分派器是另一条原型路径：`RULE_ALIGNED` 检查元数据，tactic 成功标识不能证明声明目标。详见[验证范围](docs/formal-verification.zh-CN.md)与[适配器耗时原始测量](benchmark/results/formal-windows-python313.json)。
+架构将显式命题、后端搜索、独立检查与科学评估分开。`main` 已包含标量 AST/SymPy 路径，以及 [PR #2](https://github.com/kongtou20070406/research-direction-selector/pull/2) 的声明式注册表、可独立复核的数学证书及窄范围原生 Lean4 接口。Python 适配器报告证书检查；原生 Lean 检查限于支持的闭合有理数义务，并需要配置可执行文件。旧实验性 `LeanFormalEngine`／Tactic 分派器是另一条原型路径：`RULE_ALIGNED` 检查元数据，tactic 成功标识不能证明声明目标。详见[验证范围](docs/formal-verification.zh-CN.md)与[适配器耗时原始测量](benchmark/results/formal-windows-python313.json)。
 
 23 个有范围的判断节点现已分别记录**前置门禁、可证伪判据与可行域表达式**。下表映射的是义务，并不声称已经证明 23 条因果定理。完整变量、证据与候选 tactic 映射见[规则义务指南](docs/rule-obligations.zh-CN.md)；当前分派器尚未强制检查新增元数据。
 
@@ -154,7 +160,7 @@ RDS 当前提供的是 **L2 科研建议，以及通过标量参考内核实现�
 
 </details>
 
-[文档导航](docs/README.zh-CN.md)包含 L1–L4 实验流、双语术语和贡献说明。[Lean4/mathlib 兼容](docs/lean-integration.zh-CN.md)服务于 RDS 自动化辅助人类科研循环中的合适数学子问题。原生适配器在闭合有理数义务上复用 Lean 内核；通用 mathlib 模型翻译仍待实现。C++ 仅用于测量后确认的适配性能瓶颈。
+[文档导航](docs/README.zh-CN.md)包含采用的自主分级与实验流、双语术语和贡献说明。[Lean4/mathlib 兼容](docs/lean-integration.zh-CN.md)服务于 RDS 自动化辅助人类科研循环中的合适数学子问题。原生适配器在闭合有理数义务上复用 Lean 内核；通用 mathlib 模型翻译仍待实现。C++ 仅用于测量后确认的适配性能瓶颈。
 
 ## 工作流程
 
@@ -180,7 +186,7 @@ flowchart LR
 
 ```powershell
 New-Item -ItemType Directory -Path "$env:USERPROFILE/.agents/skills" -Force | Out-Null
-git clone --branch v5.5.0-rc.2 https://github.com/kongtou20070406/RDS.git "$env:USERPROFILE/.agents/skills/research-direction-selector"
+git clone --branch v5.5.0-rc.2 https://github.com/kongtou20070406/research-direction-selector.git "$env:USERPROFILE/.agents/skills/research-direction-selector"
 ```
 
 也可以将仓库放到研究项目的 `.agents/skills/research-direction-selector/`。技能目录与调用方式见 [OpenAI 官方技能文档](https://learn.chatgpt.com/docs/build-skills)。
@@ -196,8 +202,8 @@ RDS 从当前文件和对话中整理目标与约束，给出一个推荐方向�
 需要 **Python 3.11+**。普通标量执行仅依赖 Python 标准库，无需 GPU；实时历史检索另需已安装的 Obelisk。
 
 ```powershell
-git clone --branch v5.5.0-rc.2 https://github.com/kongtou20070406/RDS.git
-Set-Location RDS
+git clone --branch v5.5.0-rc.2 https://github.com/kongtou20070406/research-direction-selector.git
+Set-Location research-direction-selector
 python -B scripts/rds_cli.py --version
 ```
 
@@ -284,7 +290,7 @@ python -B benchmark/run.py
 python -B benchmark/redteam/runner.py
 ```
 
-单元测试核验内核行为；历史回放检查决策包完整性与相关门禁；red-team runner 检查预制协议攻击场景。[GitHub Actions](https://github.com/kongtou20070406/RDS/actions) 在 Windows / Ubuntu、Python 3.11 / 3.13 上运行单元测试与历史回放。
+单元测试核验内核行为；历史回放检查决策包完整性与相关门禁；red-team runner 检查预制协议攻击场景。[GitHub Actions](https://github.com/kongtou20070406/research-direction-selector/actions) 在 Windows / Ubuntu、Python 3.11 / 3.13 上运行单元测试与历史回放。
 
 历史训练分数属于会话报告，自动回放使用合成标量输入。这些案例已参与技能开发，通过回归检查不能证明自主科研质量，也不能替代真实 GPU 实验或独立前瞻评估。评测方法与信息隔离约定见 [benchmark/README.md](benchmark/README.md)。
 
@@ -346,7 +352,7 @@ python -B benchmark/redteam/runner.py
 | 内核与验证器 | 提交最小复现与相关回归；明确支持的类型、定义域和 `UNKNOWN` 行为。 |
 | 新研究案例 | 提供可公开的当时信息、决策问题和评估协议，将后续结果与提案输入分开。 |
 
-通过 [报告问题](https://github.com/kongtou20070406/RDS/issues/new/choose) 或 [提交 PR](https://github.com/kongtou20070406/RDS/compare) 参与。改变目标、证据语义或主要执行接口前，建议先开 issue 对齐设计。保留负结果与证据限制，避免提交 `.rds/` 运行状态、凭据、私人会话或无法公开的数据。
+通过 [报告问题](https://github.com/kongtou20070406/research-direction-selector/issues/new/choose) 或 [提交 PR](https://github.com/kongtou20070406/research-direction-selector/compare) 参与。改变目标、证据语义或主要执行接口前，建议先开 issue 对齐设计。保留负结果与证据限制，避免提交 `.rds/` 运行状态、凭据、私人会话或无法公开的数据。
 
 ## 相关生态与设计参考
 

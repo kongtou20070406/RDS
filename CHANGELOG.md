@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Rename the GitHub repository to `kongtou20070406/research-direction-selector` with the owner's authorization, and update the public documentation links and clone instructions. RDS remains the project abbreviation.
+- Adopt the published scientific-autonomy taxonomy from Kramer et al. (Machine Learning, 2026, §5/Table 5), retaining its L0–L5 numbering and definitions. Distinguish it from the older `L3`/`L4` engineering labels and from RSI improvement claims.
+- Describe current scoped L2 functionality, the near-term goal of L2 automation across all six research stages, and long-term L4/L5 research targets without claiming completed autonomous discovery.
+- Replace the general roadmap with ten concrete work items, each specifying the implementation gap, method, deliverables and acceptance conditions. Prioritize real-project usability, evidence import, continuity and human review. Retain sourced benchmark-selection notes while deferring cross-skill comparisons; no comparison runs are scheduled and end-to-end research scores remain unmeasured.
+
 ## 5.5.0-rc.2 — 2026-09-30
 
 Publish Research Direction Selector from `main` after merging the mathematical kernel and Advisor integration. The GitHub repository address remains `kongtou20070406/RDS`.

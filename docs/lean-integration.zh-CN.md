@@ -4,7 +4,7 @@
 
 RDS 的主体是自动化辅助人类科研：调查证据、生成与筛选实验、安排执行、评估结果、复盘接续。Lean4 兼容支持其中合适的数学子问题。当前窄接口使用 Lean 的 Rat 定义；更广接入应复用 Lean4 和 [mathlib](https://github.com/leanprover-community/mathlib4)，由 RDS 提供模型／性质适配、实验义务及证据绑定。RDS 不应重新实现 Lean 的逻辑，也不能把名为 `linarith` 的 Python 方法当作 Lean 的算术 tactic。
 
-本页区分已实现的窄接口和更广的接入设计。当前 `main` 已包含 [PR #2](https://github.com/kongtou20070406/RDS/pull/2) 在 `995e8eb` 引入的原生闭合有理数适配器。较早的 `f020b2c` 基础版本不包含该接口；更广的模型／mathlib 接入仍是后续工作。
+本页区分已实现的窄接口和更广的接入设计。当前 `main` 已包含 [PR #2](https://github.com/kongtou20070406/research-direction-selector/pull/2) 在 `995e8eb` 引入的原生闭合有理数适配器。较早的 `f020b2c` 基础版本不包含该接口；更广的模型／mathlib 接入仍是后续工作。
 
 ## 已实现的闭合有理数接口
 
@@ -26,7 +26,7 @@ python -B scripts/rds_cli.py --root . formal check --spec examples/formal/lean_o
 
 接受的原子结果为 PASS / `LEAN_KERNEL_CHECKED`，后端是 `backend: lean4_closed_rational`，语义为 `semantics: closed_Lean_Rat_relation`。假命题、工具缺失、编译失败和资源限制当前均产生 UNKNOWN / `NONE`，不是已检查的反驳。CLI 对 PASS／FAIL／UNKNOWN 的退出码是 0／1／2；该原生适配器当前不产生 FAIL。含原生叶子的有限定理模块外层仍为 `CERTIFICATE_CHECKED`。
 
-`formal check` 接受框架证书或完整框架结果，重新构造结论；底层原生检查器接受自己的领域证书并重复原生检查，两种格式不同。任意 Lean 文本、用户 tactics、通用 mathlib 翻译和实际训练图的证明仍不支持；数学侧条件不能建立实用收益或因果性。见[全部注册 kind 与证据边界](formal-verification.zh-CN.md)和[版本化实现契约](https://github.com/kongtou20070406/RDS/blob/995e8eb98f75697ef1ce43a9991f0686e5c29caa/references/formal_framework.md)。
+`formal check` 接受框架证书或完整框架结果，重新构造结论；底层原生检查器接受自己的领域证书并重复原生检查，两种格式不同。任意 Lean 文本、用户 tactics、通用 mathlib 翻译和实际训练图的证明仍不支持；数学侧条件不能建立实用收益或因果性。见[全部注册 kind 与证据边界](formal-verification.zh-CN.md)和[版本化实现契约](https://github.com/kongtou20070406/research-direction-selector/blob/995e8eb98f75697ef1ce43a9991f0686e5c29caa/references/formal_framework.md)。
 
 ## 分工
 

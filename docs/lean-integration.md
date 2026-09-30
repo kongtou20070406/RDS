@@ -4,7 +4,7 @@
 
 RDS primarily automates assistance to human research: investigate evidence, propose and select experiments, arrange execution, assess results, and resume after reflection. Lean4 compatibility supports suitable mathematical subproblems within that loop. The current narrow adapter uses Lean's Rat definitions; wider integration should reuse Lean4 and [mathlib](https://github.com/leanprover-community/mathlib4), while RDS supplies model/property adapters, experiment obligations and evidence bindings. RDS should not recreate Lean's logic or treat a Python method named `linarith` as Lean's arithmetic tactic.
 
-This page separates the implemented narrow interface from the broader integration design. Current `main` includes the native closed-rational adapter introduced by [PR #2](https://github.com/kongtou20070406/RDS/pull/2) at `995e8eb`. The older `f020b2c` base did not contain this adapter; broader model/mathlib integration remains future work.
+This page separates the implemented narrow interface from the broader integration design. Current `main` includes the native closed-rational adapter introduced by [PR #2](https://github.com/kongtou20070406/research-direction-selector/pull/2) at `995e8eb`. The older `f020b2c` base did not contain this adapter; broader model/mathlib integration remains future work.
 
 ## Implemented closed-rational interface
 
@@ -26,7 +26,7 @@ The fixed template uses Lean's Rat definitions and `by decide` for `RDS.obligati
 
 An accepted atomic result is PASS / `LEAN_KERNEL_CHECKED`, with `backend: lean4_closed_rational` and `semantics: closed_Lean_Rat_relation`. False propositions, missing tools, compilation failure and resource limits currently produce UNKNOWN / `NONE`, not checked refutations. CLI exit codes are 0/1/2 for PASS/FAIL/UNKNOWN; this native adapter does not currently produce FAIL. A finite theorem module containing native leaves still has outer `CERTIFICATE_CHECKED`.
 
-`formal check` accepts a framework certificate or a complete framework result and reconstructs its conclusion. The lower-level native checker accepts its domain certificate and repeats the native check. These formats are distinct. Arbitrary Lean text, user tactics, general mathlib translation and proofs of an executed training graph remain unsupported; the mathematical side condition does not establish utility or causality. See [all registered kinds and evidence boundaries](formal-verification.md) and the [versioned implementation contract](https://github.com/kongtou20070406/RDS/blob/995e8eb98f75697ef1ce43a9991f0686e5c29caa/references/formal_framework.md).
+`formal check` accepts a framework certificate or a complete framework result and reconstructs its conclusion. The lower-level native checker accepts its domain certificate and repeats the native check. These formats are distinct. Arbitrary Lean text, user tactics, general mathlib translation and proofs of an executed training graph remain unsupported; the mathematical side condition does not establish utility or causality. See [all registered kinds and evidence boundaries](formal-verification.md) and the [versioned implementation contract](https://github.com/kongtou20070406/research-direction-selector/blob/995e8eb98f75697ef1ce43a9991f0686e5c29caa/references/formal_framework.md).
 
 ## Division of responsibility
 

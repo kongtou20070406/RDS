@@ -6,7 +6,7 @@ RDS 将数学命题与检验实用收益或机制的实验分开。验证器依�
 
 ## 实现状态
 
-当前 `main` 已包含 [PR #2](https://github.com/kongtou20070406/RDS/pull/2) 在 `995e8eb` 引入的数学实现，以及 Advisor／工作台集成。下表保留较早的 `f020b2c` 基础版本作为历史对照。使用接口前核对实际 ref；路线图条目不是安装后已有的能力。
+当前 `main` 已包含 [PR #2](https://github.com/kongtou20070406/research-direction-selector/pull/2) 在 `995e8eb` 引入的数学实现，以及 Advisor／工作台集成。下表保留较早的 `f020b2c` 基础版本作为历史对照。使用接口前核对实际 ref；路线图条目不是安装后已有的能力。
 
 | 范围 | 历史基础版本（`f020b2c`） | 当前 `main`（数学实现来自 `995e8eb`） | 后续工作 |
 | --- | --- | --- | --- |
@@ -18,7 +18,7 @@ RDS 将数学命题与检验实用收益或机制的实验分开。验证器依�
 | 原生 Lean | 没有原生 Lean 适配器。 | 已注册固定模板的闭合 Rat `eq`／`lt`／`le` 义务，调用显式配置的 Lean4 程序检查。 | mathlib 与带量词的模型／性质适配器。 |
 | 框架、张量与模型导出 | 没有通用定理命令或模型导出。 | `formal` CLI、有限定理模块、具体精确张量检查，以及受限 Python 模型导出 API。 | 通用符号张量与更多经过检查的翻译。 |
 
-下述接口已包含在 `main` 中。[固定版本实现契约](https://github.com/kongtou20070406/RDS/blob/995e8eb98f75697ef1ce43a9991f0686e5c29caa/references/formal_framework.md) 记录其来源版本；运行时使用已安装版本的注册和测试。PR 初始提交 `8eadae9` 只覆盖标量证书路径，不是本页描述的接口快照。
+下述接口已包含在 `main` 中。[固定版本实现契约](https://github.com/kongtou20070406/research-direction-selector/blob/995e8eb98f75697ef1ce43a9991f0686e5c29caa/references/formal_framework.md) 记录其来源版本；运行时使用已安装版本的注册和测试。PR 初始提交 `8eadae9` 只覆盖标量证书路径，不是本页描述的接口快照。
 
 ## 声明与独立检查
 
@@ -55,7 +55,7 @@ python -B scripts/rds_cli.py --root . formal check --spec examples/formal/affine
 
 ### 原生 Lean：已实现的窄接口
 
-已注册的 `lean_obligation` 适配器只接受 `schema`、`kind`、`relation`、`left`、`right` 这五个字段。`schema` 为 1，`relation` 为 `eq`、`lt` 或 `le`，左右两侧为精确有理数常量；拒绝 JSON 浮点数。[现有示例](https://github.com/kongtou20070406/RDS/blob/995e8eb98f75697ef1ce43a9991f0686e5c29caa/examples/formal/lean_obligation.json)为：
+已注册的 `lean_obligation` 适配器只接受 `schema`、`kind`、`relation`、`left`、`right` 这五个字段。`schema` 为 1，`relation` 为 `eq`、`lt` 或 `le`，左右两侧为精确有理数常量；拒绝 JSON 浮点数。[现有示例](https://github.com/kongtou20070406/research-direction-selector/blob/995e8eb98f75697ef1ce43a9991f0686e5c29caa/examples/formal/lean_obligation.json)为：
 
 ```json
 {"schema":1,"kind":"lean_obligation","relation":"lt","left":"1/2","right":"3/4"}
@@ -159,7 +159,7 @@ flowchart LR
 
 准入见证可能不在本次执行所选样本中。因此，当前实现分别记录 `admission_status` / `admission_assurance` 与 `observed_status` / `execution_assurance`。没有观察到跨越，不能推翻先前的存在性证书；执行者失败，也不能反驳数学或科学声明。
 
-验证器输出与 `run_status`、`assessment.task_gain`、`assessment.mechanism` 分别记录。`PASS` 不证明任务性能提升、因果隔离、总体泛化或 L4 策略改进。
+验证器输出与 `run_status`、`assessment.task_gain`、`assessment.mechanism` 分别记录。`PASS` 不证明任务性能提升、因果隔离、总体泛化或 RSI 策略改进。科研自主程度使用[已有论文框架](research-autonomy.md)，与这些检查分别判断。
 
 ## 多维适配器范围
 
