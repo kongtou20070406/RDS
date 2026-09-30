@@ -1,0 +1,97 @@
+# Research workflow: responsibilities, execution and evidence
+
+[简体中文](research-workflow.zh-CN.md) · [Documentation](README.md) · [Formal verification](formal-verification.md)
+
+RDS automates parts of research collaboration to help a human researcher choose the next experiment, carry it out within an authorized scope, and use the evidence to decide what follows. The researcher sets the goal and resources; observed evidence determines the strength of a claim. Keep three things separate: components describe software responsibilities; L1–L4 describe levels of work; the CLI records execution states. Each claim has its own evidence assessment.
+
+## Five components and their responsibilities
+
+The first three components support the basic research loop; Advisor and RSI enhance it. This grouping describes responsibilities, not a claim that every connection is already autonomous in a released version.
+
+| Group | Component | Responsibility |
+| --- | --- | --- |
+| Foundation | Research protocol Skill | Guide intent, evidence gathering, experiment design, result interpretation and resumption in collaboration with the researcher. |
+| Foundation | Execution and acceptance kernel | Bind plans and resources, check applicable constraints, execute supported experiments, and record artifacts, receipts and recovery state. |
+| Foundation | Research state and memory | Preserve goals, configurations, results, failure conditions and decision reasons through project records in `.rds`, the judgment graph and Obelisk history retrieval. |
+| Enhancement | Advisor | Use real observations, history, judgment dependencies and scoped rules to propose tests that distinguish competing explanations and change the next decision. |
+| Enhancement | RSI | Propose scoped revisions to rules and work policies, evaluate them, and retain or roll back changes according to evidence. |
+
+Budget checks, probes, log handling and applicable mathematical checks belong to the execution and acceptance kernel. The judgment graph and historical sources support research state and memory. Lean-compatible cooperation concerns suitable mathematical subtasks; it does not replace experimental evidence for the broader research claim. L1–L4 span these components and are not additional components.
+
+## Advisor: current implementation and direction
+
+Advisor's intended process starts with real evidence and follows the judgment graph and scoped rules to generate or combine candidates. Each candidate should identify competing explanations, a discriminating observation, and how positive or negative results would change the next decision. Screen these candidates for authorized total cost after establishing their decision value; preserve their derivation and evidence sources.
+
+The existing implementation provides diagnostic and revision hints and scoped rule retrieval. A fully connected process for evidence-driven candidate generation and combination remains a development direction. Rule matching and heuristic thresholds do not establish a causal diagnosis. Claims about Advisor's scientific success rate, research quality or cost savings require independent research trajectories; they do not follow from runnable helpers or synthetic regression cases. RSI likewise produces candidate policy changes, whose improvement needs the L4 evaluation described below.
+
+## L1–L4 responsibilities
+
+These are RDS's explanatory working levels, not an industry standard or four database states. An experiment can revisit earlier work, and successful execution never automatically promotes a project to L4.
+
+| Level | Work and input | Deliverable | Condition for the next decision |
+| --- | --- | --- | --- |
+| L1 — Evidence assistance | Read the stated goal, relevant code, literature, logs and earlier decisions. Retrieve missing history through Obelisk. | Traceable evidence, competing explanations, missing information and uncertainty. | Sources are sufficient to specify a consequential question; missing evidence remains explicit. |
+| L2 — Experiment advice | Compare causally distinct routes under the available budget and deployment inputs. | A scoped hypothesis, a falsifier, fair control, data-use plan, useful gain threshold and positive/negative next actions. | The proposed test can distinguish the explanations and its full cost is authorized. |
+| L3 — Bounded execution loop | Bind the authorized contract, hypothesis, source, data, verifier and allocation. | Execution artifacts, engine receipts, separate evidence assessments and a recovery record. | Interpret only the observed result within its declared scope; continue, revise or stop. |
+| L4 — Tested policy improvement | Propose scoped rule changes from repeated failures or counterexamples. | Reviewable candidate rules and a prospective comparison of research trajectories. | Independent cases at equal total cost support the claimed policy improvement; retain failures and limits. |
+
+Current public `main` supplies the L2 skill protocol and L3 scalar reference building blocks. Rules and Advisor provide revision hints. [PR #2](https://github.com/kongtou20070406/RDS/pull/2) adds checked scalar certificates and repair candidates. Neither one model gain nor one mathematical certificate validates an L4 research policy.
+
+## One experiment in the reference CLI
+
+The runnable source files are in [examples/reference-run](../examples/reference-run/contract.json). The [homepage](../README.md#quick-start) contains the complete PowerShell example.
+
+```mermaid
+flowchart TD
+    A[Goal, evidence and authorized budget] --> B[init: lock contract]
+    B --> C[hypothesis add: register scoped claim]
+    C --> D[gate check: inspect admission]
+    D -->|rejected or UNKNOWN| R[Revise proposal or obtain missing evidence]
+    R --> C
+    D -->|admissible| E[plan create: recheck and reserve]
+    E --> F[run execute: record exposure and execute]
+    E -->|unstarted plan| X[plan cancel: release reservation]
+    F --> G[Engine receipt and artifacts]
+    G --> H[decide: assess separate evidence axes]
+    H --> I[Continue, revise or stop]
+    I --> C
+    F -->|lost worker| J[RECOVERY_REQUIRED]
+    J --> K[run recover: reconcile recorded run]
+    K --> I
+```
+
+| Operation | Meaning and boundary |
+| --- | --- |
+| `init --contract` | Locks the claim, evaluator, baseline, split identities and budget. Use a new root for a different contract. |
+| `hypothesis add --spec` | Registers purpose, competing explanation and falsification conditions. Declare mathematical obligations explicitly when applicable. |
+| `gate check --plan` | Checks a proposal without reserving resources. A pass is advisory; the later reservation rechecks mutable constraints. |
+| `plan create --spec` | Atomically reserves an allocation after admission. Exploration cannot consume the confirmation floor. |
+| `run execute --id` | Uses the bound source and data; records data access, artifacts and an engine-generated receipt. Starting consumes the allocation even if the run fails. |
+| `decide --run` | Reads the receipt and assesses task gain and mechanism evidence. It does not accept handwritten metric gains or success flags. |
+| `plan cancel --id` / `run recover --id` | Cancels an unstarted reservation or reconciles an interrupted run. A lost worker is marked `RECOVERY_REQUIRED`; spent budget is retained. Recovery does not resume execution or silently start a replacement experiment. |
+| `status` | Inspects recorded operational state. It does not establish scientific confirmation. |
+
+Place global `--root` before the subcommand. Each reference allocation is at most 60 seconds. This ledger measures allocated worker runtime; setup, evaluation overhead and external GPU jobs need their own accounting. The reference kernel is not a general training scheduler.
+
+## Evidence axes and decision conditions
+
+| Recorded axis | What it can establish | What it cannot establish by itself |
+| --- | --- | --- |
+| Verifier `status` and `assurance` | Whether a declared property was checked, and by what method. | Utility, causal attribution or independent scientific confirmation. |
+| `run_status` | Whether execution succeeded, failed, timed out or requires recovery. | Scientific support or refutation. |
+| `assessment.task_gain` | Development evidence; or the frozen finite comparison and useful-gain threshold on eligible confirmation data. | Population generalization or a better research-search policy. |
+| `assessment.mechanism` | The recorded intervention and falsifier evidence within the supported model. | Mechanism support merely because scores rose. Ordinary runs remain `UNTESTED`. |
+
+Use development data for choices. Freeze selection before independent confirmation, record prior exposure, and keep exploratory signals separate from confirmation. Previously viewed or selection-used data cannot become independent by changing its label. Unreported off-system access remains outside the kernel's knowledge.
+
+For declared mathematical claims, `FAIL` and `UNKNOWN` both block formal admission. A successful mathematical check does not bypass budget, source-binding or data-use constraints. The verifier guide explains the distinction between admission certificates and observed execution.
+
+## Returning from L3 to L2, and evaluating L4
+
+Prefer existing evidence and matched same-seed comparisons. Do not routinely add multi-seed campaigns. Recommend additional seeds only after observed seed instability threatens the current conclusion and the decision value justifies the authorized cost; state the uncertainty when existing evidence is insufficient.
+
+A failed or timed-out run first calls for execution diagnosis. A valid negative scientific result can instead narrow the hypothesis or change the route. A task gain with an untested mechanism supports only the gain statement at the corresponding evidence level.
+
+Keep policy updates as reviewable candidates. Compare old and revised policies prospectively on unused research cases, with the same total budget including unsuccessful trials, diagnosis, verification and evaluation. Record versions, information exposure, stopping rules and negative results. Reusing development cases or showing only the best model does not establish policy improvement.
+
+Obelisk supplies relevant historical source records; `.rds/state.sqlite3` supplies operational contracts and receipts. Retrieved text grants no new authorization, and the execution ledger is not a second conversational memory store.

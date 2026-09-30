@@ -8,6 +8,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import shlex
 import sys
 import time
 
@@ -79,25 +80,34 @@ def default_graph_path(root_dir=None):
 
 def _parse_val(val):
     val = val.strip()
+    try:
+        return json.loads(val)
+    except ValueError:
+        pass
     if val.startswith("[") and val.endswith("]"):
         inner = val[1:-1].strip()
         if not inner:
             return []
-        items = []
-        for x in inner.split(","):
-            items.append(x.strip().strip("'\""))
-        return items
+        lexer = shlex.shlex(inner, posix=True)
+        lexer.whitespace = ","
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        return [item.strip() for item in lexer]
+    if val.startswith("{") and val.endswith("}"):
+        return {k.strip(): _parse_val(v) for k, v in
+                (item.split(":", 1) for item in val[1:-1].split(","))}
     if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
         return val[1:-1]
     return val
 
 
 def parse_simple_yaml(raw):
-    """Pure standard-library parser for judgment-graph.yaml structure."""
+    """Parse the graph's scalar/flow-list/block-list subset, including edges."""
     lines = raw.splitlines()
     data = {"schema": 1, "nodes": []}
     current_node = None
     current_key = None
+    section = None
     
     for line in lines:
         stripped = line.strip()
@@ -109,21 +119,28 @@ def parse_simple_yaml(raw):
             except ValueError:
                 data["schema"] = 1
             continue
-        if line.startswith("nodes:"):
+        if line.startswith("nodes:") or line.startswith("edges:"):
+            section, value = stripped.split(":", 1)
+            data[section] = _parse_val(value) if value.strip() else []
+            require(isinstance(data[section], list), f"'{section}' must be a list")
+            current_node = None
+            current_key = None
             continue
             
         if line.startswith("  - ") or line.startswith("  - id:"):
-            if current_node:
-                data["nodes"].append(current_node)
+            require(section in ("nodes", "edges"), "Graph item outside nodes/edges")
             current_node = {}
             current_key = None
             content = line[4:].strip()
-            if ":" in content:
+            if content.startswith("{"):
+                current_node = _parse_val(content)
+            elif ":" in content:
                 k, v = content.split(":", 1)
                 k = k.strip()
                 v = v.strip()
                 current_key = k
                 current_node[k] = _parse_val(v) if v else []
+            data[section].append(current_node)
             continue
             
         if current_node is not None:
@@ -143,21 +160,16 @@ def parse_simple_yaml(raw):
                         current_node[current_key] = []
                     current_node[current_key].append(item)
                     
-    if current_node:
-        data["nodes"].append(current_node)
     return data
 
 
 def dump_simple_yaml(data):
     """Pure standard-library dumper for judgment-graph.yaml structure."""
-    lines = ["# Judgment decision rules", f"schema: {data.get('schema', 1)}", "nodes:"]
+    lines = ["# Judgment decision rules", f"schema: {data.get('schema', 1)}",
+             "nodes:" if data.get("nodes") else "nodes: []"]
     for node in data.get("nodes", []):
         first = True
-        for k in ("id", "scope", "trigger", "correction", "alternatives",
-                  "discriminator", "primary_gate", "falsifier", "sources"):
-            if k not in node:
-                continue
-            v = node[k]
+        for k, v in node.items():
             prefix = "  - " if first else "    "
             first = False
             if isinstance(v, list):
@@ -165,6 +177,9 @@ def dump_simple_yaml(data):
                 lines.append(f"{prefix}{k}: [{items_str}]")
             else:
                 lines.append(f"{prefix}{k}: {json.dumps(v, ensure_ascii=False)}")
+    if "edges" in data:
+        lines.append("edges:" if data["edges"] else "edges: []")
+        lines.extend("  - " + json.dumps(edge, ensure_ascii=False) for edge in data["edges"])
     return "\n".join(lines) + "\n"
 
 
@@ -188,10 +203,8 @@ def load_judgment_graph(graph_path=None):
 
 def save_judgment_graph(path, data):
     path = Path(path).resolve()
-    if yaml is not None:
-        content = yaml.dump(data, sort_keys=False, allow_unicode=True)
-    else:
-        content = dump_simple_yaml(data)
+    # Keep saved graphs readable when optional PyYAML is later unavailable.
+    content = dump_simple_yaml(data)
     path.write_text(content, encoding="utf-8")
 
 

@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420" role="img" aria-labelledby="title desc">
+  <title id="title">RDS — Research Direction Selector</title>
+  <desc id="desc">Better questions. Decisive experiments. Choose, experiment, verify, evolve. A geometric research core surrounded by intersecting experimental trajectories.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#f8fcff"/><stop offset="1" stop-color="#eef0fc"/>
+    </linearGradient>
+    <linearGradient id="title-fill" x1="0" y1="0" x2="1" y2="0">
+      <stop stop-color="#102d45"/><stop offset="0.5" stop-color="#154b62"/><stop offset="1" stop-color="#5e4c8e"/>
+    </linearGradient>
+    <linearGradient id="orbit" x1="0" y1="1" x2="1" y2="0">
+      <stop stop-color="#008c9a" stop-opacity="0.08"/><stop offset="0.45" stop-color="#008c9a"/><stop offset="1" stop-color="#8270ba" stop-opacity="0.5"/>
+    </linearGradient>
+    <linearGradient id="core" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#008e9c"/><stop offset="1" stop-color="#8364ba"/>
+    </linearGradient>
+    <radialGradient id="halo">
+      <stop stop-color="#4ebac5" stop-opacity="0.18"/><stop offset="0.5" stop-color="#9b94d3" stop-opacity="0.11"/><stop offset="1" stop-color="#9b94d3" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0H0V40" fill="none" stroke="#627ba0" stroke-opacity="0.08" stroke-width="0.7"/>
+    </pattern>
+    <filter id="glow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="5"/>
+    </filter>
+    <clipPath id="card"><rect x="1" y="1" width="1198" height="418" rx="24"/></clipPath>
+  </defs>
+  <g clip-path="url(#card)">
+    <rect width="1200" height="420" fill="url(#background)"/>
+    <rect width="1200" height="420" fill="url(#grid)"/>
+    <ellipse cx="934" cy="205" rx="299" ry="259" fill="url(#halo)"/>
+    <path d="M0 419H1200M1199 0V420" fill="none" stroke="#8063aa" stroke-opacity="0.09"/>
+    <path d="M68 55H116" stroke="#008f9a" stroke-width="3" stroke-linecap="round"/>
+    <path d="M124 55H140" stroke="#8b74be" stroke-width="3" stroke-linecap="round"/>
+    <g font-family="Segoe UI, Arial, sans-serif">
+      <text x="68" y="98" fill="#48677e" font-size="14" font-weight="600" letter-spacing="3.1">RESEARCH DIRECTION SELECTOR</text>
+      <text x="60" y="217" fill="url(#title-fill)" font-size="124" font-weight="750" letter-spacing="-7">RDS</text>
+      <text x="68" y="273" fill="#253b54" font-size="28" font-weight="400" letter-spacing="-0.45">Better questions. Decisive experiments.</text>
+      <text x="68" y="355" fill="#556780" font-size="12" font-weight="600" letter-spacing="1.9">CHOOSE  /  EXPERIMENT  /  VERIFY  /  EVOLVE</text>
+    </g>
+    <path d="M68 319H606" stroke="#6786a1" stroke-opacity="0.25"/>
+    <path d="M656 77V343" stroke="#647d9d" stroke-opacity="0.2" stroke-dasharray="2 8"/>
+    <g fill="none">
+      <circle cx="929" cy="205" r="145" stroke="#7c81b4" stroke-opacity="0.2"/>
+      <circle cx="929" cy="205" r="110" stroke="#218f9f" stroke-opacity="0.18" stroke-dasharray="2 10"/>
+      <path d="M729 205H1129M929 38V372" stroke="#487891" stroke-opacity="0.17" stroke-dasharray="4 9"/>
+      <ellipse cx="929" cy="205" rx="215" ry="78" transform="rotate(-25 929 205)" stroke="url(#orbit)" stroke-width="1.6"/>
+      <ellipse cx="929" cy="205" rx="201" ry="86" transform="rotate(39 929 205)" stroke="#8a6bbc" stroke-opacity="0.6" stroke-width="1.2"/>
+      <ellipse cx="929" cy="205" rx="164" ry="61" transform="rotate(-70 929 205)" stroke="#1496a3" stroke-opacity="0.38" stroke-width="1.2"/>
+      <path d="M740 292C794 261 814 170 861 126S990 82 1095 138" stroke="#008a94" stroke-opacity="0.68" stroke-width="1.5"/>
+      <path d="M789 109C844 149 830 284 915 304S1052 261 1112 278" stroke="#8663b6" stroke-opacity="0.46" stroke-width="1.3"/>
+      <path d="M757 275L832 250L867 151L995 110L1063 210L1000 298" stroke="#338fa7" stroke-opacity="0.15" stroke-width="1"/>
+    </g>
+    <g fill="#557d95" opacity="0.42">
+      <circle cx="779" cy="75" r="1.4"/><circle cx="1092" cy="82" r="1.3"/>
+      <circle cx="1135" cy="334" r="1.4"/><circle cx="785" cy="343" r="1.4"/>
+      <circle cx="1008" cy="51" r="1"/><circle cx="730" cy="179" r="1"/>
+    </g>
+    <g stroke-linejoin="round">
+      <path d="M929 143L983 174V236L929 267L875 236V174Z" fill="#f3f8ff" stroke="url(#core)" stroke-width="1.6"/>
+      <path d="M929 143V205L983 236M929 205L875 236M875 174L929 205L983 174" fill="none" stroke="url(#core)" stroke-opacity="0.65" stroke-width="1.4"/>
+      <path d="M929 160L970 184V229L929 253L888 229V184Z" fill="none" stroke="#747ec0" stroke-opacity="0.22"/>
+      <path d="M929 175L955 190V220L929 235L903 220V190Z" fill="url(#core)" fill-opacity="0.1" stroke="#207187" stroke-opacity="0.76" stroke-width="1.2"/>
+      <path d="M916 211L929 191L942 211M920 205H938" fill="none" stroke="#155e72" stroke-width="2.3" stroke-linecap="round"/>
+    </g>
+    <g filter="url(#glow)" opacity="0.36">
+      <circle cx="832" cy="250" r="8" fill="#11b3b7"/><circle cx="1063" cy="210" r="7" fill="#9465c2"/>
+      <circle cx="929" cy="143" r="5" fill="#008e91"/>
+    </g>
+    <g>
+      <circle cx="832" cy="250" r="5" fill="#008c91"/><circle cx="832" cy="250" r="12" fill="none" stroke="#008c91" stroke-opacity="0.3"/>
+      <circle cx="1063" cy="210" r="4.5" fill="#8b61b9"/><circle cx="1063" cy="210" r="10" fill="none" stroke="#8b61b9" stroke-opacity="0.32"/>
+      <circle cx="995" cy="110" r="3.5" fill="#468ea6"/><circle cx="1000" cy="298" r="3" fill="#6277a2"/>
+      <circle cx="929" cy="143" r="3" fill="#07818a"/><circle cx="929" cy="267" r="2.5" fill="#8564b4"/>
+      <path d="M1109 355H1137M1123 341V369" fill="none" stroke="#438294" stroke-opacity="0.4" stroke-width="1"/>
+    </g>
+  </g>
+  <rect x="0.75" y="0.75" width="1198.5" height="418.5" rx="24" fill="none" stroke="#8194b2" stroke-opacity="0.3" stroke-width="1.5"/>
+</svg>

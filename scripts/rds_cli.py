@@ -23,7 +23,7 @@ import uuid
 from rds_probe import parse_source, rational, read_rows, formal_requirement
 from rds_formal_kernel import bounded
 
-VERSION = "5.4.0"
+VERSION = "5.5.0-rc.1"
 RESOURCES = {"runtime_ms", "runs"}
 SELF_SIGNED = {"manipulation_verified", "falsifier_triggered", "primary_metric_gain",
                "final_run_authorized", "matched_recipe", "matched_compute"}
@@ -194,7 +194,7 @@ class RDSState:
         row = db.execute("SELECT body FROM state WHERE id=1").fetchone()
         state = strict_json(row[0]) if row else {}
         if state:
-            require(state["version"] in {VERSION, "5.1.0", "5.2.0", "5.3.0"},
+            require(state["version"] in {VERSION, "5.1.0", "5.2.0", "5.3.0", "5.4.0"},
                     "Incompatible state version")
             require(digest(state["contract"]) == state["contract_sha256"], "Contract integrity failure")
             if "branches" not in state:
@@ -808,6 +808,12 @@ def cmd_advise(args, rds):
     from rds_advisor import RDSAdvisor
     from rds_meta import load_judgment_graph
     advisor = RDSAdvisor(Path(args.root))
+
+    if getattr(args, "literature", None):
+        principles = advisor.query_literature_principles(args.literature)
+        return {"advisor_type": "LITERATURE_PRINCIPLES_SURVEY", "query": args.literature,
+                "matches_count": len(principles), "principles": principles,
+                "assurance": "HEURISTIC_ONLY"}
     
     # These branches do not read research state. In particular, a solver must
     # not inherit an outer SQLite reader that would block another writer's commit.
@@ -815,7 +821,9 @@ def cmd_advise(args, rds):
         return advisor.advise_on_loss_dynamics(load_spec(args.telemetry))
     if getattr(args, "train_loss", None) is not None and getattr(args, "val_loss", None) is not None:
         b_loss = float(args.baseline_loss) if getattr(args, "baseline_loss", None) is not None else None
-        return advisor.diagnose_fit_status(float(args.train_loss), float(args.val_loss), b_loss)
+        fit_telemetry = load_spec(args.fit_telemetry) if getattr(args, "fit_telemetry", None) else None
+        return advisor.diagnose_fit_status(float(args.train_loss), float(args.val_loss), b_loss,
+                                          telemetry=fit_telemetry)
     if getattr(args, "doc", None):
         return advisor.ingest_document(Path(args.doc), topic=getattr(args, "topic", None))
     if getattr(args, "plan", None):
@@ -829,8 +837,14 @@ def cmd_advise(args, rds):
             "status": "APPROVED",
             "actionable_suggestion": "方案通过门禁安全检查，可提交计划；正式提交时将重新核验预算和数据暴露。"
         }
-    with rds.snapshot() as (_, snapshot):
-        state = snapshot
+    if rds.db_path.exists():
+        with rds.snapshot() as (_, snapshot):
+            state = snapshot
+    else:
+        require(getattr(args, "research_context", None), "RDS is not initialized")
+        state = {}
+    if getattr(args, "research_context", None):
+        state["advisor_context"] = load_spec(args.research_context)
     _, graph = load_judgment_graph(getattr(args, "graph", None))
     recommendations = advisor.recommend_next_directions(state, graph)
     return {
@@ -931,6 +945,9 @@ def parser():
     adv.add_argument("--train-loss", default=None)
     adv.add_argument("--val-loss", default=None)
     adv.add_argument("--baseline-loss", default=None)
+    adv.add_argument("--fit-telemetry", default=None, help="Paired, comparable curve observations for fit diagnosis")
+    adv.add_argument("--literature", default=None, help="Search scoped local primary-source records")
+    adv.add_argument("--research-context", default=None, help="Sourced facts and the decision for bounded graph search")
     adv.add_argument("--graph", default=None)
     return p
 

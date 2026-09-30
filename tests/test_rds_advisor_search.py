@@ -1,0 +1,143 @@
+"""Decision-changing graph search boundaries, without research execution."""
+import copy
+import json
+from pathlib import Path
+import sys
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+from rds_advisor_search import evaluate_condition, search_directions
+from rds_advisor import RDSAdvisor
+from rds_meta import parse_simple_yaml
+
+
+def fact(value, **extra):
+    return {"value": value, "source": "synthetic-fixture:line-1", **extra}
+
+
+def node(rid, pre=None, satisfied=None, action_id=None):
+    return {"id": rid, "sources": ["synthetic rule"], "executable": {
+        "decisions": ["choose"], "preconditions": pre or [],
+        "satisfied_when": satisfied if satisfied is not None else [{"fact": rid + "-done", "value": True}],
+        "action": {"id": action_id or rid + "-test", "kind": "PAIRED_TEST", "description": "bounded paired test",
+            "competing_explanations": ["explanation A", "explanation B"], "required_observables": ["paired endpoint"],
+            "outcomes": [{"observation": "A", "next_decision": "select A"}, {"observation": "B", "next_decision": "select B"}]}}}
+
+
+def edge(source, target, relation="prerequisite_for"):
+    return {"from": source, "to": target, "relation": relation}
+
+
+class SearchTests(unittest.TestCase):
+    def context(self, **extra):
+        return {"decision": {"id": "choose", "target_rules": ["root"]}, "facts": {}, **extra}
+
+    def test_source_and_reliability_control_three_valued_truth(self):
+        condition = {"fact": "x", "value": True}
+        for record in ({"value": True}, fact(True, reliable=False), fact(True, reliability="UNRELIABLE"), fact(None)):
+            self.assertEqual(evaluate_condition(condition, {"x": record})["truth"], "UNKNOWN")
+        self.assertEqual(evaluate_condition(condition, {"x": fact(False)})["truth"], "FALSE")
+        report = evaluate_condition(condition, {"x": fact(True, evidence_status="VERIFIED")})
+        self.assertEqual(report["truth"], "TRUE")
+        self.assertEqual(report["evidence_status"], "INPUT_REPORTED")
+        self.assertEqual(evaluate_condition(condition, {"x": fact(1)})["truth"], "FALSE")
+
+    def test_unknown_generates_specific_query_and_false_blocks_experiment(self):
+        graph = {"nodes": [node("root", [{"fact": "matched", "value": True, "query": "Read paired arm manifests"}])], "edges": []}
+        result = search_directions(graph, self.context())
+        self.assertEqual(result["candidates"][0]["status"], "NEEDS_EVIDENCE")
+        self.assertEqual(result["queries"][0]["query"], "Read paired arm manifests")
+        self.assertTrue(result["candidates"][0]["steps"][-1]["conditional"])
+        result = search_directions(graph, self.context(facts={"matched": fact(False)}))
+        self.assertEqual(result["candidates"], [])
+        self.assertEqual(result["blocked_candidates"][0]["status"], "BLOCKED_PREREQUISITE")
+
+    def test_true_dependencies_compose_derivation_without_repeating_checks(self):
+        graph = {"nodes": [node("check"), node("root")], "edges": [edge("check", "root")]}
+        result = search_directions(graph, self.context(facts={"check-done": fact(True)}))
+        candidate = result["candidates"][0]
+        self.assertEqual(candidate["status"], "READY")
+        self.assertEqual([s["id"] for s in candidate["steps"]], ["root-test"])
+        self.assertTrue(any(d.get("relation") == "prerequisite_for" for d in candidate["derivation"]))
+        self.assertTrue(any(d.get("fact") == "check-done" and d["truth"] == "TRUE" for d in candidate["derivation"]))
+        changed = search_directions(graph, self.context(facts={"check-done": fact(False)}))
+        self.assertEqual(changed["candidates"], [])
+
+    def test_unknown_and_unconfigured_prerequisites_never_certify_readiness(self):
+        graph = {"nodes": [{"id": "text", "trigger": "eval anything"}, node("root")], "edges": [edge("text", "root")]}
+        result = search_directions(graph, self.context())
+        self.assertEqual(result["candidates"][0]["status"], "NEEDS_EVIDENCE")
+        self.assertIn("explicit bounded prerequisite", result["queries"][0]["query"])
+
+    def test_cycles_depth_and_candidate_limits_report_bounds(self):
+        graph = {"nodes": [node("check"), node("root")], "edges": [edge("check", "root"), edge("root", "check")]}
+        result = search_directions(graph, self.context())
+        self.assertTrue(result["cycles"])
+        self.assertEqual(result["candidates"], [])
+        graph["edges"] = [edge("check", "root")]
+        result = search_directions(graph, self.context(), max_depth=1)
+        self.assertTrue(result["truncation"]["truncated"])
+        context = {"decision": "choose", "facts": {}}
+        result = search_directions({"nodes": [node("one"), node("two")], "edges": []}, context, max_candidates=1)
+        self.assertEqual(len(result["candidates"]), 1)
+        self.assertIn("candidate limit", result["truncation"]["reasons"])
+
+    def test_only_observed_comparable_costs_enable_partial_order_and_budget(self):
+        graph = {"nodes": [node("fast"), node("slow")], "edges": []}
+        costs = {name + "-test": fact(value, unit="seconds", comparison_group="host-recipe") for name, value in (("fast", 2), ("slow", 5))}
+        result = search_directions(graph, {"decision": "choose", "facts": {}, "costs": costs})
+        self.assertEqual(result["ranking"]["dominance"][0]["better"], "fast:fast-test")
+        changed = copy.deepcopy(costs)
+        changed["slow-test"]["unit"] = "steps"
+        self.assertEqual(search_directions(graph, {"decision": "choose", "costs": changed})["ranking"]["dominance"], [])
+        budget = fact(3, unit="seconds", comparison_group="host-recipe")
+        result = search_directions(graph, {"decision": "choose", "costs": costs, "budget": budget})
+        self.assertEqual([c["id"] for c in result["candidates"]], ["fast:fast-test"])
+        self.assertEqual(result["blocked_candidates"][0]["status"], "BLOCKED_BUDGET")
+        unknown = search_directions(graph, {"decision": "choose"})
+        self.assertEqual(len(unknown["ranking"]["cost_unknown"]), 2)
+        self.assertEqual(unknown["ranking"]["dominance"], [])
+
+    def test_actions_with_no_decision_difference_are_discarded(self):
+        root = node("root")
+        for outcome in root["executable"]["action"]["outcomes"]:
+            outcome["next_decision"] = "keep same choice"
+        result = search_directions({"nodes": [root]}, self.context())
+        self.assertEqual(result["candidates"], [])
+        self.assertIn("no outcome", result["discarded_candidates"][0]["reason"])
+
+    def test_input_preservation_no_implicit_seed_or_non_dependency_edge(self):
+        graph = {"nodes": [node("check"), node("root")], "edges": [edge("check", "root", "qualified_by")]}
+        context = self.context(facts={"check-done": fact(False)})
+        original = copy.deepcopy((graph, context))
+        result = search_directions(graph, context)
+        self.assertEqual(result["candidates"][0]["status"], "READY")
+        self.assertEqual((graph, context), original)
+        self.assertNotIn("multi-seed", json.dumps(result))
+        json.dumps(result, allow_nan=False)
+
+    def test_real_graph_boundary_example_blocks_rho_one_crossing(self):
+        graph = parse_simple_yaml((ROOT / "references/judgment-graph.yaml").read_text(encoding="utf-8-sig"))
+        context = json.loads((ROOT / "examples/advisor-search/boundary-context.json").read_text(encoding="utf-8"))
+        result = search_directions(graph, context)
+        self.assertTrue(result["blocked_candidates"])
+        fallback = result["candidates"][0]
+        self.assertEqual(fallback["action"]["id"], "narrow-boundary-interpretation")
+        self.assertIn("rho=1", fallback["action"]["description"])
+        self.assertFalse(any(c["action"]["id"] == "inspect-actual-boundary-crossings" for c in result["candidates"]))
+        context["facts"]["strict_crossing_feasible"]["value"] = True
+        changed = search_directions(graph, context)
+        self.assertEqual(changed["candidates"][0]["action"]["id"], "inspect-actual-boundary-crossings")
+
+    def test_advisor_entry_preserves_existing_interface(self):
+        graph = {"nodes": [node("root")], "edges": []}
+        advisor = RDSAdvisor(ROOT)
+        results = advisor.recommend_next_directions({"advisor_context": self.context()}, graph)
+        search = next(r for r in results if r["type"] == "EXECUTABLE_DIRECTION_SEARCH")
+        self.assertEqual(search["search"]["candidates"][0]["rule_id"], "root")
+        self.assertTrue(any(r["type"] == "JUDGMENT_GRAPH_REVIEW" for r in results))
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

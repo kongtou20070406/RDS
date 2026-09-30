@@ -84,7 +84,7 @@ class AdvisorConcurrencyTests(unittest.TestCase):
             reports = self.advisor.recommend_next_directions(
                 {"branches": {"main": {"stagnation_count": 2}}, "baseline_cache": {"entry": {}}}, {})
             self.assertTrue(all(report["assurance"] == "HEURISTIC_ONLY" for report in reports))
-            self.assertTrue(any(report["type"] == "DOC_GROUNDED_INSIGHT" for report in reports))
+            self.assertTrue(any(report["type"] == "DOC_REVIEW_CANDIDATES" for report in reports))
         finally:
             writer.rollback()
             writer.close()
@@ -95,7 +95,8 @@ class AdvisorConcurrencyTests(unittest.TestCase):
         row = {"line_number": 1, "excerpt": "Consider gradient explosion.", "topic": "optimization", "source": "old.md"}
         legacy_path.write_text(json.dumps([row, row]), encoding="utf-8")
         original = legacy_path.read_bytes()
-        self.assertEqual(self.advisor.recommend_next_directions({}, {}), [])
+        self.assertFalse(any(report["type"] == "DOC_REVIEW_CANDIDATES"
+                             for report in self.advisor.recommend_next_directions({}, {})))
         self.assertFalse(self.advisor.knowledge_db.exists())
         report = self.advisor.ingest_document(self.document())
         self.assertEqual(report["total_knowledge_entries"], 2)
@@ -134,12 +135,12 @@ class AdvisorConcurrencyTests(unittest.TestCase):
 
     def test_truthy_telemetry_is_not_numeric_evidence(self):
         for flag in ("true", "false", 1, [], {}):
-            report = self.advisor.advise_on_loss_dynamics({"nan_or_inf": flag})
-            self.assertEqual(report["status"], "UNKNOWN")
-            self.assertEqual(report["assurance"], "HEURISTIC_ONLY")
+            with self.subTest(flag=flag), self.assertRaises(ValueError):
+                self.advisor.advise_on_loss_dynamics({"nan_or_inf": flag})
         self.assertEqual(self.advisor.advise_on_loss_dynamics({"nan_or_inf": True})["status"], "CRITICAL_ANOMALY")
-        self.assertEqual(self.advisor.advise_on_loss_dynamics({"loss_trend": []})["status"], "UNKNOWN")
-        self.assertEqual(self.advisor.advise_on_loss_dynamics([])["status"], "UNKNOWN")
+        for telemetry in ({"loss_trend": []}, [], {"peak_grad_norm": 10**1000}):
+            with self.subTest(telemetry=telemetry), self.assertRaises(ValueError):
+                self.advisor.advise_on_loss_dynamics(telemetry)
 
 
 if __name__ == "__main__":

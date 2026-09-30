@@ -97,27 +97,29 @@ class SupportTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             compress_training_log("loss=1", max_samples=0)
 
-    def test_advisor_requires_evidence_and_emits_ast_compatible_candidate(self):
+    def test_advisor_requires_evidence_before_fit_or_model_patch(self):
         advisor = RDSAdvisor(ROOT)
         report = advisor.diagnose_fit_status(1.2, 1.3, 1.25)
-        self.assertEqual(report["verdict"], "UNKNOWN")
+        self.assertEqual(report["verdict"], "INSUFFICIENT_EVIDENCE")
         self.assertEqual(report["assurance"], "HEURISTIC_ONLY")
-        self.assertEqual(report["heuristic_signal"], "TRAIN_LOSS_NEAR_BASELINE")
+        self.assertTrue(report["observations"])
         self.assertEqual(report["forbidden_actions"], [])
-        self.assertTrue(report["required_actions"])
-        self.assertEqual(advisor.diagnose_fit_status(0.01, 0.5, 1)["heuristic_signal"], "TRAIN_VALIDATION_GAP")
-        for losses in ((1, 1, None), (1, 1, 0), (-1, 1, 1), (float("nan"), 1, 1), (1, float("inf"), 1), (1, 1, -1)):
+        self.assertEqual(report["required_actions"], [])
+        self.assertEqual(advisor.diagnose_fit_status(0.01, 0.5, 1)["verdict"], "INSUFFICIENT_EVIDENCE")
+        for losses in ((1, 1, None), (1, 1, 0), (-1, 1, 1), (1, 1, -1)):
             with self.subTest(losses=losses):
                 result = advisor.diagnose_fit_status(*losses)
-                self.assertEqual(result["verdict"], "UNKNOWN")
-                self.assertIsNone(result["heuristic_signal"])
+                self.assertEqual(result["verdict"], "INSUFFICIENT_EVIDENCE")
                 json.dumps(result, allow_nan=False)
-        self.assertEqual(advisor.advise_on_loss_dynamics({})["status"], "UNKNOWN")
-        self.assertEqual(advisor.advise_on_loss_dynamics({"peak_grad_norm": float("inf")})["status"], "UNKNOWN")
+        for losses in ((float("nan"), 1, 1), (1, float("inf"), 1), (True, 1, 1)):
+            with self.subTest(losses=losses), self.assertRaises(ValueError):
+                advisor.diagnose_fit_status(*losses)
+        self.assertEqual(advisor.advise_on_loss_dynamics({})["status"], "INSUFFICIENT_EVIDENCE")
+        self.assertEqual(advisor.advise_on_loss_dynamics({"peak_grad_norm": float("inf")})["status"], "CRITICAL_ANOMALY")
         source_advice = advisor.advise_on_rejection("Formal gate FAIL", {})
         self.assertEqual(source_advice["assurance"], "HEURISTIC_ONLY")
-        self.assertTrue(source_advice["recommended_patch"]["requires_revalidation"])
-        parse_source(source_advice["recommended_patch"]["recommended_source"])
+        self.assertEqual(source_advice["recommended_patch"], {})
+        self.assertTrue(source_advice["minimal_test"])
 
 
 if __name__ == "__main__":
