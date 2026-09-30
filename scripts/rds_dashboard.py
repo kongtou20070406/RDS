@@ -99,7 +99,40 @@ def demo_snapshot(root):
     return snapshot
 
 
+def validate_advisor_candidates(advisor):
+    """Reject malformed native candidate records before writing unusable HTML."""
+    records = [("advisor", advisor)] if not isinstance(advisor, list) else [
+        (f"advisor[{i}]", item) for i, item in enumerate(advisor)]
+    for path, record in list(records):
+        if isinstance(record, dict) and isinstance(record.get("recommendations"), list):
+            records.extend((f"{path}.recommendations[{i}]", item)
+                           for i, item in enumerate(record["recommendations"]))
+    for path, record in records:
+        search = record.get("search") if isinstance(record, dict) else None
+        if not isinstance(search, dict):
+            continue
+        groups = [(path + ".search", search)]
+        if isinstance(search.get("experiment_composition"), dict):
+            groups.append((path + ".search.experiment_composition", search["experiment_composition"]))
+        for group_path, group in groups:
+            for key in ("candidates", "blocked_candidates"):
+                if key not in group:
+                    continue
+                candidates = group[key]
+                if not isinstance(candidates, list):
+                    raise ValueError(f"{group_path}.{key} must be an array")
+                for i, candidate in enumerate(candidates):
+                    locator = f"{group_path}.{key}[{i}]"
+                    if not isinstance(candidate, dict):
+                        raise ValueError(f"{locator} must be an object")
+                    for field in ("steps", "derivation"):
+                        if field in candidate and (not isinstance(candidate[field], list)
+                                                   or any(not isinstance(item, dict) for item in candidate[field])):
+                            raise ValueError(f"{locator}.{field} must be an array of objects")
+
+
 def render_html(snapshot, advisor=None):
+    validate_advisor_candidates(advisor)
     payload = {**snapshot, "advisor": advisor}
     # JSON lives in a script element: HTML parsers recognize </script> even inside JSON strings.
     encoded = json.dumps(payload, ensure_ascii=False, allow_nan=False).replace("&", "\\u0026")
