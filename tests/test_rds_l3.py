@@ -370,11 +370,12 @@ class KernelTests(unittest.TestCase):
         telemetry = {"nan_or_inf": True, "peak_grad_norm": 95.0, "loss_trend": "EXPLODING"}
         adv_dyn = project.call("advise", spec=telemetry, flag="--telemetry")
         self.assertEqual(adv_dyn["status"], "CRITICAL_ANOMALY")
-        self.assertTrue(any("eps=1e-7" in a for a in adv_dyn["action_items"]))
+        self.assertIn("首个非有限", adv_dyn["action_items"][0])
+        self.assertFalse(any("eps=1e-7" in a for a in adv_dyn["action_items"]))
 
         # Scalar losses alone do not identify capacity or optimization causes.
         adv_fit = project.call("advise", "--train-loss", "1.20", "--val-loss", "1.30", "--baseline-loss", "1.25")
-        self.assertEqual(adv_fit["verdict"], "UNKNOWN")
+        self.assertEqual(adv_fit["verdict"], "INSUFFICIENT_EVIDENCE")
         self.assertEqual(adv_fit["assurance"], "HEURISTIC_ONLY")
         self.assertEqual(adv_fit["forbidden_actions"], [])
 

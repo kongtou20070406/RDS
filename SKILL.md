@@ -2,13 +2,17 @@
 name: research-direction-selector
 description: Select and audit metric-driven research directions using scoped hypotheses, falsifiable interventions, budgets and human instructions. Includes bounded declarative certificate checks, an L3 reference runner and Obelisk history retrieval; use for choosing experiments, evaluating proposals or checking supported mathematical model claims, not scheduling general GPU training.
 metadata:
-  version: v5.4.0
-  engine: rds-cli-v5.4
+  version: v5.5.0-rc.1
+  engine: rds-cli-v5.5
 ---
 
 # Research Direction Selector — RDS-L3
 
 Help the researcher choose experiments that advance the stated metric or resolve a consequential mechanism question. Keep the researcher in control of the claim and budget. Use scoped evidence, precommitted tests and the CLI's execution receipts; a hash binds an artifact but does not prove its scientific interpretation.
+
+RDS automates assistance to human research: understand the objective, investigate evidence, choose and execute useful experiments, assess observations, and resume the next decision. A researcher can use it directly or ask one AI to follow this skill. Lean4/mathlib cooperation supports applicable mathematical obligations within the research loop.
+
+The five components are Skill, execution and acceptance kernel, research state and memory, Advisor, and RSI. Graph and Obelisk history support research state and memory; budget, telemetry, probes and formal adapters support the execution kernel. Advisor generates candidate tests from sourced facts and explicit rule conditions, composes reasoning prerequisites, and retains the derivation. Missing facts remain unknown. See [RDS purpose](docs/rds-purpose.md) and [Advisor graph design](docs/advisor-graph-design.md).
 
 ## Evidence and execution boundaries
 
@@ -112,7 +116,7 @@ For a one-shot request, return **one recommended direction** and at most one ser
 
 ## Evidence and human intervention
 
-Track evidence by proposition, not one label for a whole project: `TASK_GAIN` (exploratory/confirmed/refuted), `MECHANISM` (hypothesis/supported/refuted), and `SEARCH_POLICY` (trial/trajectory-confirmed/refuted). Keep `PAPER_REPORTED` separate from local evidence. A published gain on another benchmark is a trial rationale, not a confirmed local gain. Confirm task gain with a predeclared, fair primary-metric comparison and untouched confirmation, using relevant seeds and independent implementations when choices could reverse the result. Support a mechanism with a reproducible intervention that distinguishes it from plausible alternatives; its effect can be measured even if the proposed model does not beat the baseline. Confirm a research-search policy only by comparing whole trajectories at equal total budget. A failed local test updates the scope or removes the relevant proposition. Preserve original results and falsifiers through the user's existing system only when asked; this skill does not maintain that record.
+Track evidence by proposition, not one label for a whole project: `TASK_GAIN` (exploratory/confirmed/refuted), `MECHANISM` (hypothesis/supported/refuted), and `SEARCH_POLICY` (trial/trajectory-confirmed/refuted). Keep `PAPER_REPORTED` separate from local evidence. A published gain on another benchmark is a trial rationale, not a confirmed local gain. Confirm task gain with a predeclared, fair primary-metric comparison and untouched confirmation. Reuse compatible completed controls and prefer a matched-seed comparison. Do not propose a multi-seed campaign by default: consider additional seeds only after observed seed instability could change the decision, and bound its incremental cost. Match the claim to the evidence actually collected. Support a mechanism with a reproducible intervention that distinguishes it from plausible alternatives; its effect can be measured even if the proposed model does not beat the baseline. Confirm a research-search policy only by comparing whole trajectories at equal total budget. A failed local test updates the scope or removes the relevant proposition. Preserve original results and falsifiers through the user's existing system only when asked; this skill does not maintain that record.
 
 Human intervention is allowed at proposal, experiment design, priority, budget, and interpretation. Split mixed utterances into their separate acts. Infer each act's intent from the full conversation, wording, prior authorization, and the cost of acting; do not decide it from a command verb or question mark alone. Use this decision rule internally:
 
