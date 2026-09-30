@@ -178,6 +178,8 @@ class RDSState:
                     }
                 if "active_branch" not in state:
                     state["active_branch"] = "main"
+                if "baseline_cache" not in state:
+                    state["baseline_cache"] = {}
             yield db, state
             if state:
                 self.invariants(state)
@@ -263,6 +265,7 @@ def cmd_init(args, rds):
                              "hypotheses": []
                          }
                      },
+                     baseline_cache={},
                      budget={"limits": limits, "confirmation_floor": floor,
                              "spent": {k: 0 for k in RESOURCES}, "reserved": {k: 0 for k in RESOURCES}})
         rds.event(db, "CONTRACT_LOCKED", contract_sha256=state["contract_sha256"])
@@ -433,6 +436,11 @@ def cmd_run(args, rds):
         dataset_path = state["contract"]["splits"][spec["split_id"]]["path"]
         hypothesis = state["hypotheses"][spec["hypothesis_id"]]["spec"]
         run_id = plan["run_id"]
+        baseline_key = digest({
+            "control_ast": state["contract"]["baseline_control_ast"],
+            "dataset_sha256": binding["dataset_sha256"]
+        })
+        cached_control = state.get("baseline_cache", {}).get(baseline_key, {}).get("observations")
     started = time.monotonic_ns()
     data_raw, stdout, stderr, result = b"", b"", b"", None
     returncode, status = None, "FAILED"
@@ -440,6 +448,8 @@ def cmd_run(args, rds):
         data_raw = read_bounded(dataset_path, 2_000_000)
         require(digest(data_raw) == binding["dataset_sha256"], "Dataset changed after contract lock")
         payload = {"source": binding["source"], "data": data_raw.decode("utf-8-sig"), "hypothesis": hypothesis}
+        if cached_control:
+            payload["cached_control"] = cached_control
         worker = Path(__file__).resolve().with_name("rds_probe.py")
         completed = subprocess.run([sys.executable, "-I", str(worker)],
                                    input=canonical(payload).encode("utf-8"), capture_output=True,
@@ -454,18 +464,31 @@ def cmd_run(args, rds):
         stderr = str(exc).encode("utf-8")
     receipt = {"run_id": run_id, "plan_id": spec["id"], "binding": binding, "run_status": status,
                "returncode": returncode, "elapsed_ms": (time.monotonic_ns() - started) // 1_000_000,
-               "charged_allocation": spec["resources"], "result": result}
+               "charged_allocation": spec["resources"], "result": result,
+               "baseline_key": baseline_key, "control_reused": bool(cached_control)}
     with rds.transaction() as (db, state):
         live = state["plans"][args.id]
         if live["run_status"] != "RUNNING":
             return {"run_status": live["run_status"], "late_result_discarded": True}
         receipt["artifacts"] = {"data": rds.artifact(db, data_raw), "stdout": rds.artifact(db, stdout),
                                 "stderr": rds.artifact(db, stderr)}
+        if status == "SUCCEEDED" and result and not cached_control:
+            if "baseline_cache" not in state:
+                state["baseline_cache"] = {}
+            control_map = {r["sample_id"]: {"control": r["control"], "control_loss": r["control_loss"]}
+                           for r in result.get("observations", [])}
+            state["baseline_cache"][baseline_key] = {
+                "control_mean": result.get("control_mean"),
+                "observations": control_map,
+                "first_run_id": run_id
+            }
+            rds.event(db, "BASELINE_CACHED", baseline_key=baseline_key, run_id=run_id)
         receipt["sha256"] = digest(receipt)
         db.execute("INSERT INTO receipts VALUES (?,?,?)", (run_id, receipt["sha256"], canonical(receipt)))
         live["run_status"] = status
         rds.event(db, "RUN_FINISHED", run_id=run_id, run_status=status, receipt_sha256=receipt["sha256"])
-    return {"run_id": run_id, "run_status": status, "receipt_sha256": receipt["sha256"]}
+    return {"run_id": run_id, "run_status": status, "receipt_sha256": receipt["sha256"],
+            "control_reused": bool(cached_control)}
 
 
 def cmd_recover(args, rds):

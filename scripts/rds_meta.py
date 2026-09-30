@@ -77,18 +77,111 @@ def default_graph_path(root_dir=None):
     return candidates[0]
 
 
+def _parse_val(val):
+    val = val.strip()
+    if val.startswith("[") and val.endswith("]"):
+        inner = val[1:-1].strip()
+        if not inner:
+            return []
+        items = []
+        for x in inner.split(","):
+            items.append(x.strip().strip("'\""))
+        return items
+    if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+        return val[1:-1]
+    return val
+
+
+def parse_simple_yaml(raw):
+    """Pure standard-library parser for judgment-graph.yaml structure."""
+    lines = raw.splitlines()
+    data = {"schema": 1, "nodes": []}
+    current_node = None
+    current_key = None
+    
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if line.startswith("schema:"):
+            try:
+                data["schema"] = int(stripped.split(":", 1)[1].strip())
+            except ValueError:
+                data["schema"] = 1
+            continue
+        if line.startswith("nodes:"):
+            continue
+            
+        if line.startswith("  - ") or line.startswith("  - id:"):
+            if current_node:
+                data["nodes"].append(current_node)
+            current_node = {}
+            current_key = None
+            content = line[4:].strip()
+            if ":" in content:
+                k, v = content.split(":", 1)
+                k = k.strip()
+                v = v.strip()
+                current_key = k
+                current_node[k] = _parse_val(v) if v else []
+            continue
+            
+        if current_node is not None:
+            if ":" in stripped and not stripped.startswith("- "):
+                k, v = stripped.split(":", 1)
+                k = k.strip()
+                v = v.strip()
+                current_key = k
+                if v:
+                    current_node[k] = _parse_val(v)
+                else:
+                    current_node[k] = []
+            elif stripped.startswith("- "):
+                item = _parse_val(stripped[2:])
+                if current_key:
+                    if not isinstance(current_node.get(current_key), list):
+                        current_node[current_key] = []
+                    current_node[current_key].append(item)
+                    
+    if current_node:
+        data["nodes"].append(current_node)
+    return data
+
+
+def dump_simple_yaml(data):
+    """Pure standard-library dumper for judgment-graph.yaml structure."""
+    lines = ["# Judgment decision rules", f"schema: {data.get('schema', 1)}", "nodes:"]
+    for node in data.get("nodes", []):
+        first = True
+        for k in ("id", "scope", "trigger", "correction", "alternatives",
+                  "discriminator", "primary_gate", "falsifier", "sources"):
+            if k not in node:
+                continue
+            v = node[k]
+            prefix = "  - " if first else "    "
+            first = False
+            if isinstance(v, list):
+                items_str = ", ".join(json.dumps(x, ensure_ascii=False) for x in v)
+                lines.append(f"{prefix}{k}: [{items_str}]")
+            else:
+                lines.append(f"{prefix}{k}: {json.dumps(v, ensure_ascii=False)}")
+    return "\n".join(lines) + "\n"
+
+
 def load_judgment_graph(graph_path=None):
     path = Path(graph_path).resolve() if graph_path else default_graph_path()
     require(path.exists(), f"Judgment graph file not found: {path}")
     raw = path.read_text(encoding="utf-8-sig")
     if yaml is not None:
-        data = yaml.safe_load(raw)
+        try:
+            data = yaml.safe_load(raw)
+        except Exception:
+            data = parse_simple_yaml(raw)
     else:
-        # Fallback if PyYAML is somehow missing
         try:
             data = json.loads(raw)
-        except json.JSONDecodeError:
-            raise RuntimeError("PyYAML is required to parse YAML judgment-graph.yaml")
+        except Exception:
+            data = parse_simple_yaml(raw)
     require(isinstance(data, dict) and "nodes" in data, "Judgment graph must have a top-level 'nodes' list")
     return path, data
 
@@ -98,7 +191,7 @@ def save_judgment_graph(path, data):
     if yaml is not None:
         content = yaml.dump(data, sort_keys=False, allow_unicode=True)
     else:
-        content = json.dumps(data, indent=2, ensure_ascii=False)
+        content = dump_simple_yaml(data)
     path.write_text(content, encoding="utf-8")
 
 

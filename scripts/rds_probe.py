@@ -217,15 +217,23 @@ def execute(payload):
                           "reason": "Dynamics verifier unavailable"}}
     functions = parse_source(payload["source"])
     rows = read_rows(payload["data"])
+    cached_control = payload.get("cached_control")
     observations = []
     for sid, x, target in rows:
         if formal and not rational(formal["domain"][0]) <= x <= rational(formal["domain"][1]):
             raise ValueError("Observed input outside committed formal domain")
-        control, treatment = [evaluate(functions[k], x) for k in ("control", "treatment")]
+        if cached_control and sid in cached_control:
+            control = Fraction(cached_control[sid]["control"])
+            control_loss = Fraction(cached_control[sid]["control_loss"])
+        else:
+            control = evaluate(functions["control"], x)
+            control_loss = (control - target) ** 2
+        treatment = evaluate(functions["treatment"], x)
+        treatment_loss = (treatment - target) ** 2
         observations.append({"sample_id": sid, "x": str(x), "y": str(target),
                              "control": str(control), "treatment": str(treatment),
-                             "control_loss": str((control - target) ** 2),
-                             "treatment_loss": str((treatment - target) ** 2)})
+                             "control_loss": str(control_loss),
+                             "treatment_loss": str(treatment_loss)})
     mean = lambda key: sum((Fraction(r[key]) for r in observations), Fraction()) / len(rows)
     probe = {"status": "NOT_APPLICABLE", "assurance": "NONE"}
     if formal:
@@ -246,7 +254,8 @@ def execute(payload):
     return {"metric": "mse", "n": len(rows), "observations": observations,
             "control_mean": str(mean("control_loss")),
             "treatment_mean": str(mean("treatment_loss")),
-            "gain": str(mean("control_loss") - mean("treatment_loss")), "probe": probe}
+            "gain": str(mean("control_loss") - mean("treatment_loss")),
+            "control_reused": bool(cached_control), "probe": probe}
 
 
 if __name__ == "__main__":

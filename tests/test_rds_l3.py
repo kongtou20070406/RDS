@@ -268,6 +268,40 @@ class KernelTests(unittest.TestCase):
         project.call("branch", "switch", "--id", "branch-freq-res")
         self.assertEqual(project.call("branch", "status")["active_branch"], "branch-freq-res")
 
+    def test_baseline_control_cache_and_reuse(self):
+        """Baseline Control Reuse: Once blank baseline is evaluated on a dataset partition, reuse it across treatments."""
+        project = self.project(budget=60000, floor=4000)
+        project.init()
+
+        # Run Plan 1: First treatment. Baseline is evaluated from scratch.
+        p1 = project.plan("P1", runtime=10000)
+        project.call("plan", "create", spec=p1)
+        r1 = project.call("run", "execute", "--id", "P1")
+        self.assertEqual(r1["run_status"], "SUCCEEDED")
+        self.assertFalse(r1["control_reused"])
+
+        # Check that baseline was cached in state
+        state1 = project.call("status")
+        self.assertIn("baseline_cache", state1)
+        self.assertEqual(len(state1["baseline_cache"]), 1)
+        b_key = list(state1["baseline_cache"].keys())[0]
+
+        # Prepare a second treatment model file with same control AST
+        treatment2_source = "def control(x): return x\ndef treatment(x): return 2*x + 1\n"
+        (project.root / "model2.py").write_text(treatment2_source, encoding="utf-8")
+
+        # Run Plan 2: Second treatment, same control AST and same dataset split.
+        p2 = project.plan("P2", runtime=10000, source="model2.py")
+        project.call("plan", "create", spec=p2)
+        r2 = project.call("run", "execute", "--id", "P2")
+        self.assertEqual(r2["run_status"], "SUCCEEDED")
+        self.assertTrue(r2["control_reused"])
+
+        # Receipt integrity check on reused baseline
+        dec2 = project.call("decide", "--run", r2["run_id"])
+        self.assertIn("assessment", dec2)
+        self.assertEqual(dec2["assessment"]["task_gain"], "EXPLORATORY")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

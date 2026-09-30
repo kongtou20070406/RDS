@@ -101,6 +101,16 @@ nodes:
     falsifier: without fixed-checkpoint trajectory, withhold trajectory claims
     sources: ["NSI 2026-09-27 experiment audit; retrieve original checkpoint records through Obelisk"]
 
+  - id: reuse-baseline-control
+    scope: general / compute-allocation
+    trigger: an experiment plan proposes re-running the blank baseline control on a dataset partition where an identical baseline was already evaluated
+    correction: once an approved baseline run has executed on the matched dataset with identical control AST and seed, its evaluation should be cached and reused across treatment evaluations; do not spend compute re-evaluating the identical baseline across minor environment/machine variations
+    alternatives: [fresh rerun needed due to code/data/seed drift, redundant rerun of identical baseline]
+    discriminator: verify control AST hash, random seed, and dataset split SHA-256; if identical, reuse cached baseline regardless of harmless host/environment variations
+    primary_gate: cached baseline metrics must bind the exact dataset partition and control AST; reject redundant baseline GPU hours
+    falsifier: if baseline code, random seed, or dataset partition has changed, invalidate cache and require a fresh baseline run
+    sources: ["RDS Autonomous Efficiency Protocol", "FML-Bench v2 Resource Preservation"]
+
 # Read edges as reasoning dependencies, not as automatic causal claims.
 edges:
   - {from: preserve-quantifiers, relation: constrained_by, to: deployment-information}

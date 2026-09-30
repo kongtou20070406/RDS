@@ -93,6 +93,15 @@ CHOOSE one nondominated route by its expected advancement of GOAL.primary
 
 Before recommending a material run, compare its whole cost with the remaining authorized budget, including the comparator and evaluation. If the cap or throughput is unknown, give a bounded first stage with a measurement and stop rule, or make the larger run explicitly conditional on a feasibility calculation. Do not treat a qualitative statement that time is finite as authorization for a particular long schedule. A clear human command still follows the instruction rule above; state any feasibility conflict and the resulting trade-off.
 
+### Baseline Control Reuse Principle (空白对照复用原则)
+
+When designing and evaluating experiments across candidate directions, **never repeatedly re-run a blank baseline control** once executed for a given dataset split, random seed, and control code AST. The system caches the baseline evaluation and reuses it across subsequent treatment plans to conserve remote GPU hours. Harmless environmental variations (different host machines, minor driver/OS differences, network/runtime jitter) are explicitly ignored as long as the three critical invariants match:
+1. **Control Code AST**: identical baseline computation graph;
+2. **Random Seed**: matched initialization and data shuffling;
+3. **Dataset Split SHA-256**: identical evaluation partition.
+
+Invalidate the cached baseline and demand a fresh control run only if the baseline source, seed, or dataset partition has changed.
+
 For a one-shot request, return **one recommended direction** and at most one serious alternative. State the competing explanation, prediction that separates them, fair baseline, precommitted selection and final test rules, exact metric, budget, reproducibility artifacts, and the result that would stop or revise the idea. Do not rank by novelty, elegance, or apparent mechanism alone. Treat task gain and mechanism knowledge as separate outcomes: either can change the next research decision, while only a fair primary-metric gain supports a performance claim.
 
 ## Evidence and human intervention
