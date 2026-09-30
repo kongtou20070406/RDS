@@ -136,6 +136,30 @@ class DashboardTests(unittest.TestCase):
             self.assertFalse(root.exists())
             self.assertIn("noDataNotice", render_html(snapshot))
 
+    def test_cli_rejects_malformed_native_advisor_candidates_before_export(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, output = root / "advice.json", root / "dashboard.html"
+            malformed = [None, {"steps": "missing input"}, {"steps": [None]},
+                         {"derivation": {}}, {"derivation": [None]}]
+            for group in ("candidates", "blocked_candidates", "experiment_composition"):
+                for candidate in malformed:
+                    search = {"candidates": []}
+                    if group == "experiment_composition":
+                        search[group] = {"candidates": [candidate]}
+                    else:
+                        search[group] = [candidate]
+                    with self.subTest(group=group, candidate=candidate):
+                        source.write_text(json.dumps({"recommendations": [{"search": search}]}), encoding="utf-8")
+                        result = subprocess.run([sys.executable, "-B", str(ROOT / "scripts/rds_dashboard.py"),
+                                                 "--root", str(root), "--advisor", str(source), "--output", str(output)],
+                                                text=True, capture_output=True, encoding="utf-8", timeout=10)
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn("advisor.recommendations[0].search.", result.stderr)
+                        self.assertIn("must be", result.stderr)
+                        self.assertFalse(output.exists())
+                        self.assertFalse((root / ".rds").exists())
+
     def test_demo_has_no_fabricated_run_or_confirmed_gain(self):
         snapshot = demo_snapshot(".")
         self.assertTrue(snapshot["demo"])

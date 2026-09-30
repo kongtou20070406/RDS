@@ -207,7 +207,7 @@ def ingest_manifest(path, root=None, receipts=None):
                           "costs": {}, "budget": deepcopy(manifest.get("budget", {}))}}
     require(receipts is None or isinstance(receipts, (list, tuple)), "receipts must be a list")
     receipt_records, by_run, owners, source_ids = list(receipts or []), {}, {}, set()
-    file_cache = {}
+    file_cache, source_runs = {}, {}
     for spec in sources:
         require(isinstance(spec, dict) and isinstance(spec.get("id"), str) and spec["id"], "source needs an id")
         require(spec["id"] not in source_ids, "duplicate source id")
@@ -224,6 +224,7 @@ def ingest_manifest(path, root=None, receipts=None):
         report["source_inventory"].append(inventory)
         binding = deepcopy(spec.get("binding", {}))
         require(isinstance(binding, dict), "source binding must be an object")
+        source_runs[spec["id"]] = {binding["run_id"]} if isinstance(binding.get("run_id"), str) else set()
         problems, document, actual_sha = [], None, None
         try:
             cache_key = str((base / name).resolve())
@@ -236,6 +237,8 @@ def ingest_manifest(path, root=None, receipts=None):
             require(actual_sha == spec["expected_sha256"], "source hash mismatch")
             document = _parse(raw, kind, fmt)
             observed, collisions = _metadata(document, fmt)
+            if isinstance(observed.get("run_id"), str):
+                source_runs[spec["id"]].add(observed["run_id"])
             for key in BINDING_FIELDS:
                 if key in binding and key in observed and binding[key] != observed[key]:
                     collisions.append(key)
@@ -315,6 +318,9 @@ def ingest_manifest(path, root=None, receipts=None):
         bad_sources.update(conflict.get("source_ids", []))
         if conflict.get("source_id"):
             bad_sources.add(conflict["source_id"])
+    # Costs belong to source/run identities even when no fact is selected.
+    bad_runs = {c["run_id"] for c in report["conflicts"] if isinstance(c.get("run_id"), str)}
+    bad_runs.update(run_id for source_id in bad_sources for run_id in source_runs.get(source_id, ()))
     for fid, record in report["facts"].items():
         if owners[fid] in bad_sources:
             _unknown(record, "source identity conflict")
@@ -360,8 +366,7 @@ def ingest_manifest(path, root=None, receipts=None):
         reasons = []
         if len(rows) != 1:
             reasons.append("historical resource missing or ambiguous; select a completed attempt")
-        if any(record["binding"].get("run_id") == cost["run_id"] and owners.get(fid) in bad_sources
-               for fid, record in report["facts"].items()):
+        if cost["run_id"] in bad_runs:
             reasons.append("historical run has an import identity conflict")
         if rows and "unit" in cost and rows[0]["unit"] != cost["unit"]:
             reasons.append("historical cost unit mismatch")
@@ -373,7 +378,8 @@ def ingest_manifest(path, root=None, receipts=None):
         record = _fact(action_id, value, "UNKNOWN" if reasons else "OBSERVED", source, binding,
                        resource=cost["resource"], unit=rows[0]["unit"] if rows else cost.get("unit"),
                        comparison_group=cost["comparison_group"], historical=True,
-                       prediction_status="UNKNOWN", **({"reason": "; ".join(reasons)} if reasons else {}))
+                       prediction_status="UNKNOWN", **({"reason": "; ".join(reasons),
+                       "declared_value": rows[0]["value"] if len(rows) == 1 else None} if reasons else {}))
         report["context"]["costs"][action_id] = record
         if reasons:
             report["missing"].append({"action_id": action_id, "reasons": reasons})

@@ -59,6 +59,8 @@ python -B scripts/rds_dashboard.py --root C:\research\project --advisor advice.j
 
 正常 `advise` 输出中的 `recommendations` 会分别展示理由。有界搜索与有限实验候选按原字段展示状态、行动或干预、竞争解释、待补证据、所需观测、结果对应的下一决策、成本与单位、来源和停止条件；未知成本保持 `UNKNOWN`。完整原 JSON 保留在折叠详情中，其他诊断类型仍保留原字段。
 
+原生搜索、受阻及有限实验的候选必须是对象，候选中的 `steps` 和 `derivation` 必须是对象数组。导出器会拒绝损坏的候选结构，并在 CLI 错误中指出具体字段；原 Advisor 文件保留，其他诊断格式继续按原字段展示。
+
 这些内容不会写回账本，不会生成计划或执行收据。界面保留来源和不确定性；没有已有 seed 不稳定性的证据时，不主动要求多 seed 实验。
 
 ## 只读和验证

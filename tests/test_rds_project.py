@@ -5,6 +5,7 @@ from pathlib import Path
 import sqlite3
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -165,6 +166,112 @@ class ProjectTests(unittest.TestCase):
             self.store._save(db, run)
         self.assertEqual(self.store.recover("r1")["status"], "RUNNING")
         self.assertEqual(self.store.snapshot()["budget"]["cpu_seconds"]["reserved"], 1)
+
+    def test_recover_during_foreground_startup_preserves_reservation(self):
+        self.store.register(self.spec())
+        claimed, resume = threading.Event(), threading.Event()
+        execute_claim = self.store._execute_claim
+
+        def pause_claim(run_id, attempt_id):
+            claimed.set()
+            self.assertTrue(resume.wait(5))
+            return execute_claim(run_id, attempt_id)
+
+        with patch.object(self.store, "_execute_claim", side_effect=pause_claim), \
+                concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            execution = pool.submit(self.store.execute, "r1")
+            try:
+                self.assertTrue(claimed.wait(5))
+                recovered = self.store.recover("r1")
+                self.assertEqual(recovered.get("status"), "RESERVED")
+                self.assertEqual(recovered["worker_pid"], os.getpid())
+                snapshot = self.store.snapshot()
+                self.assertFalse(snapshot["receipts"])
+                self.assertEqual(snapshot["budget"]["cpu_seconds"]["reserved"], 1)
+                with self.assertRaises(ValueError):
+                    self.store.execute("r1")
+            finally:
+                resume.set()
+            receipt = execution.result(timeout=5)
+        self.assertEqual(receipt["run_status"], "SUCCEEDED")
+        self.assertEqual(receipt["exit_code"], 0)
+        self.assertEqual(self.store.snapshot()["budget"]["cpu_seconds"]["charged_estimate"], 1)
+
+    def test_stale_recovery_cannot_settle_a_newly_claimed_worker(self):
+        # An existing reservation may predate foreground controller identity.
+        self.store.register(self.spec())
+        with self.store._db() as db:
+            run = self.store._run(db, "r1")
+            run["attempt_id"] = "pending-attempt"
+            self.store._save(db, run)
+        recovering, claimed = threading.Event(), threading.Event()
+        resume_recovery, resume_execution = threading.Event(), threading.Event()
+        bindings = self.store._bindings
+
+        def pause_bindings(contract):
+            if threading.current_thread().name.startswith("recover"):
+                recovering.set()
+                self.assertTrue(resume_recovery.wait(5))
+            else:
+                claimed.set()
+                self.assertTrue(resume_execution.wait(5))
+            return bindings(contract)
+
+        with patch.object(self.store, "_bindings", side_effect=pause_bindings), \
+                concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="recover") as recovery_pool, \
+                concurrent.futures.ThreadPoolExecutor(max_workers=1) as execution_pool:
+            recovery = recovery_pool.submit(self.store.recover, "r1")
+            try:
+                self.assertTrue(recovering.wait(5))
+                execution = execution_pool.submit(self.store._execute_claim, "r1", "pending-attempt")
+                self.assertTrue(claimed.wait(5))
+                resume_recovery.set()
+                state = recovery.result(timeout=5)
+                self.assertEqual(state.get("status"), "RUNNING")
+                self.assertEqual(state["worker_pid"], os.getpid())
+                self.assertFalse(self.store.snapshot()["receipts"])
+                self.assertEqual(self.store.snapshot()["budget"]["cpu_seconds"]["reserved"], 1)
+            finally:
+                resume_recovery.set()
+                resume_execution.set()
+            receipt = execution.result(timeout=5)
+        self.assertEqual(receipt["run_status"], "SUCCEEDED")
+        self.assertEqual(receipt["exit_code"], 0)
+        self.assertEqual(len(self.store.snapshot()["exposures"]), 1)
+        self.assertEqual(self.store.snapshot()["budget"]["cpu_seconds"]["charged_estimate"], 1)
+
+    def test_stale_recovery_returns_normal_receipt_without_double_settlement(self):
+        self.store.register(self.spec())
+        with self.store._db() as db:
+            run = self.store._run(db, "r1")
+            run["attempt_id"] = "pending-attempt"
+            self.store._save(db, run)
+        recovering, resume = threading.Event(), threading.Event()
+        bindings = self.store._bindings
+
+        def pause_bindings(contract):
+            if threading.current_thread().name.startswith("recover"):
+                recovering.set()
+                self.assertTrue(resume.wait(5))
+            return bindings(contract)
+
+        with patch.object(self.store, "_bindings", side_effect=pause_bindings), \
+                concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="recover") as pool:
+            recovery = pool.submit(self.store.recover, "r1")
+            try:
+                self.assertTrue(recovering.wait(5))
+                receipt = self.store._execute_claim("r1", "pending-attempt")
+                budget = self.store.snapshot()["budget"]
+            finally:
+                resume.set()
+            self.assertEqual(recovery.result(timeout=5), receipt)
+        snapshot = self.store.snapshot()
+        self.assertEqual(receipt["run_status"], "SUCCEEDED")
+        self.assertEqual(snapshot["budget"], budget)
+        self.assertEqual(len(snapshot["receipts"]), 1)
+        self.assertEqual(len(snapshot["exposures"]), 1)
+        with self.assertRaises(ValueError):
+            self.store.execute("r1")
 
     def test_atomic_budget_vector_and_dimension_limits(self):
         self.contract["budget"]["wall_seconds"] = 3

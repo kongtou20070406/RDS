@@ -2,6 +2,7 @@
 from copy import deepcopy
 import json
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -19,7 +20,89 @@ def fixture():
                  for name in ("base-graph.json", "candidate-rule.json", "cases.json"))
 
 
+def collision_fixture():
+    _, rule, pack = fixture()
+    base = deepcopy(rule)
+    base["id"] = "changed-rule"
+    action = deepcopy(base["executable"]["action"])
+    action["id"] = "forbidden-run"
+    base["executable"] = {"decisions": ["audit"], "preconditions": [{"fact": "permit", "value": True}],
+                          "action": action}
+    other = deepcopy(base)
+    other["id"] = "still-blocked-rule"
+    candidate = deepcopy(base)
+    candidate["executable"]["preconditions"] = []
+    pack["proposed_on_ids"], pack["heldout_ids"] = ["dev"], ["heldout"]
+    pack["cases"] = [{"id": cid, "partition": partition, "engine": "search",
+                      "context": {"decision": "audit", "facts": {
+                          "permit": {"value": False, "source": "synthetic negative audit input"}}},
+                      "expected": {"minimum_candidates": 1, "forbidden_ready_actions": ["forbidden-run"]}}
+                     for cid, partition in (("dev", "development"), ("heldout", "heldout"))]
+    return {"schema": 1, "nodes": [base, other], "edges": []}, candidate, commit_casepack(pack)
+
+
 class RSITests(unittest.TestCase):
+    def test_replay_cannot_hide_ready_action_behind_another_rules_blocked_status(self):
+        graph, rule, cases = collision_fixture()
+        report = evaluate_candidate(rule, graph, cases)
+        self.assertFalse(report["adoption_eligible"])
+        self.assertEqual(report["counts"]["candidate_passed"], 0)
+        for result in report["results"]:
+            grade = result["candidate_grade"]
+            self.assertEqual(grade["action_statuses"]["forbidden-run"], ["BLOCKED_PREREQUISITE", "READY"])
+            self.assertIn("forbidden action became READY: forbidden-run", grade["errors"])
+
+    def test_shared_action_requirements_are_existential_and_all_ready_limits_apply(self):
+        graph, rule, cases = collision_fixture()
+        for required in ("READY", "BLOCKED_PREREQUISITE"):
+            for reversed_nodes in (False, True):
+                with self.subTest(required=required, reversed_nodes=reversed_nodes):
+                    ordered = deepcopy(graph)
+                    if reversed_nodes:
+                        ordered["nodes"].reverse()
+                    for case in cases["cases"]:
+                        case["expected"] = {"minimum_candidates": 1, "required_actions": {"forbidden-run": required},
+                                            "allowed_ready_actions": ["forbidden-run"]}
+                    report = evaluate_candidate(rule, ordered, commit_casepack(cases))
+                    self.assertTrue(report["adoption_eligible"], report["rejection_reasons"])
+                    self.assertEqual(report["results"][0]["candidate_grade"]["action_statuses"]["forbidden-run"],
+                                     ["BLOCKED_PREREQUISITE", "READY"])
+        for expected in ({"allowed_ready_actions": []}, {"no_ready": True},
+                         {"required_actions": {"forbidden-run": "NEEDS_EVIDENCE"}}):
+            with self.subTest(expected=expected):
+                for case in cases["cases"]:
+                    case["expected"] = expected
+                report = evaluate_candidate(rule, graph, commit_casepack(cases))
+                self.assertFalse(report["adoption_eligible"])
+                grade = report["results"][0]["candidate_grade"]
+                self.assertFalse(grade["passed"])
+                self.assertIn("forbidden-run", " ".join(grade["errors"]))
+
+    def test_cli_force_rejects_shared_action_ready_collision_without_changing_graph(self):
+        graph, rule, cases = collision_fixture()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            graph_path = root / "graph.json"
+            for name, value in (("graph.json", graph), ("candidate.json", rule), ("cases.json", cases)):
+                (root / name).write_text(json.dumps(value, indent=2), encoding="utf-8")
+            original = graph_path.read_bytes()
+            def call(*args):
+                return subprocess.run([sys.executable, "-B", str(ROOT / "scripts/rds_cli.py"),
+                                       "--root", str(root), "meta", *args], cwd=root,
+                                      capture_output=True, text=True, encoding="utf-8", timeout=15)
+            evaluated = call("evaluate-rule", "--rule", "candidate.json", "--graph", "graph.json",
+                             "--cases", "cases.json", "--output", "evaluation.json")
+            self.assertEqual(evaluated.returncode, 1, evaluated.stderr + evaluated.stdout)
+            self.assertFalse(json.loads(evaluated.stdout)["adoption_eligible"])
+            applied = call("apply-rule", "--rule", "candidate.json", "--graph", "graph.json",
+                           "--cases", "cases.json", "--evaluation", "evaluation.json", "--force")
+            self.assertEqual(applied.returncode, 1, applied.stderr + applied.stdout)
+            self.assertIn("Independent case replay rejects adoption", applied.stderr)
+            self.assertEqual(graph_path.read_bytes(), original)
+            records = [json.loads(path.read_text(encoding="utf-8"))
+                       for path in (root / ".rds/rsi/records").glob("*.json")]
+            self.assertEqual([record["status"] for record in records], ["REJECTED"])
+
     def test_execution_reflection_requires_registered_failed_receipt(self):
         receipt = {"run_id": "dev-test-1", "attempt_id": "attempt-1", "sha256": "fixture-receipt-identity",
                    "run_status": "FAILED", "errors": ["Nonzero process exit: 1"],

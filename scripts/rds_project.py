@@ -360,6 +360,10 @@ class ProjectStore:
             run["attempt_id"] = uuid.uuid4().hex
             if background:
                 run["scheduler"] = {"task_id": "RDS-Project-" + run["attempt_id"], "status": "REGISTERING"}
+            else:
+                # Keep the foreground controller identifiable before it claims
+                # the worker, so recovery cannot close this startup window.
+                run["worker_pid"] = os.getpid()
             self._save(db, run)
         if background:
             try:
@@ -462,7 +466,7 @@ class ProjectStore:
         return self._finish(run_id, attempt_id, status, exit_code, time.monotonic() - attempt_start,
                             started, errors, before, timeout)
 
-    def _finish(self, run_id, attempt_id, status, exit_code, wall, started, errors, before=None, timeout=False, only_unstarted=False):
+    def _finish(self, run_id, attempt_id, status, exit_code, wall, started, errors, before=None, timeout=False, only_unstarted=False, recovering=False):
         with self._db() as db:
             run = self._run(db, run_id)
             contract = self._contract(db)
@@ -520,6 +524,11 @@ class ProjectStore:
                 return json.loads(old["body"])
             current = self._run(db, run_id)
             require(current["attempt_id"] == attempt_id and current["status"] not in TERMINAL, "Run already terminal")
+            # Evidence collection can race with startup or progress. Recheck
+            # the latest identity while holding the settlement write lock.
+            if recovering and (current != run or _alive(current["worker_pid"]) is not False
+                               or _alive(current["pid"]) is not False):
+                return {**current, "recovery": "Run changed or process may still be active; no rerun or termination"}
             if only_unstarted and current["status"] == "RUNNING":
                 return {**current, "dispatch_error": errors[0]}
             for key, resource in resources.items():
@@ -544,7 +553,7 @@ class ProjectStore:
         if _alive(run["worker_pid"]) is not False or _alive(run["pid"]) is not False:
             return {**run, "recovery": "Process may still be active; no rerun or termination"}
         return self._finish(run_id, run["attempt_id"], "INTERRUPTED", None, None, None,
-                            ["Worker and process unavailable; final costs and exit status unknown; no automatic rerun"])
+                            ["Worker and process unavailable; final costs and exit status unknown; no automatic rerun"], recovering=True)
 
     def snapshot(self, check_bindings=False):
         require(isinstance(check_bindings, bool), "check_bindings must be Boolean")

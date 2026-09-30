@@ -282,6 +282,40 @@ class KernelTests(unittest.TestCase):
         project.call("branch", "switch", "--id", "branch-freq-res")
         self.assertEqual(project.call("branch", "status")["active_branch"], "branch-freq-res")
 
+    def test_decisions_keep_the_branch_locked_when_the_plan_was_created(self):
+        project = self.project(source="def control(x): return x\ndef treatment(x): return x\n",
+                               budget=60000).init()
+        runs = []
+        for index in range(3):
+            pid = "main-" + str(index)
+            project.call("plan", "create", spec=project.plan(pid))
+            runs.append(project.call("run", "execute", "--id", pid)["run_id"])
+        project.call("branch", "fork", spec={"id": "other", "orthogonal_dimension": "representation",
+                                             "rationale": "Independent research route"})
+        for index, run_id in enumerate(runs, 1):
+            decision = project.call("decide", "--run", run_id)
+            self.assertEqual(decision["stagnation"]["branch_id"], "main")
+            self.assertEqual(decision["stagnation"]["stagnation_count"], index)
+        before = project.call("status")
+        self.assertEqual(before["active_branch"], "other")
+        self.assertEqual(before["branches"]["main"]["status"], "STAGNATING")
+        self.assertEqual(before["branches"]["other"]["stagnation_count"], 0)
+        repeated = project.call("decide", "--run", runs[-1])
+        self.assertTrue(repeated["idempotent"])
+        self.assertEqual(repeated["stagnation"]["branch_id"], "main")
+        self.assertEqual(project.call("status")["branches"], before["branches"])
+
+        # A new experiment belongs to its planning branch even when it reuses a
+        # hypothesis and the researcher switches before launching the process.
+        project.call("plan", "create", spec=project.plan("other-plan"))
+        project.call("branch", "switch", "--id", "main")
+        run_id = project.call("run", "execute", "--id", "other-plan")["run_id"]
+        decision = project.call("decide", "--run", run_id)
+        self.assertEqual(decision["stagnation"]["branch_id"], "other")
+        state = project.call("status")
+        self.assertEqual(state["branches"]["main"]["stagnation_count"], 3)
+        self.assertEqual(state["branches"]["other"]["stagnation_count"], 1)
+
     def test_baseline_control_cache_and_reuse(self):
         """Baseline Control Reuse: Once blank baseline is evaluated on a dataset partition, reuse it across treatments."""
         project = self.project(budget=60000, floor=4000)
