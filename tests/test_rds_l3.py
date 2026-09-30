@@ -367,6 +367,19 @@ class KernelTests(unittest.TestCase):
         self.assertEqual(adv_dyn["status"], "CRITICAL_ANOMALY")
         self.assertTrue(any("eps=1e-7" in a for a in adv_dyn["action_items"]))
 
+        # 3. Fit status: Strictly prevent calling Underfitting 'Overfitting'
+        # Train loss = 1.2, Val loss = 1.3, Baseline = 1.25 -> Model hasn't even learned train set!
+        adv_fit = project.call("advise", "--train-loss", "1.20", "--val-loss", "1.30", "--baseline-loss", "1.25")
+        self.assertEqual(adv_fit["verdict"], "UNDERFITTING_CAPACITY_DEFICIT")
+        self.assertTrue(any("DO NOT add Dropout" in f for f in adv_fit["forbidden_actions"]))
+
+        # 4. Document ingestion: Model investigates literature and absorbs tuning knowledge
+        doc_path = project.root / "tuning_guide.md"
+        doc_path.write_text("# PyTorch Tuning Guide\nWhen facing plateau, suggest increasing learning rate or warmup.\n", encoding="utf-8")
+        adv_doc = project.call("advise", "--doc", str(doc_path), "--topic", "optimization")
+        self.assertEqual(adv_doc["status"], "INGESTED")
+        self.assertGreaterEqual(adv_doc["rules_extracted"], 1)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

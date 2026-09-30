@@ -744,8 +744,17 @@ def cmd_advise(args, rds):
         if getattr(args, "telemetry", None):
             telemetry = load_spec(args.telemetry)
             return advisor.advise_on_loss_dynamics(telemetry)
-            
-        # Scenario B: Plan advice (pre-check simulation)
+
+        # Scenario B: Fit status diagnosis (Underfitting vs Overfitting)
+        if getattr(args, "train_loss", None) is not None and getattr(args, "val_loss", None) is not None:
+            b_loss = float(args.baseline_loss) if getattr(args, "baseline_loss", None) is not None else None
+            return advisor.diagnose_fit_status(float(args.train_loss), float(args.val_loss), b_loss)
+
+        # Scenario C: Document Ingestion & Learning
+        if getattr(args, "doc", None):
+            return advisor.ingest_document(Path(args.doc), topic=getattr(args, "topic", None))
+
+        # Scenario D: Plan advice (pre-check simulation)
         if getattr(args, "plan", None):
             plan = load_spec(args.plan)
             # Check gate advisory
@@ -755,7 +764,7 @@ def cmd_advise(args, rds):
                 gate_err = None
             except Exception as e:
                 gate_err = str(e)
-                
+
             if gate_err:
                 return advisor.advise_on_rejection(gate_err, plan)
             return {
@@ -763,8 +772,8 @@ def cmd_advise(args, rds):
                 "status": "APPROVED",
                 "actionable_suggestion": "方案通过门禁安全检查。空白对照将自动复用已验证缓存，可安全提交执行。"
             }
-            
-        # Scenario C: Global strategic directions
+
+        # Scenario E: Global strategic directions
         recommendations = advisor.recommend_next_directions(state, graph)
         return {
             "advisor_type": "STRATEGIC_RESEARCH_ADVICE",
@@ -845,6 +854,11 @@ def parser():
     adv = commands.add_parser("advise", help="Get programmatic mathematical and strategic advice for models")
     adv.add_argument("--plan", default=None)
     adv.add_argument("--telemetry", default=None)
+    adv.add_argument("--doc", default=None)
+    adv.add_argument("--topic", default=None)
+    adv.add_argument("--train-loss", default=None)
+    adv.add_argument("--val-loss", default=None)
+    adv.add_argument("--baseline-loss", default=None)
     adv.add_argument("--graph", default=None)
     return p
 
