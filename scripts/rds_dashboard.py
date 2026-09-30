@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import sqlite3
+import sys
 
 
 def read_json(raw):
@@ -15,12 +16,37 @@ def read_json(raw):
 
 
 def read_snapshot(root):
-    """Read state, receipts and recent events in one short SQLite read transaction."""
+    """Read the existing project or reference ledger without checking input files."""
     root = Path(root).resolve()
+    project_path = root / ".rds" / "project.sqlite3"
     db_path = root / ".rds" / "state.sqlite3"
     snapshot = {"root": str(root), "database": str(db_path), "demo": False,
                 "generated_at": datetime.now(timezone.utc).isoformat(),
-                "available": False, "state": {}, "receipts": [], "events": [], "event_count": 0}
+                "available": False, "ledger_type": "NONE", "state": {}, "receipts": [],
+                "receipt_sources": {}, "events": [], "event_count": 0}
+    if project_path.is_file():
+        from rds_project import ProjectStore
+        snapshot["database"] = str(project_path)
+        snapshot["ledger_type"] = "PROJECT"
+        snapshot["state"] = ProjectStore(root).snapshot(check_bindings=False)
+        snapshot["receipts"] = snapshot["state"]["receipts"]
+        # The project API owns the state schema. Recent events are display-only
+        # metadata and need no file-hash checks or second state representation.
+        with closing(sqlite3.connect(project_path.as_uri() + "?mode=ro", uri=True,
+                                     timeout=3, isolation_level=None)) as db:
+            db.execute("PRAGMA query_only=ON")
+            db.execute("BEGIN")
+            try:
+                snapshot["event_count"] = db.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+                snapshot["events"] = [read_json(row[0]) for row in
+                                      db.execute("SELECT body FROM events ORDER BY id DESC LIMIT 100")]
+            finally:
+                db.rollback()
+        snapshot["available"] = True
+        snapshot["receipt_sources"] = {receipt["run_id"]: {
+            "database": str(project_path), "table": "receipts", "run_id": receipt["run_id"]}
+            for receipt in snapshot["receipts"]}
+        return snapshot
     if not db_path.is_file():
         return snapshot
     # Do not use RDSState.transaction: its status path can migrate and rewrite state.
@@ -42,6 +68,10 @@ def read_snapshot(root):
             not isinstance(item, dict) for item in snapshot["receipts"] + snapshot["events"]):
         raise ValueError("RDS state, receipts and events must be JSON objects")
     snapshot["available"] = bool(snapshot["state"])
+    snapshot["ledger_type"] = "REFERENCE"
+    snapshot["receipt_sources"] = {receipt["run_id"]: {
+        "database": str(db_path), "table": "receipts", "run_id": receipt["run_id"]}
+        for receipt in snapshot["receipts"]}
     return snapshot
 
 
@@ -49,7 +79,7 @@ def demo_snapshot(root):
     """A labelled orientation example; it contains no invented execution results."""
     snapshot = {"root": str(Path(root).resolve()), "database": None, "demo": True,
                 "generated_at": datetime.now(timezone.utc).isoformat(), "available": True,
-                "receipts": [], "events": [], "event_count": 0}
+                "ledger_type": "DEMO", "receipts": [], "receipt_sources": {}, "events": [], "event_count": 0}
     snapshot["state"] = {
         "contract": {"project_id": "RDS · orientation example",
                      "claim": "比较一个明确干预与公平对照，判断它是否改变下一步科研选择。 / Compare a defined intervention with a fair control to inform the next research decision.",
@@ -115,6 +145,9 @@ en:{workspace:'Workspace',purpose:'Automated assistance for human research. Make
 };
 Object.assign(dict.zh,{next_decision:'下一决策',baseline:'公平对照',protected:'受保护条件',selection:'选择规则'});
 Object.assign(dict.en,{next_decision:'Next decision',baseline:'Fair control',protected:'Protected conditions',selection:'Selection rule'});
+Object.assign(dict.zh,{ledgerType:'账本类型',runCount:'运行计划',spentMeasured:'实测用量',chargedEstimate:'预估记账',unit:'单位',arm:'实验角色',argv:'执行参数',protocol:'原协议',receiptSource:'收据原件位置',artifacts:'原始产物路径',process_status:'进程状态'});
+Object.assign(dict.en,{ledgerType:'Ledger type',runCount:'Registered runs',spentMeasured:'Measured usage',chargedEstimate:'Charged estimate',unit:'Unit',arm:'Run arm',argv:'Command arguments',protocol:'Original protocol',receiptSource:'Original receipt location',artifacts:'Original artifact paths',process_status:'Process status'});
+const projectLedger=data.ledger_type==='PROJECT';
 const routes=[['overview','◫'],['hypotheses','◇'],['plans','▤'],['receipts','▧'],['branches','⑂'],['advisor','◎'],['history','↶'],['start','↗']];
 function preference(key,fallback){try{return localStorage.getItem(key)||fallback}catch{return fallback}}
 function savePreference(key,value){try{localStorage.setItem(key,value)}catch{}}
@@ -131,12 +164,14 @@ function empty(title,copy){const n=node('div',undefined,'empty');n.append(node('
 function axes(value){const n=node('div',undefined,'axes');for(const key of ['task_gain','mechanism','search_policy']){const a=node('div',undefined,'axis');a.append(node('span',t(key)),node('strong',value?.[key]??t('missing')));n.append(a)}return n}
 function recordList(items,title,copy,builder){const q=document.getElementById('search').value.toLocaleLowerCase(),matches=items.filter(item=>JSON.stringify(item).toLocaleLowerCase().includes(q)),grid=node('div',undefined,'grid records');if(!matches.length){grid.append(empty(items.length?'noMatches':title,items.length?'noMatchesCopy':copy));return grid}matches.forEach(item=>grid.append(builder(item)));return grid}
 function recordEntries(value){return Object.entries(value||{}).map(([id,value])=>({id,...value}))}
-function overview(){const wrap=node('div'),stats=node('div',undefined,'stats');for(const [key,count] of [['hypothesisCount',Object.keys(state.hypotheses||{}).length],['planCount',Object.keys(state.plans||{}).length],['receiptCount',data.receipts.length],['branchCount',Object.keys(state.branches||{}).length]]){const n=node('div',undefined,'stat');n.append(node('strong',data.available?count:'—'),node('span',t(key)));stats.append(n)}wrap.append(stats);const grid=node('div',undefined,'grid');const contract=state.contract;if(contract&&Object.keys(contract).length){const goal=card(t('contract'));goal.classList.add('wide');const rows=[['next_decision',contract.next_decision??contract.decision],['metric',contract.primary_metric?.name],['direction',contract.primary_metric?.direction],['threshold',contract.primary_metric?.min_useful_delta],['scope',contract.evaluation_scope]];for(const key of ['baseline','protected','selection','evidence_refs'])if(contract[key]!==undefined)rows.push([key,contract[key]]);rows.push(['contractHash',state.contract_sha256]);goal.append(node('p',contract.claim,'claim'),fields(rows));raw(goal,contract);grid.append(goal)}else grid.append(empty('noContract','noContractCopy'));
-if(state.budget?.limits){for(const resource of Object.keys(state.budget.limits)){const b=state.budget,cap=b.limits[resource],spent=b.spent?.[resource],reserved=b.reserved?.[resource],n=card(t('budget')+' · '+resource);const amounts=node('div',undefined,'budget-values');for(const [label,amount] of [['spent',spent],['reserved',reserved],['available',typeof spent==='number'&&typeof reserved==='number'?cap-spent-reserved:undefined]]){const v=node('div');v.append(node('strong',amount),node('span',t(label)));amounts.append(v)}n.append(amounts);if(typeof cap==='number'&&cap>0&&typeof spent==='number'&&typeof reserved==='number'){const meter=node('meter');meter.min=0;meter.max=cap;meter.value=spent+reserved;meter.setAttribute('aria-label',t('spent')+' + '+t('reserved')+' / '+t('limit')+' ('+resource+')');n.append(meter)}n.append(fields([['limit',cap],['floor',b.confirmation_floor?.[resource]]]));grid.append(n)}}else grid.append(empty('noBudget','noBudgetCopy'));
+function planEntries(){return projectLedger?state.runs||[]:recordEntries(state.plans)}
+function budgetEntries(){if(projectLedger)return Object.entries(state.budget||{}).map(([resource,b])=>({resource,cap:b.cap,spent:b.spent_measured,charged:b.charged_estimate,reserved:b.reserved,remaining:b.remaining,unit:b.unit}));const b=state.budget;if(!b?.limits)return [];return Object.entries(b.limits).map(([resource,cap])=>({resource,cap,spent:b.spent?.[resource],reserved:b.reserved?.[resource],remaining:typeof cap==='number'&&typeof b.spent?.[resource]==='number'&&typeof b.reserved?.[resource]==='number'?cap-b.spent[resource]-b.reserved[resource]:undefined,floor:b.confirmation_floor?.[resource]}))}
+function overview(){const wrap=node('div'),stats=node('div',undefined,'stats');for(const [key,count] of [['hypothesisCount',Object.keys(state.hypotheses||{}).length],[projectLedger?'runCount':'planCount',planEntries().length],['receiptCount',data.receipts.length],['branchCount',Object.keys(state.branches||{}).length]]){const n=node('div',undefined,'stat');n.append(node('strong',data.available?count:'—'),node('span',t(key)));stats.append(n)}wrap.append(stats);const grid=node('div',undefined,'grid');const contract=state.contract;if(contract&&Object.keys(contract).length){const goal=card(t('contract'));goal.classList.add('wide');const rows=[['ledgerType',data.ledger_type],['next_decision',contract.next_decision??contract.decision],['metric',contract.primary_metric?.name],['direction',contract.primary_metric?.direction],['threshold',contract.primary_metric?.min_useful_delta],['scope',contract.evaluation_scope]];for(const key of ['baseline','protected','selection','evidence_refs'])if(contract[key]!==undefined)rows.push([key,contract[key]]);rows.push(['contractHash',state.contract_sha256]);goal.append(node('p',contract.claim??contract.description,'claim'),fields(rows));raw(goal,contract);grid.append(goal)}else grid.append(empty('noContract','noContractCopy'));
+const budgets=budgetEntries();if(budgets.length){for(const b of budgets){const n=card(t('budget')+' · '+b.resource),amounts=node('div',undefined,'budget-values'),values=[[projectLedger?'spentMeasured':'spent',b.spent],['reserved',b.reserved],['available',b.remaining]];if(projectLedger)values.splice(1,0,['chargedEstimate',b.charged]);for(const [label,amount] of values){const v=node('div');v.append(node('strong',amount),node('span',t(label)));amounts.append(v)}n.append(amounts);const used=projectLedger?typeof b.spent==='number'&&typeof b.charged==='number'&&typeof b.reserved==='number'?b.spent+b.charged+b.reserved:undefined:typeof b.spent==='number'&&typeof b.reserved==='number'?b.spent+b.reserved:undefined;if(typeof b.cap==='number'&&b.cap>0&&typeof used==='number'){const meter=node('meter');meter.min=0;meter.max=b.cap;meter.value=used;meter.setAttribute('aria-label',t('budget')+' / '+t('limit')+' ('+b.resource+')');n.append(meter)}n.append(fields([['limit',b.cap],['unit',b.unit],['floor',b.floor]]));grid.append(n)}}else grid.append(empty('noBudget','noBudgetCopy'));
 const active=state.branches?.[state.active_branch];if(active){const n=card(t('activeBranch')+' · '+state.active_branch,active.status);n.classList.add('wide');n.append(fields([['dimension',active.orthogonal_dimension],['rationale',active.rationale],['stagnation',active.stagnation_count]]));grid.append(n)}wrap.append(grid,node('div',t('axesNote'),'notice'));return wrap}
 function hypotheses(){return recordList(recordEntries(state.hypotheses),'noHypotheses','noHypothesesCopy',h=>{const n=card(h.id,h.spec?.type);n.append(node('p',h.spec?.proposition),axes(h),fields([['falsifier',h.spec?.falsifier]]));raw(n,h);return n})}
-function plans(){return recordList(recordEntries(state.plans),'noPlans','noPlansCopy',p=>{const n=card(p.id,p.run_status),spec=p.spec||{};n.append(fields([['hypothesis',spec.hypothesis_id],['purposeLabel',spec.purpose],['split',spec.split_id],['resources',spec.resources],['run',p.run_id]]));if(p.assessment)n.append(axes(p.assessment));raw(n,p);return n})}
-function receipts(){return recordList(data.receipts,'noReceipts','noReceiptsCopy',r=>{const n=card(r.plan_id||r.run_id,r.run_status),plan=Object.values(state.plans||{}).find(p=>p.run_id===r.run_id);n.append(fields([['run',r.run_id],['observedGain',r.result?.gain],['elapsed',r.elapsed_ms],['charged',r.charged_allocation],['controlReused',r.control_reused===undefined?undefined:t(r.control_reused?'yes':'no')],['receiptHash',r.sha256]]));if(plan?.assessment)n.append(axes(plan.assessment));raw(n,r);return n})}
+function plans(){return recordList(planEntries(),'noPlans','noPlansCopy',p=>{const n=card(p.id,p.run_status),spec=projectLedger?p.manifest||{}:p.spec||{};n.append(fields(projectLedger?[['run',p.run_id],['arm',spec.arm],['argv',spec.argv],['protocol',p.protocol],['resources',p.resource_estimates]]:[['hypothesis',spec.hypothesis_id],['purposeLabel',spec.purpose],['split',spec.split_id],['resources',spec.resources],['run',p.run_id]]));if(p.assessment)n.append(axes(p.assessment));raw(n,p);return n})}
+function receipts(){return recordList(data.receipts,'noReceipts','noReceiptsCopy',r=>{const n=card(r.plan_id||r.run_id,r.run_status),plan=planEntries().find(p=>p.run_id===r.run_id),source=data.receipt_sources?.[r.run_id];n.append(fields([['run',r.run_id],['observedGain',r.result?.gain],['elapsed',r.elapsed_ms],['charged',r.charged_allocation],['controlReused',r.control_reused===undefined?undefined:t(r.control_reused?'yes':'no')],['receiptHash',r.sha256],['receiptSource',source],['process_status',r.process_status],['resources',r.resources],['artifacts',r.artifacts]]));const assessment=r.assessment||plan?.assessment;if(assessment)n.append(axes(assessment));raw(n,r);return n})}
 function branches(){return recordList(recordEntries(state.branches),'noBranches','noBranchesCopy',b=>{const n=card(b.id,b.id===state.active_branch?t('active'):b.status);n.append(fields([['parent',b.parent_id],['dimension',b.orthogonal_dimension],['rationale',b.rationale],['stagnation',b.stagnation_count],['branchHypotheses',b.hypotheses]]));raw(n,b);return n})}
 function advisor(){const wrap=node('div');wrap.append(node('div',t('advisorNote'),'notice'));const items=data.advisor===null?[]:Array.isArray(data.advisor)?data.advisor:[data.advisor];wrap.append(recordList(items,'noAdvisor','noAdvisorCopy',a=>{const n=card(typeof a==='object'&&a?(a.diagnosis||a.verdict||a.detected_bottleneck||a.advisor_type||t('advisor')):t('advisor'),a?.status);for(const [key,value] of Object.entries(a&&typeof a==='object'?a:{value:a})){if(['diagnosis','verdict','detected_bottleneck','advisor_type','status'].includes(key))continue;const section=node('section',undefined,'advice-field');section.append(node('h4',t(key)));if(typeof value==='object')section.append(node('pre',JSON.stringify(value,null,2)));else section.append(node('p',value,'subtle'));n.append(section)}raw(n,a);return n}));return wrap}
 function history(){const wrap=node('div');wrap.append(node('p',t('recentEvents')+' · '+data.events.length+' / '+t('eventCount')+' '+data.event_count,'subtle'));wrap.append(recordList(data.events,'noEvents','noEventsCopy',e=>{const n=card(e.kind);if(e.time_ns)n.append(node('time',new Date(e.time_ns/1e6).toLocaleString(language==='zh'?'zh-CN':'en-GB')));raw(n,e);return n}));return wrap}
@@ -151,8 +186,11 @@ document.getElementById('language').addEventListener('change',e=>{language=e.tar
 
 
 def main(argv=None):
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--root", default=".", help="Project containing .rds/state.sqlite3")
+    parser.add_argument("--root", default=".", help="Project containing .rds/project.sqlite3 or .rds/state.sqlite3")
     parser.add_argument("--output", default="rds-dashboard.html", help="Standalone HTML destination")
     parser.add_argument("--advisor", help="Optional structured advisor JSON file; imported as advice only")
     parser.add_argument("--demo", action="store_true", help="Show a labelled example without run results")
@@ -170,7 +208,8 @@ def main(argv=None):
     except (OSError, ValueError, sqlite3.Error) as exc:
         parser.error(str(exc))
     print(json.dumps({"output": str(output), "source": snapshot["database"],
-                      "available": snapshot["available"], "demo": snapshot["demo"]}, ensure_ascii=False))
+                      "available": snapshot["available"], "demo": snapshot["demo"],
+                      "ledger_type": snapshot["ledger_type"]}, ensure_ascii=False))
     return 0
 
 
