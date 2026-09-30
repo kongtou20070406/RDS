@@ -106,7 +106,7 @@ class DashboardTests(unittest.TestCase):
                                 capture_output=True, timeout=10, env={**os.environ, "PYTHONIOENCODING": "gbk"})
         self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8"))
         response = json.loads(result.stdout.decode("utf-8"))
-        self.assertEqual(response["output"], str(output))
+        self.assertEqual(response["output"], str(output.resolve()))
         self.assertEqual(response["ledger_type"], "REFERENCE")
         self.assertEqual(response["source"], str(path))
         self.assertTrue(response["available"])
