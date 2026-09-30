@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Preserve manual-only costs and embedded experiment templates when Advisor merges `--research-context` with `--artifacts`. Keep compatible imported cost provenance; conflicting values, resource identities, units, comparison groups or reliability produce unknown costs instead of choosing a cheaper declaration.
+- Detect contradictory run/split/metric bindings even when manual and imported fact values are equal. Preserve the original value and source, mark the disputed fact unknown, and keep Boolean declarations distinct from numeric observations.
+- Reject blank, placeholder or malformed source bindings as unknown evidence before they can satisfy research rules. Validate existing hash strings without rehashing unrelated files, and retain a missing-evidence report for non-string run IDs instead of crashing.
+
 ## 5.6.0-rc.2 — 2026-09-30
 
 Preserve resource identity when Advisor compares reported costs. CPU and GPU records with the same unit and comparison group no longer share a scalar cost ordering or a resource-specific budget.

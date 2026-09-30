@@ -8,6 +8,7 @@ JSON cannot certify manipulation, metric gain, final authorization or success.
 import argparse
 import ast
 from contextlib import contextmanager
+from copy import deepcopy
 from fractions import Fraction
 import hashlib
 import importlib.metadata
@@ -900,27 +901,61 @@ def cmd_advise(args, rds):
         state["advisor_context"] = load_spec(args.research_context)
     imported = None
     if getattr(args, "artifacts", None):
-        from rds_artifacts import ingest_manifest
+        from rds_artifacts import BINDING_FIELDS, _unknown, ingest_manifest
         imported = ingest_manifest(args.artifacts, root=args.root, receipts=state.get("receipts"))
         context = dict(imported["context"])
         manual = state.get("advisor_context", {})
         require(isinstance(manual, dict) and isinstance(manual.get("facts", {}), dict),
                 "Research context and facts must be objects")
-        for key in ("decision", "targets", "budget", "max_depth", "max_candidates", "target_types"):
+        require(isinstance(manual.get("costs", {}), dict), "Research context costs must be an object")
+        for key in ("decision", "targets", "budget", "max_depth", "max_candidates", "target_types", "templates"):
             if key in manual:
                 context[key] = manual[key]
         facts = dict(context.get("facts", {}))
         for name, record in manual.get("facts", {}).items():
             require(isinstance(record, dict), "Each manual fact must be an object")
-            if name in facts and facts[name].get("value") != record.get("value"):
-                imported["conflicts"].append({"fact_id": name, "reason": "Manual declaration conflicts with imported record"})
-                facts[name] = {"value": None, "reliable": False, "source": "conflicting records"}
+            binding = record.get("binding", {})
+            require(isinstance(binding, dict), "Each manual fact binding must be an object")
+            original = facts.get(name)
+            fields = ([key for key in BINDING_FIELDS if key in binding and key in original.get("binding", {})
+                       and binding[key] != original["binding"][key]] if original is not None else [])
+            if original is not None and (original.get("value") != record.get("value") or
+                    isinstance(original.get("value"), bool) != isinstance(record.get("value"), bool) or fields):
+                imported["conflicts"].append({"fact_id": name, "fields": fields,
+                    "reason": "Manual declaration conflicts with imported record"})
+                facts[name] = deepcopy(original)
+                _unknown(facts[name], "Manual declaration conflicts with imported record")
             elif name in facts and (record.get("reliable") is False or record.get("reliability") in {"UNRELIABLE", "UNKNOWN"}):
                 imported["conflicts"].append({"fact_id": name, "field": "reliability", "reason": "Manual context explicitly disputes this record's reliability"})
-                facts[name] = {**facts[name], "reliable": False, "reliability": "UNRELIABLE"}
+                facts[name] = deepcopy(original)
+                _unknown(facts[name], "Manual context explicitly disputes this record's reliability")
             elif name not in facts:
                 facts[name] = record
         context["facts"] = facts
+        costs = dict(context.get("costs", {}))
+        for name, record in manual.get("costs", {}).items():
+            require(isinstance(record, dict), "Each manual cost must be an object")
+            binding = record.get("binding", {})
+            require(isinstance(binding, dict), "Each manual cost binding must be an object")
+            if name not in costs:
+                costs[name] = record
+                continue
+            original = costs[name]
+            fields = [key for key in ("value", "resource", "unit", "comparison_group")
+                      if original.get(key) != record.get(key)]
+            fields.extend("binding." + key for key in BINDING_FIELDS
+                          if key in binding and key in original.get("binding", {})
+                          and binding[key] != original["binding"][key])
+            if isinstance(original.get("value"), bool) != isinstance(record.get("value"), bool):
+                fields.append("value")
+            if record.get("reliable") is False or record.get("reliability") in {"UNRELIABLE", "UNKNOWN"}:
+                fields.append("reliability")
+            if fields:
+                reason = "Manual declaration conflicts with imported cost"
+                imported["conflicts"].append({"cost_id": name, "fields": sorted(set(fields)), "reason": reason})
+                costs[name] = deepcopy(original)
+                _unknown(costs[name], reason)
+        context["costs"] = costs
         if imported["conflicts"]:
             imported["status"] = "CONFLICT"
         state["advisor_context"] = context

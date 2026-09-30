@@ -69,6 +69,27 @@ class ImportTests(unittest.TestCase):
         self.assertEqual(result["facts"]["last_loss"]["source"]["locator"], "line:3:pointer:/loss")
         self.assertEqual(result["facts"]["loss"]["value"], 0.5)
 
+    def test_invalid_source_identity_cannot_become_observed_evidence(self):
+        cases = [(key, value) for key in ("run_id", "data_split")
+                 for value in (" ", "unknown", " UNKNOWN ", 1, ["run"], {"name": "run"})]
+        cases.extend((key, value) for key in ("code_sha256", "config_sha256", "data_sha256")
+                     for value in ("unknown", "a" * 63, "g" * 64))
+        cases.extend(("metric", {"definition": definition, "reduction": reduction})
+                     for definition, reduction in ((" ", "mean"), ("loss", "unknown"), (1, "mean")))
+        for key, value in cases:
+            with self.subTest(key=key, value=value):
+                binding = {**self.binding, key: value}
+                source = self.source("invalid.json", "metric", {"loss": 0.25},
+                                     [{"id": "loss", "pointer": "/loss"}], binding=binding)
+                result = self.run_import([source])
+                self.assertEqual(result["status"], "INCOMPLETE")
+                record = result["facts"]["loss"]
+                self.assertEqual(record["kind"], "UNKNOWN")
+                self.assertEqual(record.provenance_status, "UNKNOWN")
+                self.assertEqual(evaluate_condition({"fact": "loss", "value": 0.25},
+                                                   result["facts"])["truth"], "UNKNOWN")
+                self.assertTrue(result["missing"])
+
     def test_missing_hash_file_metadata_and_self_signature_stay_unknown(self):
         missing = {"id": "absent", "path": "absent.json", "kind": "metric", "facts": [{"id": "absent", "pointer": "/x"}]}
         signed = self.source("signed.json", "log", {"verified": True, "pass": True, "manipulation_verified": True},
