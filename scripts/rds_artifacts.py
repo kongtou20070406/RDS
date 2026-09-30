@@ -19,6 +19,10 @@ SELF_SIGNED = {"verified", "pass", "manipulation_verified", "falsifier_triggered
 BINDING_FIELDS = ("run_id",) + COST_BINDING_FIELDS + ("metric",)
 
 
+def _identity_string(value):
+    return isinstance(value, str) and bool(value.strip()) and value.strip().upper() != "UNKNOWN"
+
+
 class ArtifactFact(dict):
     """In-memory importer origin; serialized dictionaries cannot self-sign it."""
     def __init__(self, record):
@@ -224,7 +228,7 @@ def ingest_manifest(path, root=None, receipts=None):
         report["source_inventory"].append(inventory)
         binding = deepcopy(spec.get("binding", {}))
         require(isinstance(binding, dict), "source binding must be an object")
-        source_runs[spec["id"]] = {binding["run_id"]} if isinstance(binding.get("run_id"), str) else set()
+        source_runs[spec["id"]] = {binding["run_id"]} if _identity_string(binding.get("run_id")) else set()
         problems, document, actual_sha = [], None, None
         try:
             cache_key = str((base / name).resolve())
@@ -237,7 +241,7 @@ def ingest_manifest(path, root=None, receipts=None):
             require(actual_sha == spec["expected_sha256"], "source hash mismatch")
             document = _parse(raw, kind, fmt)
             observed, collisions = _metadata(document, fmt)
-            if isinstance(observed.get("run_id"), str):
+            if _identity_string(observed.get("run_id")):
                 source_runs[spec["id"]].add(observed["run_id"])
             for key in BINDING_FIELDS:
                 if key in binding and key in observed and binding[key] != observed[key]:
@@ -249,12 +253,13 @@ def ingest_manifest(path, root=None, receipts=None):
             if collisions:
                 report["conflicts"].append({"source_id": spec["id"], "fields": sorted(set(collisions))})
                 problems.append("conflicting source binding")
-            absent = [k for k in ("run_id",) + COST_BINDING_FIELDS if binding.get(k) in (None, "", "UNKNOWN")]
+            absent = [k for k in ("run_id",) + COST_BINDING_FIELDS
+                      if not (sha256(binding.get(k)) if k.endswith("sha256") else _identity_string(binding.get(k)))]
             if kind == "metric" and (not isinstance(binding.get("metric"), dict) or
-                                      not all(binding["metric"].get(k) for k in ("definition", "reduction"))):
+                                      not all(_identity_string(binding["metric"].get(k)) for k in ("definition", "reduction"))):
                 absent.append("metric.definition/reduction")
             if absent:
-                problems.append("missing binding: " + ", ".join(absent))
+                problems.append("missing or invalid binding: " + ", ".join(absent))
             if kind == "receipt":
                 problems.extend(receipt_issues(document, {k: binding[k] for k in ("run_id",) + COST_BINDING_FIELDS if k in binding}))
                 receipt_records.append(document)
@@ -266,7 +271,7 @@ def ingest_manifest(path, root=None, receipts=None):
         if problems:
             report["missing"].append({"source_id": spec["id"], "reasons": problems})
         run_id = binding.get("run_id")
-        if run_id:
+        if _identity_string(run_id):
             previous = by_run.setdefault(run_id, {})
             for key in BINDING_FIELDS[1:]:
                 if key not in binding:
