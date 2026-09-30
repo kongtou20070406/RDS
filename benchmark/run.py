@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / "scripts/rds_cli.py"
 ORDINARY = "def control(x): return x\ndef treatment(x): return 2*x\n"
 C7_CONTROL = "def control(x): return 19*x/(20*(1+x))\n"
-C7_FORMAL = {"kind": "contraction_boundary", "quantity": "scalar_property",
+C7_FORMAL = {"kind": "contraction_boundary", "statement": "threshold_necessity", "quantity": "scalar_property",
              "domain": ["0", "100"], "threshold": "1", "max_loss": "1"}
 
 
@@ -121,7 +121,7 @@ class HistoricalBenchmark(unittest.TestCase):
         (project.root / "model.py").write_text(C7_CONTROL + "def treatment(x): return 6*x/(5*(1+x))\n", encoding="utf-8")
         gate = project.call("gate", "check", spec=project.plan(), flag="--plan")
         self.assertEqual(gate["probe"]["status"], "PASS")
-        self.assertEqual(gate["probe"]["assurance"], "SYMBOLIC_CHECKED")
+        self.assertEqual(gate["probe"]["assurance"], "CERTIFICATE_CHECKED")
         outcome = project.run()
         self.assertEqual(outcome["manipulation"], "PASS")
         self.assertNotEqual(outcome["mechanism"], "SUPPORTED")

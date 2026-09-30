@@ -42,6 +42,27 @@ per historical hour to exercise the same allocation arithmetic within the
 reference runner's 60-second limit. Passing these tests does not establish that
 an LLM will recommend a good scientific direction.
 
+Run `python -B benchmark/performance.py` for bounded local performance samples.
+It separates fresh-process formal admission, repeated checked-certificate gates,
+advisor plan checks and in-process status reads. `--output timings.json` saves the
+raw samples; `--repeats 5` is the default. Compare the same scalar source and
+environment before attributing a speedup. These timings do not measure GPU
+training, model quality or an autonomous research policy.
+
+`python -B benchmark/redteam/runner.py` exercises four synthetic protocol
+violations. The C7 scenario tests the mathematical boundary after removing the
+self-signed flag; the hypothesis-drift scenario first executes a scalar
+refutation. Its reported rates apply only to those four scenarios and do not
+establish general resistance to adversarial proposals.
+
+Run `python -B benchmark/formal_performance.py --repeats 7 --output timings.json`
+for the declarative framework. It records fresh generation, independent proof
+replay, WAL reads/writes and reads during an active uncommitted writer separately.
+The default examples are small exact affine maps and theorem modules. A disk
+cache can be slower than regenerating such cheap proofs; these samples establish
+neither a worst-case latency bound nor GPU savings. Native Lean compilation, when
+configured, is a separate operation and is not a millisecond database timing.
+
 Regenerate packets from the private sibling corpus:
 
 ```powershell

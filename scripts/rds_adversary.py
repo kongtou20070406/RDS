@@ -3,10 +3,9 @@
 Provides:
 1. AdversarialMutator: Generates boundary perturbations, alias injections, and pseudo-ablations
    to stress-test experimental plans and gate rules.
-2. AlignmentEvaluator: Validates candidate rules against historical benchmarks and adversarial mutants,
-   ensuring zero false positives (no valid discoveries blocked) and high precision (intercepting real anti-patterns).
-3. AutoRepairEngine: End-to-end self-repair loop that reflects on refutations, synthesizes candidate rules,
-   evaluates alignment, and atomically applies verified rules to the judgment graph.
+2. AlignmentEvaluator: Lints candidate rule structure and flags heuristic concerns.
+   It does not measure empirical precision or validate a rule's effects on cases.
+3. AutoRepairEngine: Reads a consistent SQLite snapshot and proposes rules for review.
 """
 import copy
 import json
@@ -14,13 +13,7 @@ from pathlib import Path
 import sys
 from typing import Any, Dict, List, Tuple
 
-from rds_meta import (
-    load_judgment_graph,
-    validate_rule,
-    apply_rule,
-    reflect_from_state,
-    FORBIDDEN_WORDS,
-)
+from rds_meta import validate_rule, reflect_from_state, FORBIDDEN_WORDS
 
 
 class AdversarialMutator:
@@ -71,73 +64,51 @@ class AdversarialMutator:
 
 
 class AlignmentEvaluator:
-    """Evaluates candidate meta-rules against known valid benchmarks and failure sets."""
+    """Heuristic lint only; actual case replay is required for rule acceptance."""
 
     def __init__(self, root_dir: Path):
         self.root_dir = root_dir.resolve()
 
     def evaluate_rule(self, candidate_rule: Dict[str, Any]) -> Dict[str, Any]:
-        """Check if candidate rule meets strict alignment criteria:
-        1. Schema adherence and valid fields (via validate_rule).
-        2. No forbidden claims (e.g. guaranteed_gain, unfalsifiable).
-        3. Zero false positives on positive benchmark historical anchors.
-        4. True positive on matching refuted failure scenarios.
-        """
+        """Report structural checks without inventing benchmark measurements."""
+        report = {
+            "rule_id": candidate_rule.get("id", "unknown") if isinstance(candidate_rule, dict) else "unknown",
+            "assurance": "HEURISTIC_ONLY",
+            "lint_passed": False,
+            "is_aligned": False,
+            "verified": False,
+            "auto_apply": False,
+            "precision": None,
+            "false_positive_rate": None,
+            "true_positives": None,
+            "false_positives": None,
+            "cases_evaluated": 0,
+            "rejection_reason": None,
+        }
         try:
             validate_rule(candidate_rule)
         except Exception as e:
-            return {
-                "rule_id": candidate_rule.get("id", "unknown"),
-                "is_aligned": False,
-                "precision": 0.0,
-                "false_positive_rate": 1.0,
-                "rejection_reason": f"Schema validation failed: {str(e)}",
-            }
+            report["rejection_reason"] = f"Schema validation failed: {e}"
+            return report
 
         rule_str = json.dumps(candidate_rule, ensure_ascii=False).lower()
         for forbidden in FORBIDDEN_WORDS:
             if forbidden in rule_str:
-                return {
-                    "rule_id": candidate_rule.get("id", "unknown"),
-                    "is_aligned": False,
-                    "precision": 0.0,
-                    "false_positive_rate": 1.0,
-                    "rejection_reason": f"Rule contains banned ungrounded certainty claim: '{forbidden}'",
-                }
+                report["rejection_reason"] = f"Rule contains banned ungrounded certainty claim: '{forbidden}'"
+                return report
 
-        rule_id = candidate_rule["id"]
         trigger = candidate_rule.get("trigger", "").lower()
         correction = candidate_rule.get("correction", "").lower()
-
-        # False positive check: Does it block legitimate exploratory development anchors?
-        false_positives = 0
-        true_positives = 0
-
-        # Positive anchor check: legitimate exploration should never be unconditionally blocked
         if "exploratory" in trigger and "block" in correction:
-            false_positives += 1
-
-        # Check for historical refutation/stagnation coverage
-        if any(kw in (trigger + " " + correction) for kw in ["boundary", "necessity", "counterexample", "tuning", "delta", "prior", "stagnation", "c7"]):
-            true_positives += 1
-
-        precision = 1.0 if (true_positives + false_positives > 0 and false_positives == 0) else 0.0
-        fpr = false_positives / max(1, (false_positives + 1))
-        is_aligned = (false_positives == 0) and (true_positives > 0)
-
-        return {
-            "rule_id": rule_id,
-            "is_aligned": is_aligned,
-            "true_positives": true_positives,
-            "false_positives": false_positives,
-            "precision": precision,
-            "false_positive_rate": fpr,
-            "rejection_reason": None if is_aligned else "Failed alignment criteria or lacked positive causal signal",
-        }
+            report["rejection_reason"] = "Heuristic concern: rule may block legitimate exploration"
+            return report
+        report["lint_passed"] = True
+        report["rejection_reason"] = "Applicable cases have not been replayed; alignment is unverified"
+        return report
 
 
 class AutoRepairEngine:
-    """Coordinates reflection, alignment evaluation, and atomic repair."""
+    """Coordinates candidate reflection; unverified rules are never auto-applied."""
 
     def __init__(self, root_dir: Path, graph_path: Path):
         self.root_dir = root_dir.resolve()
@@ -145,11 +116,10 @@ class AutoRepairEngine:
         self.evaluator = AlignmentEvaluator(self.root_dir)
 
     def run_self_repair(self, dry_run: bool = False) -> Dict[str, Any]:
-        """Reflect on failures, evaluate candidates, and apply passing rules."""
-        import sqlite3
-        state_file = self.root_dir / ".rds/state.json"
-        db_file = self.root_dir / ".rds/rds.db"
-        if not state_file.exists():
+        """Read state and receipts together without changing the state or graph."""
+        from rds_cli import RDSState, strict_json
+        rds = RDSState(self.root_dir)
+        if not rds.db_path.exists():
             return {
                 "status": "NOOP",
                 "dry_run": dry_run,
@@ -157,16 +127,10 @@ class AutoRepairEngine:
                 "repaired_rules": [],
             }
 
-        with open(state_file, "r", encoding="utf-8") as f:
-            state = json.load(f)
-
-        receipts = []
-        if db_file.exists():
-            conn = sqlite3.connect(db_file)
-            cur = conn.cursor()
-            rows = cur.execute("SELECT body FROM receipts ORDER BY run_id").fetchall()
-            receipts = [json.loads(r[0]) for r in rows]
-            conn.close()
+        with rds.snapshot() as (db, state):
+            if not state:
+                raise ValueError("RDS SQLite state is missing")
+            receipts = [strict_json(r[0]) for r in db.execute("SELECT body FROM receipts ORDER BY run_id")]
 
         # 1. Reflect from state & receipts
         candidates = reflect_from_state(state, receipts)
@@ -178,19 +142,18 @@ class AutoRepairEngine:
                 "repaired_rules": [],
             }
 
-        repaired_rules = []
+        candidate_rules = []
         rejected_candidates = []
 
         # 2. Evaluate each candidate
         for candidate in candidates:
             eval_result = self.evaluator.evaluate_rule(candidate)
-            if eval_result["is_aligned"]:
-                if not dry_run:
-                    apply_rule(candidate, graph_path=self.graph_path, force=True)
-                repaired_rules.append({
+            if eval_result["lint_passed"]:
+                candidate_rules.append({
                     "rule_id": candidate["id"],
-                    "applied": not dry_run,
-                    "metrics": eval_result,
+                    "rule": candidate,
+                    "applied": False,
+                    "evaluation": eval_result,
                 })
             else:
                 rejected_candidates.append({
@@ -199,9 +162,11 @@ class AutoRepairEngine:
                 })
 
         return {
-            "status": "REPAIRED" if repaired_rules else "NOOP",
+            "status": "CANDIDATES_ONLY" if candidate_rules else "NOOP",
             "dry_run": dry_run,
             "candidates_evaluated": len(candidates),
-            "repaired_rules": repaired_rules,
+            "repaired_rules": [],
+            "candidate_rules": candidate_rules,
+            "message": "No rules applied; actual applicable-case replay is required before acceptance",
             "rejected_candidates": rejected_candidates,
         }

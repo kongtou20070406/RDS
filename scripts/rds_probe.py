@@ -2,7 +2,8 @@
 """Bounded reference runner: a restricted rational AST, never Python eval/exec.
 
 This checks a mathematical model, not Python floating point or a PyTorch export.
-SymPy results are SYMBOLIC_CHECKED, not independently checked proof certificates.
+Affine rational claims use an independently checked exact certificate. Solver
+fallback results are SYMBOLIC_CHECKED, not proof certificates.
 """
 import ast
 import csv
@@ -11,8 +12,14 @@ import json
 import re
 import sys
 from fractions import Fraction
+from pathlib import Path
 
-FORMAL_KINDS = {"strict_algebraic_threshold", "contraction_boundary", "dynamics", "threshold_necessity"}
+# The isolated CLI worker deliberately imports only this locked sibling module.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rds_formal_kernel import (ResourceLimit, STATEMENTS, UnsupportedExpression,
+                               bounded, check_certificate, exact_probe)
+
+FORMAL_KINDS = {"strict_algebraic_threshold", "contraction_boundary", "dynamics", "threshold_necessity", "declarative"}
 
 
 def formal_requirement(hypothesis):
@@ -26,8 +33,14 @@ def formal_requirement(hypothesis):
     claim = hypothesis.get("formal")
     if claim is None:
         return None
-    if not isinstance(claim, dict) or claim.get("kind") not in FORMAL_KINDS:
-        raise ValueError("formal.kind must be strict_algebraic_threshold, contraction_boundary or dynamics")
+    if not isinstance(claim, dict) or not isinstance(claim.get("kind"), str) or claim["kind"] not in FORMAL_KINDS:
+        raise ValueError("Unsupported formal.kind; use an explicit threshold or declarative statement")
+    if claim["kind"] == "declarative":
+        if set(claim) != {"kind", "statement"} or not isinstance(claim["statement"], dict):
+            raise ValueError("Declarative formal requires exactly kind and statement")
+        from rds_verify import _bounded_json
+        _bounded_json(claim["statement"])
+        return claim
     if claim.get("kind") != "dynamics":
         if claim.get("quantity", "scalar_property") != "scalar_property":
             raise ValueError("Reference adapter requires quantity=scalar_property; general matrix/dynamical claims need another verifier")
@@ -39,6 +52,11 @@ def formal_requirement(hypothesis):
         rational(claim["threshold"])
         if rational(claim["max_loss"]) < 0:
             raise ValueError("Falsifier loss bound must be nonnegative")
+        statement = claim.get("statement", "threshold_necessity" if claim["kind"] == "threshold_necessity"
+                              else "threshold_separation")
+        if statement not in STATEMENTS:
+            raise ValueError("formal.statement must be threshold_separation or threshold_necessity")
+        claim = {**claim, "statement": statement}
     return claim
 
 
@@ -53,13 +71,27 @@ def admission_probe(hypothesis, source):
     if formal is None:
         return {"status": "PASS", "assurance": "AST_ONLY", "backend": "ast",
                 "reason": "Syntax checked; no formal property was declared"}
+    if formal["kind"] == "declarative":
+        return declarative_probe(formal)
     if formal["kind"] == "dynamics":
         return {"status": "UNKNOWN", "assurance": "NONE",
-                "reason": "Dynamics declared; no dynamics verifier is installed in this reference adapter"}
+                "reason": "Use formal.kind=declarative and an explicit affine dynamics statement"}
     try:
-        return symbolic_probe(functions, formal)
+        return formal_probe(functions, formal)
     except (ImportError, NotImplementedError, ValueError, TypeError) as exc:
         return {"status": "UNKNOWN", "assurance": "NONE", "reason": str(exc)}
+
+
+def declarative_probe(formal, committed=None):
+    from rds_verify import checked_result, verify
+    if committed is None:
+        result = verify(formal["statement"])
+    else:
+        certificate = committed.get("certificate") if isinstance(committed, dict) else None
+        result = checked_result(formal["statement"], certificate)
+    return {**result, "claim_relation": "declared_side_condition_only",
+            "observed_status": "NOT_APPLICABLE",
+            "reason": "Declared mathematical model; no equivalence to runner or training execution was proved"}
 
 
 def rational(value):
@@ -126,14 +158,14 @@ def evaluate(node, x):
         return -value if isinstance(node.op, ast.USub) else value
     left, right = evaluate(node.left, x), evaluate(node.right, x)
     if isinstance(node.op, ast.Add):
-        return left + right
+        return bounded(left + right)
     if isinstance(node.op, ast.Sub):
-        return left - right
+        return bounded(left - right)
     if isinstance(node.op, ast.Mult):
-        return left * right
+        return bounded(left * right)
     if isinstance(node.op, ast.Div):
-        return left / right
-    return left ** int(right)
+        return bounded(left / right)
+    return bounded(left ** int(right))
 
 
 def read_rows(raw):
@@ -154,7 +186,73 @@ def read_rows(raw):
     return rows
 
 
+def _symbolic_budget(functions):
+    """Conservative numerator/denominator degree and coefficient bit bounds.
+
+    This rejects explosive nested powers before asking SymPy to expand them.
+    Bounds can reject a canceling expression; they never approximate its value.
+    """
+    def size(node):
+        if isinstance(node, ast.Constant):
+            return 0, 0, max(1, abs(node.value).bit_length()), 1
+        if isinstance(node, ast.Name):
+            return 1, 0, 1, 1
+        if isinstance(node, ast.UnaryOp):
+            return size(node.operand)
+        n, d, nb, db = size(node.left)
+        if isinstance(node.op, ast.Pow):
+            power = node.right.value
+            result = n * power, d * power, max(1, nb * power), max(1, db * power)
+        else:
+            other_n, other_d, other_nb, other_db = size(node.right)
+            if isinstance(node.op, (ast.Add, ast.Sub)):
+                result = (max(n + other_d, other_n + d), d + other_d,
+                          max(nb + other_db, other_nb + db) + 1, db + other_db)
+            elif isinstance(node.op, ast.Mult):
+                result = n + other_n, d + other_d, nb + other_nb, db + other_db
+            else:
+                result = n + other_d, d + other_n, nb + other_db, db + other_nb
+        if max(result[:2]) > 64 or max(result[2:]) > 4096:
+            raise ResourceLimit("Symbolic expression exceeds degree 64 or coefficient 4096-bit bounds")
+        return result
+    for expression in functions.values():
+        size(expression)
+
+
+def formal_probe(functions, formal, committed_probe=None):
+    """Accept a replay only after checking its proof object against this claim."""
+    if committed_probe is not None:
+        if not isinstance(committed_probe, dict):
+            return {"status": "UNKNOWN", "assurance": "NONE", "reason": "Malformed admission proof"}
+        certificate = committed_probe.get("certificate")
+        if certificate is not None:
+            if (isinstance(certificate, dict) and committed_probe.get("status") == "PASS"
+                    and certificate.get("verdict") == "PASS"
+                    and check_certificate(functions, formal, certificate)):
+                return {"status": "PASS", "assurance": "CERTIFICATE_CHECKED",
+                        "backend": "rds_exact_affine", "backend_version": str(certificate["version"]),
+                        "semantics": "exact_rational_execution_and_real_affine_model",
+                        "statement": formal["statement"], "domain": formal["domain"],
+                        "threshold": formal["threshold"], "certificate": certificate,
+                        "certificate_reused": True,
+                        "reason": "threshold discrimination only; no causal mechanism conclusion"}
+            return {"status": "UNKNOWN", "assurance": "NONE", "reason": "Admission certificate did not verify"}
+    try:
+        return exact_probe(functions, formal)
+    except ResourceLimit as exc:
+        return {"status": "UNKNOWN", "assurance": "NONE", "reason": str(exc)}
+    except UnsupportedExpression:
+        try:
+            return symbolic_probe(functions, formal)
+        except Exception as exc:
+            # Solver failures (including SymPy PolynomialError) are lack of a
+            # result, never scientific FAIL. Process deadlines are enforced by
+            # the isolated CLI caller; BaseException is not swallowed here.
+            return {"status": "UNKNOWN", "assurance": "NONE", "reason": str(exc)}
+
+
 def symbolic_probe(functions, formal):
+    _symbolic_budget(functions)
     import sympy as sp
 
     x = sp.Symbol("x", real=True)
@@ -202,6 +300,7 @@ def symbolic_probe(functions, formal):
         "assurance": "SYMBOLIC_CHECKED", "backend": "sympy", "backend_version": sp.__version__,
         "semantics": "exact_rational_execution_and_real_symbolic_model",
         "domain": formal["domain"], "threshold": formal["threshold"],
+        "statement": formal["statement"],
         "control_violation_set": str(counter), "treatment_crossing_set": str(crossing),
         "expressions": {k: str(v) for k, v in expressions.items()},
         "reason": "threshold discrimination only; no causal mechanism conclusion",
@@ -214,47 +313,62 @@ def execute(payload):
         raise ValueError("Declare formal on the hypothesis, not an unbound payload.formal")
     if formal and formal["kind"] == "dynamics":
         return {"probe": {"status": "UNKNOWN", "assurance": "NONE",
-                          "reason": "Dynamics verifier unavailable"}}
+                          "reason": "Use a declarative affine dynamics statement"}}
     functions = parse_source(payload["source"])
     rows = read_rows(payload["data"])
     cached_control = payload.get("cached_control")
     observations = []
     for sid, x, target in rows:
-        if formal and not rational(formal["domain"][0]) <= x <= rational(formal["domain"][1]):
+        if formal and formal["kind"] != "declarative" and not rational(formal["domain"][0]) <= x <= rational(formal["domain"][1]):
             raise ValueError("Observed input outside committed formal domain")
         if cached_control and sid in cached_control:
-            control = Fraction(cached_control[sid]["control"])
-            control_loss = Fraction(cached_control[sid]["control_loss"])
+            control = bounded(Fraction(cached_control[sid]["control"]))
+            control_loss = bounded(Fraction(cached_control[sid]["control_loss"]))
         else:
             control = evaluate(functions["control"], x)
-            control_loss = (control - target) ** 2
+            control_loss = bounded(bounded(control - target) ** 2)
         treatment = evaluate(functions["treatment"], x)
-        treatment_loss = (treatment - target) ** 2
+        treatment_loss = bounded(bounded(treatment - target) ** 2)
         observations.append({"sample_id": sid, "x": str(x), "y": str(target),
                              "control": str(control), "treatment": str(treatment),
                              "control_loss": str(control_loss),
                              "treatment_loss": str(treatment_loss)})
-    mean = lambda key: sum((Fraction(r[key]) for r in observations), Fraction()) / len(rows)
+    def mean(key):
+        total = Fraction()
+        for row in observations:
+            total = bounded(total + Fraction(row[key]))
+        return bounded(total / len(rows))
     probe = {"status": "NOT_APPLICABLE", "assurance": "NONE"}
-    if formal:
+    if formal and formal["kind"] == "declarative":
+        probe = declarative_probe(formal, payload.get("admission_probe"))
+        probe["execution_assurance"] = "EXACT_OBSERVATION_CHECKED"
+    elif formal:
         try:
-            probe = symbolic_probe(functions, formal)
+            probe = formal_probe(functions, formal, payload.get("admission_probe"))
         except (ImportError, NotImplementedError, ValueError, TypeError) as exc:
             probe = {"status": "UNKNOWN", "reason": str(exc), "assurance": "NONE"}
         threshold, max_loss = rational(formal["threshold"]), rational(formal["max_loss"])
         crossed = [r["sample_id"] for r in observations
                    if Fraction(r["control"]) < threshold <= Fraction(r["treatment"])]
+        crossed_set = set(crossed)
         falsifiers = [r["sample_id"] for r in observations
-                      if r["sample_id"] in crossed
-                      and Fraction(r["treatment_loss"]) <= max_loss
-                      and Fraction(r["control_loss"]) <= max_loss]
-        probe.update({"observed_crossings": crossed, "necessity_counterexamples": falsifiers})
+                       if r["sample_id"] in crossed_set
+                       and Fraction(r["treatment_loss"]) <= max_loss
+                       and Fraction(r["control_loss"]) <= max_loss
+                       and formal["statement"] == "threshold_necessity"]
+        probe.update({"admission_status": probe["status"],
+                      "admission_assurance": probe.get("assurance", "NONE"),
+                      "observed_status": "PASS" if crossed else "FAIL",
+                      "execution_assurance": "EXACT_OBSERVATION_CHECKED",
+                      "observed_crossings": crossed, "necessity_counterexamples": falsifiers})
         if probe["status"] == "PASS" and not crossed:
-            probe.update(status="FAIL", reason="Crossing is possible but was never executed")
+            probe.update(status="FAIL", assurance="EXACT_OBSERVATION_CHECKED",
+                         reason="Crossing is possible but was never executed")
+    control_mean, treatment_mean = mean("control_loss"), mean("treatment_loss")
     return {"metric": "mse", "n": len(rows), "observations": observations,
-            "control_mean": str(mean("control_loss")),
-            "treatment_mean": str(mean("treatment_loss")),
-            "gain": str(mean("control_loss") - mean("treatment_loss")),
+            "control_mean": str(control_mean),
+            "treatment_mean": str(treatment_mean),
+            "gain": str(bounded(control_mean - treatment_mean)),
             "control_reused": bool(cached_control), "probe": probe}
 
 
