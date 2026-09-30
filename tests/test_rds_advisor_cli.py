@@ -76,7 +76,7 @@ class AdvisorCLITests(unittest.TestCase):
                                              'binding': {**binding, 'data_split': 'holdout' if conflicting else 'development'}}],
                                 'cost_bindings': [{'action_id': 'compare', 'run_id': 'run', 'resource': 'wall_seconds',
                                                    'comparison_group': 'same-protocol'}],
-                                'budget': {'value': 3, 'unit': 'seconds', 'comparison_group': 'same-protocol',
+                                'budget': {'value': 3, 'resource': 'wall_seconds', 'unit': 'seconds', 'comparison_group': 'same-protocol',
                                            'source': 'predeclared test budget'}}
                     manifest_path = project / 'manifest.json'
                     manifest_path.write_text(json.dumps(manifest), encoding='utf-8')
@@ -91,6 +91,7 @@ class AdvisorCLITests(unittest.TestCase):
                     candidate = search['candidates'][0]
                     cost = answer['artifact_import']['context']['costs']['compare']
                     self.assertEqual(answer['artifact_import']['facts'], {})
+                    self.assertEqual(answer['artifact_import']['context']['budget']['resource'], 'wall_seconds')
                     if conflicting:
                         self.assertEqual(cost['kind'], 'UNKNOWN')
                         self.assertFalse(cost['reliable'])
@@ -99,6 +100,7 @@ class AdvisorCLITests(unittest.TestCase):
                         self.assertEqual(candidate['budget_status'], 'UNKNOWN')
                     else:
                         self.assertEqual(cost['value'], 2)
+                        self.assertEqual(candidate['incremental_cost']['resource'], 'wall_seconds')
                         self.assertEqual(candidate['incremental_cost']['evidence_statuses'], ['ARTIFACT_OBSERVED'])
                         self.assertEqual(candidate['budget_status'], 'WITHIN_REPORTED_BUDGET')
             self.assertFalse((project / '.rds').exists())

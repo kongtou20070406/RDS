@@ -364,6 +364,8 @@ class ProjectTests(unittest.TestCase):
             receipt = self.store.execute("r1", background=True)
         self.assertEqual(receipt["run_status"], "FAILED")
         self.assertEqual(receipt["scheduler"]["task_id"].split("-")[:2], ["RDS", "Project"])
+        self.assertEqual(receipt["scheduler"]["status"], "FAILED")
+        self.assertEqual(self.store.snapshot()["runs"][0]["scheduler"], receipt["scheduler"])
         with self.assertRaises(ValueError):
             self.store.execute("r1", background=True)
 
@@ -374,15 +376,36 @@ class ProjectTests(unittest.TestCase):
             with self.store._db() as db:
                 current = self.store._run(db, run["id"])
                 current.update(status="RUNNING", worker_pid=os.getpid())
+                current["scheduler"]["status"] = "RUNNING"
                 self.store._save(db, current)
             raise OSError("Controller failed after worker claimed attempt")
         with patch.object(self.store, "_schedule", side_effect=partial_dispatch):
             state = self.store.execute("r1", background=True)
         self.assertEqual(state["status"], "RUNNING")
+        self.assertEqual(state["scheduler"]["status"], "RUNNING")
         self.assertFalse(self.store.snapshot()["receipts"])
         self.assertEqual(self.store.snapshot()["budget"]["cpu_seconds"]["reserved"], 1)
         with self.assertRaises(ValueError):
             self.store.execute("r1", background=True)
+
+    def test_scheduled_worker_completion_records_terminal_lifecycle(self):
+        # Start the same worker path without requiring an OS scheduler in CI.
+        for rid, mode, terminal in (("r1", "ok", "COMPLETED"), ("r2", "nonzero", "FAILED")):
+            with self.subTest(mode=mode):
+                self.store.register(self.spec(rid, mode))
+                task_id = "RDS-Project-" + rid
+                with self.store._db() as db:
+                    run = self.store._run(db, rid)
+                    run["attempt_id"] = rid
+                    run["scheduler"] = {"task_id": task_id, "status": "REGISTERED"}
+                    self.store._save(db, run)
+                receipt = self.store._execute_claim(rid, rid)
+                scheduler = {"task_id": task_id, "status": terminal}
+                self.assertEqual(receipt["scheduler"], scheduler)
+                live = next(r for r in self.store.snapshot()["runs"] if r["id"] == rid)
+                self.assertEqual(live["status"], terminal)
+                self.assertEqual(live["scheduler"], scheduler)
+                self.assertEqual(receipt["sha256"], digest({k:v for k,v in receipt.items() if k!="sha256"}))
 
     def test_nonwindows_background_is_explicitly_unsupported(self):
         self.store.register(self.spec())

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 5.6.0-rc.2 — 2026-09-30
+
+Preserve resource identity when Advisor compares reported costs. CPU and GPU records with the same unit and comparison group no longer share a scalar cost ordering or a resource-specific budget.
+
+- Carry explicit resource names into incremental costs and require matching resource, unit and comparison group for aggregation, Pareto dominance and budget checks in direction search and experiment composition.
+- Keep mixed resources, malformed or unknown resource names, and mixtures of named and legacy costs incomparable. Legacy records remain comparable when both omit resource entirely; missing costs remain unknown.
+- Add regressions for cross-resource ranking and budgets, mixed-step and mixed-intervention totals, valid same-resource comparisons, legacy compatibility and malformed resource inputs. Update the receipt-to-Advisor CLI fixture to declare its wall-time budget resource explicitly.
+- Keep v5.6.0-rc.1 ledgers readable after upgrading to rc.2. Stale execution-engine bindings still require a new contract before admission.
+- Finish the RDS scheduler lifecycle in both the run record and receipt when a scheduled attempt settles, preserving its task ID. Completed or failed jobs no longer retain a misleading `RUNNING` label; startup/recovery races keep their existing guards.
+
+Validation: 304 public regression checks (300 passed, 4 optional skips), executed through RDS's project runner. The complete development loop imported the original results, produced Advisor output, replayed four declared rule cases and completed isolated adoption plus rollback. The rule fixture passed 1/4 baseline cases and 4/4 candidate cases, with two held-out improvements and no regressions. These checks validate software behavior; research-policy gains remain unmeasured.
+
 ## 5.6.0-rc.1 — 2026-09-30
 
 Connect the first M01–M06 tool workflow: import actual records, propose finite experiments, track resource costs, execute a locked project command, evaluate rule changes and restore a live decision. Use RDS itself to develop and verify this release.

@@ -93,17 +93,30 @@ def _action_valid(action, current_choice):
     return True, None
 
 
+def _cost_identity(record):
+    if not isinstance(record, dict):
+        return None
+    for key in ("resource", "unit", "comparison_group"):
+        if key == "resource" and key not in record:  # Legacy costs omit resource entirely.
+            continue
+        value = record.get(key)
+        if not isinstance(value, str) or not value.strip() or value.strip().upper() == UNKNOWN:
+            return None
+    return record.get("resource"), record["unit"], record["comparison_group"]
+
+
 def _cost(ids, costs):
     records = [costs.get(i) for i in ids]
     if not records or any(not _reported(r) or not _finite(r.get("value")) or r["value"] < 0
-                          or not r.get("unit") or not r.get("comparison_group") for r in records):
+                          or _cost_identity(r) is None for r in records):
         return {"status": UNKNOWN, "reason": "missing sourced, comparable observed incremental cost"}
-    groups = {(r["unit"], r["comparison_group"]) for r in records}
+    groups = {_cost_identity(r) for r in records}
     total = sum(r["value"] for r in records)
     if len(groups) != 1 or not _finite(total):
-        return {"status": UNKNOWN, "reason": "mixed units/comparison groups or nonfinite total"}
-    unit, group = groups.pop()
+        return {"status": UNKNOWN, "reason": "mixed resources/units/comparison groups or nonfinite total"}
+    resource, unit, group = groups.pop()
     return {"status": "INPUT_REPORTED", "value": total, "unit": unit, "comparison_group": group,
+            **({"resource": resource} if resource is not None else {}),
             "sources": [deepcopy(r["source"]) for r in records], "components": list(ids),
             "evidence_statuses": [_evidence_status(r) for r in records]}
 
@@ -199,7 +212,7 @@ def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nod
         cost = _cost([step["id"] for step in steps], costs)
         budget_status = UNKNOWN
         if cost["status"] != UNKNOWN and _reported(budget) and _finite(budget.get("value")) and budget["value"] >= 0:
-            if (budget.get("unit"), budget.get("comparison_group")) == (cost["unit"], cost["comparison_group"]):
+            if _cost_identity(budget) == _cost_identity(cost):
                 budget_status = "WITHIN_REPORTED_BUDGET" if cost["value"] <= budget["value"] else "OVER_REPORTED_BUDGET"
         candidate = {"id": candidate_id, "rule_id": rule_id, "status": status, "action": deepcopy(action),
                      "competing_explanations": deepcopy(action["competing_explanations"]),
@@ -303,7 +316,7 @@ def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nod
             bcost = better["incremental_cost"]
             if better is worse or bcost["status"] == UNKNOWN or better["status"] != worse["status"]:
                 continue
-            if (bcost["unit"], bcost["comparison_group"]) != (wcost["unit"], wcost["comparison_group"]):
+            if _cost_identity(bcost) != _cost_identity(wcost):
                 continue
             bcov, wcov = set(better["decision_coverage"]), set(worse["decision_coverage"])
             if bcov >= wcov and bcost["value"] <= wcost["value"] and (bcov != wcov or bcost["value"] < wcost["value"]):

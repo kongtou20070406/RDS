@@ -2,7 +2,7 @@
 name: research-direction-selector
 description: Select and audit metric-driven research directions using scoped hypotheses, falsifiable interventions, budgets and human instructions. Includes bounded declarative certificate checks, an L3 reference runner and Obelisk history retrieval; use for choosing experiments, evaluating proposals or checking supported mathematical model claims, not scheduling general GPU training.
 metadata:
-  version: v5.6.0-rc.1
+  version: v5.6.0-rc.2
   engine: rds-cli-v5.6
 ---
 

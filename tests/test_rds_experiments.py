@@ -114,6 +114,39 @@ class ExperimentTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_template(bad)
 
+    def test_resource_budget_only_binds_matching_interventions(self):
+        graph, context, templates = fixture()
+        rid = templates[0]["cost"]["record_id"]
+        context["costs"] = {rid: {"value": 5, "resource": "gpu", "unit": "seconds",
+                                  "comparison_group": "same-trial", "source": "fixture:elapsed"}}
+        context["budget"] = {"value": 3, "resource": "cpu", "unit": "seconds",
+                             "comparison_group": "same-trial", "source": "fixture:budget"}
+        candidate = compose_experiments(graph, context, templates[:1])["candidates"][0]
+        self.assertEqual(candidate["incremental_cost"]["resource"], "gpu")
+        self.assertEqual(candidate["budget_status"], "UNKNOWN")
+        self.assertNotEqual(candidate["status"], "BLOCKED_BUDGET")
+        context["budget"]["resource"] = "gpu"
+        self.assertEqual(compose_experiments(graph, context, templates[:1])["candidates"][0]["status"], "BLOCKED_BUDGET")
+        context["budget"].pop("resource")
+        self.assertEqual(compose_experiments(graph, context, templates[:1])["candidates"][0]["budget_status"], "UNKNOWN")
+
+    def test_composition_keeps_mixed_resource_totals_unknown(self):
+        graph, context, templates = fixture()
+        context["costs"] = {t["cost"]["record_id"]: {"value": 2, "resource": resource, "unit": "seconds",
+                            "comparison_group": "same-trial", "source": "fixture:elapsed"}
+                            for t, resource in zip(templates, ("cpu", "gpu"))}
+        context["budget"] = {"value": 3, "resource": "cpu", "unit": "seconds",
+                             "comparison_group": "same-trial", "source": "fixture:budget"}
+        report = compose_experiments(graph, context, templates)
+        mixed = [c for c in report["candidates"] if len(c["interventions"]) == 2]
+        self.assertTrue(mixed)
+        self.assertTrue(all(c["incremental_cost"]["status"] == "UNKNOWN" and c["budget_status"] == "UNKNOWN" for c in mixed))
+        for cost in context["costs"].values():
+            cost["resource"] = "cpu"
+        combined = [c for c in compose_experiments(graph, context, templates)["candidates"] if len(c["interventions"]) == 2]
+        self.assertTrue(all((c["incremental_cost"]["value"], c["incremental_cost"]["resource"], c["status"])
+                            == (4, "cpu", "BLOCKED_BUDGET") for c in combined))
+
     def test_versioned_pack_and_early_return_preserve_limits(self):
         graph, context, templates = fixture()
         for schema in (None, 2, True):

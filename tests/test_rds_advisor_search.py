@@ -107,6 +107,72 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(result["candidates"], [])
         self.assertIn("no outcome", result["discarded_candidates"][0]["reason"])
 
+    def test_distinct_resources_never_dominate_or_share_budget(self):
+        graph = {"nodes": [node("cpu"), node("gpu")], "edges": []}
+        costs = {name + "-test": fact(value, resource=name, unit="seconds", comparison_group="same-trial")
+                 for name, value in (("cpu", 1), ("gpu", 2))}
+        context = {"decision": "choose", "costs": costs}
+        result = search_directions(graph, context)
+        self.assertEqual(result["ranking"]["dominance"], [])
+        self.assertEqual({c["incremental_cost"]["resource"] for c in result["candidates"]}, {"cpu", "gpu"})
+        for limit in (0.5, 3):
+            with self.subTest(limit=limit):
+                context["budget"] = fact(limit, resource="cpu", unit="seconds", comparison_group="same-trial")
+                result = search_directions(graph, context)
+                gpu = next(c for c in result["candidates"] if c["rule_id"] == "gpu")
+                self.assertEqual(gpu["status"], "READY")
+                self.assertEqual(gpu["budget_status"], "UNKNOWN")
+                if limit < 1:
+                    self.assertEqual([c["rule_id"] for c in result["blocked_candidates"]], ["cpu"])
+                else:
+                    cpu = next(c for c in result["candidates"] if c["rule_id"] == "cpu")
+                    self.assertEqual(cpu["budget_status"], "WITHIN_REPORTED_BUDGET")
+
+    def test_named_resource_comparison_keeps_legacy_records_separate(self):
+        graph = {"nodes": [node("fast"), node("slow")], "edges": []}
+        costs = {name + "-test": fact(value, resource="cpu", unit="seconds", comparison_group="same-trial")
+                 for name, value in (("fast", 2), ("slow", 5))}
+        context = {"decision": "choose", "costs": costs}
+        self.assertEqual(search_directions(graph, context)["ranking"]["dominance"][0]["better"], "fast:fast-test")
+        context["budget"] = fact(3, resource="cpu", unit="seconds", comparison_group="same-trial")
+        self.assertEqual(search_directions(graph, context)["blocked_candidates"][0]["rule_id"], "slow")
+        costs["slow-test"].pop("resource")
+        result = search_directions(graph, context)
+        self.assertEqual(result["ranking"]["dominance"], [])
+        self.assertEqual(len(result["candidates"]), 2)
+        self.assertEqual(next(c for c in result["candidates"] if c["rule_id"] == "slow")["budget_status"], "UNKNOWN")
+        context["budget"].pop("resource")
+        result = search_directions(graph, context)
+        self.assertEqual(result["blocked_candidates"][0]["rule_id"], "slow")
+        self.assertEqual(result["candidates"][0]["budget_status"], "UNKNOWN")
+
+    def test_explicit_unknown_resource_stays_unknown(self):
+        graph = {"nodes": [node("root")], "edges": []}
+        for resource in (None, [], {}, "UNKNOWN", " unknown ", "", "  ", 0, True):
+            with self.subTest(resource=resource):
+                cost = fact(2, resource=resource, unit="seconds", comparison_group="same-trial")
+                candidate = search_directions(graph, self.context(costs={"root-test": cost}))["candidates"][0]
+                self.assertEqual(candidate["incremental_cost"]["status"], "UNKNOWN")
+                known = {**cost, "resource": "cpu"}
+                candidate = search_directions(graph, self.context(costs={"root-test": known}, budget=cost))["candidates"][0]
+                self.assertEqual(candidate["budget_status"], "UNKNOWN")
+
+    def test_mixed_step_resources_cannot_be_summed(self):
+        graph = {"nodes": [node("root", [{"fact": "matched", "value": True}])], "edges": []}
+        costs = {"query:root:matched": fact(1, resource="cpu", unit="seconds", comparison_group="same-trial"),
+                 "root-test": fact(2, resource="gpu", unit="seconds", comparison_group="same-trial")}
+        context = self.context(costs=costs)
+        self.assertEqual(search_directions(graph, context)["candidates"][0]["incremental_cost"]["status"], "UNKNOWN")
+        costs["root-test"]["resource"] = "cpu"
+        cost = search_directions(graph, context)["candidates"][0]["incremental_cost"]
+        self.assertEqual((cost["value"], cost["resource"]), (3, "cpu"))
+        costs["query:root:matched"].pop("resource")
+        self.assertEqual(search_directions(graph, context)["candidates"][0]["incremental_cost"]["status"], "UNKNOWN")
+        costs["root-test"].pop("resource")
+        cost = search_directions(graph, context)["candidates"][0]["incremental_cost"]
+        self.assertEqual(cost["value"], 3)
+        self.assertNotIn("resource", cost)
+
     def test_input_preservation_no_implicit_seed_or_non_dependency_edge(self):
         graph = {"nodes": [node("check"), node("root")], "edges": [edge("check", "root", "qualified_by")]}
         context = self.context(facts={"check-done": fact(False)})
