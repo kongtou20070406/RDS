@@ -906,7 +906,7 @@ def cmd_advise(args, rds):
         manual = state.get("advisor_context", {})
         require(isinstance(manual, dict) and isinstance(manual.get("facts", {}), dict),
                 "Research context and facts must be objects")
-        for key in ("decision", "targets", "budget", "max_depth", "max_candidates", "target_types"):
+        for key in ("decision", "targets", "budget", "max_depth", "max_candidates", "target_types", "two_fidelity"):
             if key in manual:
                 context[key] = manual[key]
         facts = dict(context.get("facts", {}))
@@ -1159,7 +1159,7 @@ def parser():
     adv.add_argument("--baseline-loss", default=None)
     adv.add_argument("--fit-telemetry", default=None, help="Paired, comparable curve observations for fit diagnosis")
     adv.add_argument("--literature", default=None, help="Search scoped local primary-source records")
-    adv.add_argument("--research-context", default=None, help="Sourced facts and the decision for bounded graph search")
+    adv.add_argument("--research-context", default=None, help="Sourced facts and decision for graph search; optional two_fidelity interval-planning context")
     adv.add_argument("--artifacts", help="Hash-bound artifact manifest; reread originals at advice time")
     adv.add_argument("--templates", help="Versioned finite experiment template pack")
     adv.add_argument("--graph", default=None)

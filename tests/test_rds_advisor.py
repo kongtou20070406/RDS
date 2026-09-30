@@ -140,6 +140,26 @@ class AdvisorTests(unittest.TestCase):
         self.assertEqual(report["minimal_test"], [search["candidates"][0]["action"]])
         self.assertEqual((state, graph), before)
 
+    def test_two_fidelity_selection_is_opt_in_and_bound_to_ready_candidates(self):
+        spec, facts = {"schema": "rds-two-fidelity-v1"}, {"value": {"value": 1, "source": "record"}}
+        context = {"decision": "choose", "facts": facts, "two_fidelity": spec}
+        state = {"advisor_context": context}
+        search = {"candidates": [{"id": "ready", "status": "READY", "action": {}},
+                                 {"id": "missing", "status": "NEEDS_EVIDENCE", "action": {}}],
+                  "experiment_composition": {"candidates": [{"id": "experiment:ready", "status": "READY"}]},
+                  "limitations": []}
+        selector = Mock(return_value={"status": "NEEDS_EVIDENCE", "execution_authorized": False})
+        before = copy.deepcopy(state)
+        with patch.dict(sys.modules, {
+                "rds_advisor_search": SimpleNamespace(search_directions=Mock(return_value=search)),
+                "rds_two_fidelity": SimpleNamespace(select_next=selector)}):
+            report = self.advisor.recommend_next_directions(state, {"nodes": []})[0]
+        selector.assert_called_once_with(spec, facts=facts, eligible_ids=["ready", "experiment:ready"])
+        self.structured(report)
+        self.assertEqual(report["observations"], search["candidates"])
+        self.assertFalse(report["two_fidelity_selection"]["execution_authorized"])
+        self.assertEqual(state, before)
+
     def test_ingestion_is_anchored_unreviewed_and_idempotent(self):
         document = self.root / "guide.md"
         document.write_text("# A guide\nLearning rate choice depends on the task.\n欠拟合须先检查数据。\n", encoding="utf-8")

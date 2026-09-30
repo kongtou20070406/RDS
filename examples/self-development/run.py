@@ -9,7 +9,8 @@ import sys
 
 REPO = Path(__file__).resolve().parents[2]
 PATTERNS = ["test_rds_artifacts.py", "test_rds_costs.py", "test_rds_experiments.py",
-            "test_rds_rsi.py", "test_rds_project.py", "test_rds_checkpoints.py", "test_rds_development_cli.py"]
+            "test_rds_rsi.py", "test_rds_project.py", "test_rds_checkpoints.py", "test_rds_development_cli.py",
+            "test_rds_two_fidelity.py", "test_rds_two_fidelity_cli.py", "test_rds_advisor_search.py"]
 
 
 def write(path, value):

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add an opt-in experimental two-fidelity interval planner to Advisor context. Retain sourced observations, prefix confidence intersections, unknown calibration/costs and conditional stopping; propose bounded evidence work without execution authority. This is a 2FFS-inspired adapter, not the full 2FFS/MCTS algorithm or a measured scientific-utility improvement.
+
 ## 5.6.0-rc.1 — 2026-09-30
 
 Connect the first M01–M06 tool workflow: import actual records, propose finite experiments, track resource costs, execute a locked project command, evaluate rule changes and restore a live decision. Use RDS itself to develop and verify this release.

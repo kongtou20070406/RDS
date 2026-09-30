@@ -415,10 +415,19 @@ class RDSAdvisor:
             from rds_advisor_search import search_directions
             options = {"templates": state["advisor_templates"]} if state.get("advisor_templates") else {}
             search = search_directions(judgment_graph, state["advisor_context"], **options)
-            recommendations.append(_advice("STRATEGIC_RESEARCH_ADVICE", type="EXECUTABLE_DIRECTION_SEARCH", urgency="REVIEW",
+            recommendation = _advice("STRATEGIC_RESEARCH_ADVICE", type="EXECUTABLE_DIRECTION_SEARCH", urgency="REVIEW",
                 reason="按明确的下一决策、带来源事实和图中结构化前置条件组合有界候选。",
                 search=search, observations=search["candidates"], limitations=search["limitations"],
-                minimal_test=[candidate["action"] for candidate in search["candidates"]]))
+                minimal_test=[candidate["action"] for candidate in search["candidates"]])
+            context = state["advisor_context"]
+            if "two_fidelity" in context:
+                from rds_two_fidelity import select_next
+                candidates = search["candidates"] + search.get("experiment_composition", {}).get("candidates", [])
+                eligible = [candidate["id"] for candidate in candidates
+                            if candidate.get("status") == "READY" and isinstance(candidate.get("id"), str)]
+                recommendation["two_fidelity_selection"] = select_next(
+                    context["two_fidelity"], facts=context.get("facts", {}), eligible_ids=eligible)
+            recommendations.append(recommendation)
         active = state.get("active_branch", "main")
         branches = state.get("branches", {})
         branch, count = branches.get(active, {}), branches.get(active, {}).get("stagnation_count", 0)
