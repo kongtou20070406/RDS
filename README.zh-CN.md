@@ -1,366 +1,265 @@
 <div align="center">
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/rds-hero-dark.svg">
-  <img src=".github/assets/rds-hero-light.svg" alt="Research Direction Selector" width="100%">
-</picture>
+<img src=".github/assets/rds-hero-dark.svg" alt="Research Direction Selector" width="100%">
 
 # Research Direction Selector
 
-**辅助人类和人类的 AI 持续推进科研**
+**辅助人类和他们的 AI 做科研**
 
-让下一次实验有明确的问题、公平的对照，以及能改变决策的结果。
+从科研问题、已有证据和有限预算中选出有用的下一次实验，让结果能接续到下一次判断。
 
 [![Checks](https://github.com/kongtou20070406/research-direction-selector/actions/workflows/test.yml/badge.svg)](https://github.com/kongtou20070406/research-direction-selector/actions/workflows/test.yml)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white&style=flat-square)
-![Agent Skill](https://img.shields.io/badge/Codex-Agent_Skill-111827?style=flat-square)
-[![Contribute](https://img.shields.io/badge/Contributions-Welcome-0F766E?style=flat-square)](CONTRIBUTING.zh-CN.md)
+[![Version](https://img.shields.io/badge/version-5.6.0--rc.1-0F766E?style=flat-square)](https://github.com/kongtou20070406/research-direction-selector/releases)
 [![Stars](https://img.shields.io/github/stars/kongtou20070406/research-direction-selector?style=flat-square)](https://github.com/kongtou20070406/research-direction-selector/stargazers)
 
 [English](README.md) · **简体中文** · [日本語](README.ja-JP.md)
 
-[实测结果](#实测结果与具体价值) · [我们的目标](#我们的目标) · [L1–L4](#l1l4) · [快速上手](#快速上手) · [参与贡献](#参与贡献)
+[与 AI 一起使用](#与-ai-一起使用) · [本地上手](#本地上手) · [五个组件](#五个组件) · [已验证行为](#已验证行为) · [文档](#文档)
 
 </div>
 
-> 本版为从 `main` 发布的 **v5.5.0-rc.2 预发布版**，面向真人及真人交给 AI 使用。[下载版本](https://github.com/kongtou20070406/research-direction-selector/releases/tag/v5.5.0-rc.2)。下文固定五组件，[未来计划](docs/roadmap.md)区分当前实现和后续验收。
+Research Direction Selector（RDS）帮助科研人员和他们的 AI 调查证据、设计实验、安排执行，并判断接下来做什么。指标停滞、两种解释需要不同干预、剩余预算有限，或中断的项目需要从实际结果接续时，都可以使用它。
 
-Research Direction Selector（简称 RDS）是面向 Codex 的科研协作技能，配有可执行的本地参考内核。它把研究目标、竞争解释、历史经验和程序检查连接起来，帮助研究者回答：**在当前证据和预算下，下一步最值得做哪个实验？**
+用日常语言说明目标和约束。RDS 帮助明确：**下一次实验能区分哪些解释，怎样比较才公平，完整成本是多少，各种结果会改变什么决定**。证据随执行和复盘一起保存，下次对话可以接着做。
 
-研究者确定目标与投入，模型设计候选路线，程序检查执行约束，结果用于修订下一步。RDS 尤其适合指标停滞、机制消融、预算分配，以及中断后的研究接续。
+当前版本为 **v5.6.0-rc.1**，由 Agent Skill、本地命令行工具和操作性 SQLite 账本组成。当前支持以人为主导的科研流程，以及部分任务的受限自动化。[路线图](docs/roadmap.md)区分了已经实现的行为和待完成工作。
 
-> **两种使用方式：**通过 [SKILL.md](SKILL.md) 在真实研究项目中协作；通过参考 CLI 运行受限标量实验，验证预算、数据使用和证据判定协议。真实 GPU 训练仍由研究项目自己的训练器执行。
+| 入口 | 用途 |
+| --- | --- |
+| **与 AI 协作** | 通过 [SKILL.md](SKILL.md)讨论真实科研问题、检查代码和证据、选择下一次实验。 |
+| **本地工具** | 通过 CLI 导入原始记录、查看 Advisor 候选、执行锁定的项目命令、统计成本和接续当前状态。 |
+| **研究者查看** | 阅读结构化 CLI 结果或[离线仪表板](docs/dashboard.md)；仪表板展示只读快照。 |
 
-## 实测结果与具体价值
+## 与 AI 一起使用
 
-2026-09-30 的版本检查得到以下结果：
-
-| 检查 | 实际结果 | 检查内容 |
-| --- | --- | --- |
-| [回归套件](tests/) | **204 项通过，4 项可选跳过，共 208 项** | 内核、Advisor、形式化适配器和界面的行为；原生 Lean 未配置，PyTorch 不可用。 |
-| [历史回放](benchmark/README.md) | **6/6 通过** | 记录中的决策材料及相关门禁。 |
-| [合成攻击场景](benchmark/redteam/) | **4/4 通过** | 四种预先定义的协议攻击。 |
-| [公开任务改编组件挑战](docs/advisor-benchmark.md) | **8/8 个案例、28/28 条检查通过** | 显式合同、缺失证据、依赖、成本、预算和来源身份。 |
-
-公开任务挑战采用 ScienceAgentBench、CORE-Bench 的元数据，由人手工改编规则。八个本地 fixture 的处理与结果组装耗时 **83.0743 ms**；这是小型元数据检查的耗时。可查看[原始输入](benchmark/advisor-public/source-facts.json)和[逐项输出](benchmark/advisor-public/results.json)。**端到端科学任务分数与科研质量提升尚未测量**；这些通过数支持表中的具体行为，不能作为与其它系统的排名比较。
-
-横向比较已暂缓，当前优先真实项目的使用体验、实用性与全环节 L2 支持。[基准选型资料](docs/benchmark-plan.md)保留候选任务供以后参考，没有执行或排期对比实验。
-
-这组检查展示了对下一步研究决定的具体帮助：
-
-- **保留证据缺口：**单个训练损失值不会被升级成收敛诊断（C1）；删除事实来源后，候选转为 `NEEDS_EVIDENCE` 并提出查询（C4）。
-- **建议随需求和工作流改变：**把 20 项特征合同改成 10 项后，可用候选随之交换（C3）；embedding 证据缺失时，沿两层前置依赖请求补证（C6）。
-- **按已知成本与可用预算判断：**成本缺失就保留未知（C5）；零预算阻止有正成本的检查（C7）。
-- **核对实际复现来源：**提供另一个 capsule ID 时，阻止所选来源的后续检查（C8）。
-
-在已测范围内，程序能执行并保留这些判断条件和推导过程，便于人和 AI 复核。真实科学结果仍需研究项目自己的实验与评价。
-
-## 我们的目标
-
-RDS 的主体是自动化辅助人类科研：调查证据、生成与筛选实验、安排执行、评估结果、复盘接续。研究者的目标与决定始终居于中心；Lean 兼容服务于这条流程中适合数学检查的子问题。
-
-帮助研究者选择值得付出完整成本的下一次实验，通过可检查的过程完成它，并在工作中断后依据证据继续推进。长期目标是形成能够通过经验证的反馈改进决策策略的研究循环，由研究者掌握目标、资源与解释权。
-
-每个实验提案都应回答三个问题：**它区分哪些竞争解释，怎样保证比较公平且预算可行，以及不同结果会改变什么决定？**
-
-## 给研究者和研究者的 AI
-
-1. 按下文安装 [Skill](SKILL.md)，在 AI 助手中打开你的科研项目。
-2. 说明研究问题、指标、当前基线和可投入预算，并指出代码、日志与已有结果。想法尚不明确也可以开始。
-3. 审阅推荐实验能区分什么、完整成本是多少；执行后继续追问证据支持哪些结论，以及下一步决定如何改变。
-
-可以将这段起始指令交给 AI：
+安装 Skill 后，打开科研项目，给 AI 这样的指令：
 
 ```text
-请用 Research Direction Selector（RDS）协助这个科研项目。
-先恢复已有证据和决策。
-明确我的目标、指标、基线与预算，复用有效对照和日志。
-推荐能区分竞争解释的下一步实验。
-说明预期观测、可证伪条件、完整成本及不同结果对应的决定。
-分别记录数学检查、真实执行和机制证据。
-不要默认追加 seed；只有已观察的不稳定性影响决定且追加预算获授权时才考虑。
+用 Research Direction Selector（RDS）推进这个项目。
+先查看代码、已完成实验和相关历史决定。
+我的目标是［科研问题／主要指标］，可用预算是［预算］。
+推荐一个能区分竞争解释的下一步实验。
+说明对照、预期观测、反证条件、完整成本和结果对应的下一决定。
+把已授权工作推进到执行、证据复盘和接续。
+分别记录执行成功、任务增益和机制证据。
+只有已观察到的 seed 不稳定性影响这次判断时，再考虑增加 seed。
 ```
 
-## 五个关键组件
+也可以直接从具体问题开始：
 
-| 组件 | 职责 |
-| --- | --- |
-| **① 科研规程 Skill** | 明确目标、组织假说、选择对照、解释证据的研究规程。 |
-| **② 执行与验收内核** | 管理运行、检查预算与证据、收集收据、调用支持的数学检查。 |
-| **③ 研究状态与记忆** | 通过 `.rds/`、Obelisk 与判断图保存目标、配置、结果及失败条件。 |
-| **④ Advisor 建议引擎** | 根据观测与有适用范围的规则给出诊断和候选行动，发展证据驱动的候选生成。 |
-| **⑤ RSI 自改进** | 提出并评测 RDS 自身的规则和策略修改，只保留有证据支持的改进。 |
+- “指标不再提升了，用现有日志区分训练问题和容量限制。”
+- “这两个消融同时改了好几件事，设计一个最小公平比较来区分解释。”
+- “继续这个项目，先检查剩余预算和已完成运行，再提出新工作。”
+- “用 RDS 开发 RDS：执行相关测试、读失败输出、评估下一次规则修改。”
 
-前三个支撑基础科研闭环，Advisor 与 RSI 提供增强。记忆为 Advisor 提供依据，内核检查选定行动；这是功能职责，可以共享本地实现。L1–L4 是自主程度分级，不另算组件。
+研究者决定方向、预算和科学结果的接受；AI 构造必要的工作记录，你可以继续用日常语言讨论项目。优先使用已有证据和有效对照。额外 seed 的理由应来自影响判断的已观测不稳定性。
 
-## L1–L4
+### 安装 Skill
 
-RDS 支持普通对话、单模型协作，五个组件支撑科研循环：明确目标 → 调查证据 → 选择并检查实验 → 执行 → 判断结果 → 积累接续。每轮应说清**知道什么、不知道什么、下一步做什么、为什么值得做**。
+可以把这段安装指令交给有本地终端访问能力的编码 Agent：
 
-RDS 直接采用 **Kramer 等（2026）的科学发现自动化框架**。该论文借鉴自动驾驶，原框架有 **L0–L5 六级**；这里重点介绍 L1–L4，不改编号或含义。[自主程度说明](docs/research-autonomy.md)列出原名、来源与解释边界。
-
-| 层级 | 原框架的范围 |
-| --- | --- |
-| **L1 · 机器辅助** | 科研某一方面得到计算机辅助。 |
-| **L2 · 部分自动化** | 一个重要科学发现环节完全自动化。 |
-| **L3 · 有条件自动化** | 限定领域内完整科学发现循环自动化。 |
-| **L4 · 高度自动化** | 跨多个科研领域完成发现闭环，并能有限自主设置目标。 |
-
-这些描述自主程度，不是科研质量评分、SAE 合规或安全认证。**当前 RDS 的参考计算与显式绑定候选搜索具有局部 L2 功能，同时仍提供面向人的科研规程。这只描述受限任务，不是通用科研等级认证；尚未证明完整 L3、L4 科研闭环或端到端 GPU 科研服务。** 参考运行器现有 L3 标识是历史工程命名，不表示达到外部框架等级。
-
-**近期产品目标是“全环节 L2”**：六个科研环节都有可用的自动化支持，研究者保留研究方向、关键判断与科学结果接受的决定权。这是覆盖目标，不重定义论文的 L2，也不表示已实现完整 L3 闭环。长期研究方向是原框架的 L4、L5，分别涉及多领域发现与有限自主设定目标，以及全面自主；不是交付时间或已实现承诺。各环节交付物与证据门槛见[路线图](docs/roadmap.md)。
-
-**RSI 是独立组件和评估轴。** 声称策略改善，需要在未使用的独立案例上按相同总预算前瞻比较完整研究轨迹，保留失败尝试与负结果；这不是 L4 的定义，当前也尚未建立该收益证据。
-
-## 已实现的功能
-
-| 能力 | 实现位置 | 对研究过程的作用 |
-| --- | --- | --- |
-| **选择能改变决策的实验** | 技能协议 | 比较因果上不同的路线，明确竞争解释、可区分的预测，以及正负结果各自对应的下一步。 |
-| **核对干预是否成立** | 协议与标量门禁 | 从实际执行的方程与代码检查所声称的变化；显式标量阈值命题可调用条件符号探针。 |
-| **分开记录不同证据** | 参考内核 | 独立记录任务收益、机制判断与运行状态，避免把“跑完了”或“分数提高了”直接解释成机制成立。 |
-| **约束预算与数据使用** | 参考内核 | 以 SQLite 事务预留参考运行预算，记录数据暴露，并将计划、代码、数据和验证器版本绑定到执行收据。 |
-| **复用已有结果** | 标量缓存与历史桥接 | 参考内核按对照 AST 与数据 SHA-256 缓存标量对照结果；研究接续按需检索已有 Obelisk 历史。 |
-| **将反馈转成修订线索** | Advisor 与判断规则 | Advisor 提供门禁错误提示、损失与日志诊断；带适用范围的判断规则帮助审阅下一轮提案。 |
-
-## 形式化验证与规则义务
-
-架构将显式命题、后端搜索、独立检查与科学评估分开。`main` 已包含标量 AST/SymPy 路径，以及 [PR #2](https://github.com/kongtou20070406/research-direction-selector/pull/2) 的声明式注册表、可独立复核的数学证书及窄范围原生 Lean4 接口。Python 适配器报告证书检查；原生 Lean 检查限于支持的闭合有理数义务，并需要配置可执行文件。旧实验性 `LeanFormalEngine`／Tactic 分派器是另一条原型路径：`RULE_ALIGNED` 检查元数据，tactic 成功标识不能证明声明目标。详见[验证范围](docs/formal-verification.zh-CN.md)与[适配器耗时原始测量](benchmark/results/formal-windows-python313.json)。
-
-23 个有范围的判断节点现已分别记录**前置门禁、可证伪判据与可行域表达式**。下表映射的是义务，并不声称已经证明 23 条因果定理。完整变量、证据与候选 tactic 映射见[规则义务指南](docs/rule-obligations.zh-CN.md)；当前分派器尚未强制检查新增元数据。
-
-<details>
-<summary>展开全部 23 个规则义务</summary>
-
-| 规则 ID | 前置条件与可行域义务 | 证伪判据 |
-| --- | --- | --- |
-| [locked-test-selection](docs/rule-obligations.zh-CN.md#locked-test-selection) | 冻结选择与干净确认数据; `clean(T) and selection_data intersect T = empty` | 确认数据被复用或收益证据不足 |
-| [deployment-information](docs/rule-obligations.zh-CN.md#deployment-information) | 核对部署输入来源; `inputs(model) subseteq I_deploy` | 需要目标专属输入 |
-| [preserve-quantifiers](docs/rule-obligations.zh-CN.md#preserve-quantifiers) | 明确量词与策略类; `fixed-action failure does_not_imply all-policy failure` | 错误扩大否定范围 |
-| [computation-graph-identity](docs/rule-obligations.zh-CN.md#computation-graph-identity) | 绑定张量图与检查点; `pool(z1)=pool(z2) => h(pool(z1))=h(pool(z2))` | 声称的信息身份被抹去 |
-| [proxy-primary-bridge](docs/rule-obligations.zh-CN.md#proxy-primary-bridge) | 匹配路线干预; `Delta_task and Delta_route are separate` | 删除路线后收益仍在 |
-| [short-budget-fidelity](docs/rule-obligations.zh-CN.md#short-budget-fidelity) | 匹配短跑与完整终点协议; `early_rank versus full_rank on measured candidates` | 排序反转 |
-| [method-recipe-variance](docs/rule-obligations.zh-CN.md#method-recipe-variance) | 优先已有记录与同 seed 匹配对照；仅已观察到影响决策的不稳定时追加 seed; `Delta_i=s*(M_T(seed_i)-M_C(seed_i))` | 收益由配方或实现解释 |
-| [realized-boundary-not-knob](docs/rule-obligations.zh-CN.md#realized-boundary-not-knob) | 有限 S>=0、rho>=0 与精确模型方程; `m=rho*S/(1+S); rho>1: m>=1 iff S>=1/(rho-1)` | 没有实际跨越或源码方程不同 |
-| [depth-versus-trajectory](docs/rule-obligations.zh-CN.md#depth-versus-trajectory) | 同一检查点与同一批样本; `M_k=M(F_theta_star^k(X),Y)` | 用不同检查点代替轨迹 |
-| [reuse-baseline-control](docs/rule-obligations.zh-CN.md#reuse-baseline-control) | 成功收据与完整对照身份; `H(AST_new)=H(AST_receipt); H(data_new)=H(data_receipt)` | 影响结果的绑定发生变化 |
-| [trained-anchor-not-method-win](docs/rule-obligations.zh-CN.md#trained-anchor-not-method-win) | 实测锚点与匹配对照; `feasible(anchor) does_not_imply Delta>delta_min` | 只有锚点完成 |
-| [resource-canary-before-campaign](docs/rule-obligations.zh-CN.md#resource-canary-before-campaign) | 实测运行配置与开销; `memory_peak<=limit; makespan+overhead<=B_remaining` | 探针推翻可行性估计 |
-| [bundled-change-needs-component-control](docs/rule-obligations.zh-CN.md#bundled-change-needs-component-control) | 分量干预清单; `changed_factors={target_component}` | 多个有效分量同时变化 |
-| [ablation-is-intervention-specific](docs/rule-obligations.zh-CN.md#ablation-is-intervention-specific) | 准确的执行消融清单; `manifest_executed=manifest_declared` | 实际干预不同或结论扩大 |
-| [transfer-requires-matched-protocol](docs/rule-obligations.zh-CN.md#transfer-requires-matched-protocol) | 匹配目标任务比较; `Delta_target=s*(M_target(T)-M_target(C))` | 匹配后的目标任务收益消失 |
-| [protocol-versioned-evidence](docs/rule-obligations.zh-CN.md#protocol-versioned-evidence) | 产物与协议来源; `signatures match except the declared intervention` | 历史结果无法匹配比较 |
-| [normalization-removal-confound](docs/rule-obligations.zh-CN.md#normalization-removal-confound) | 保留归一化并匹配初始算子; `rho*raw/(1+S) versus raw changes the equation` | 幅度或优化仍与边界混杂 |
-| [executed-manipulation-validity](docs/rule-obligations.zh-CN.md#executed-manipulation-validity) | 源码可行域与实际性质观测; `exists x in D with the declared manipulation` | 实际干预未成立 |
-| [learned-support-not-allowed-support](docs/rule-obligations.zh-CN.md#learned-support-not-allowed-support) | 拟合算子与匹配的学习/固定对照; `realized_support differs from allowed_support` | 拟合算子始终未跨界 |
-| [hard-budget-reallocation](docs/rule-obligations.zh-CN.md#hard-budget-reallocation) | 核算已花费与预留并保护确认底线; `spent+reserved+new+overhead<=total` | 替代方案超过授权上限 |
-| [adaptive-test-reuse](docs/rule-obligations.zh-CN.md#adaptive-test-reuse) | 记录暴露来源并冻结选择; `used_for_choice(T) => exploratory(T)` | 暴露数据被称为独立 |
-| [implementation-equivalence-before-speedup](docs/rule-obligations.zh-CN.md#implementation-equivalence-before-speedup) | 声明输入、范数与容差; `forward_error<=eps_f; gradient_error<=eps_g` | 输出或梯度差异超出容差 |
-| [source-aware-evaluator-check](docs/rule-obligations.zh-CN.md#source-aware-evaluator-check) | 不看密封后验结果的源码审计; `judge_score does_not_imply source_feasibility` | 声称的区分无法实现 |
-
-</details>
-
-[文档导航](docs/README.zh-CN.md)包含采用的自主分级与实验流、双语术语和贡献说明。[Lean4/mathlib 兼容](docs/lean-integration.zh-CN.md)服务于 RDS 自动化辅助人类科研循环中的合适数学子问题。原生适配器在闭合有理数义务上复用 Lean 内核；通用 mathlib 模型翻译仍待实现。C++ 仅用于测量后确认的适配性能瓶颈。
-
-## 工作流程
-
-```mermaid
-flowchart LR
-    A[目标与预算] --> B[竞争解释与实验设计]
-    H[相关历史证据] -. 按需检索 .-> B
-    B --> C[程序门禁]
-    C --> D[参考内核执行]
-    D --> E[收据与证据判定]
-    E --> F[继续、修订或停止]
-    F --> B
-    C -. 拒绝原因 .-> B
+```text
+从 https://github.com/kongtou20070406/research-direction-selector
+安装 tag v5.6.0-rc.1，作为 research-direction-selector Agent Skill。
+保留完整仓库，包括 scripts、references 和 examples。
+放在当前项目的 .agents/skills 目录，验证 CLI 版本。
+然后阅读 SKILL.md，从我的实际科研问题开始协作。
 ```
 
-技能层将开放的研究问题落实为比较协议；参考内核将明确的计划落实为可检查的执行记录。门禁通过代表满足对应程序约束，科学结论仍需匹配问题的证据与解释。
-
-## 快速上手
-
-### 1. 在 Codex 中使用
-
-将完整仓库放入名为 `research-direction-selector` 的技能目录，保留脚本与参考资料。以下 PowerShell 命令安装到个人技能目录：
+Windows 个人安装可以手动执行：
 
 ```powershell
 New-Item -ItemType Directory -Path "$env:USERPROFILE/.agents/skills" -Force | Out-Null
-git clone --branch v5.5.0-rc.2 https://github.com/kongtou20070406/research-direction-selector.git "$env:USERPROFILE/.agents/skills/research-direction-selector"
+git clone --branch v5.6.0-rc.1 https://github.com/kongtou20070406/research-direction-selector.git "$env:USERPROFILE/.agents/skills/research-direction-selector"
 ```
 
-也可以将仓库放到研究项目的 `.agents/skills/research-direction-selector/`。技能目录与调用方式见 [OpenAI 官方技能文档](https://learn.chatgpt.com/docs/build-skills)。
+项目内安装路径为 `.agents/skills/research-direction-selector/`。保留仓库文件的相对位置，Skill 会使用脚本和参考资料。发现和调用方式取决于 Agent 宿主，其他助手也可以直接阅读 [SKILL.md](SKILL.md)。
 
-随后直接描述问题，例如：
+## 本地上手
 
-> 用 RDS 帮我选择下一步。目标是在相同训练预算下超过当前基线，剩余资源有限。先看已完成实验和代码，推荐一个能决定后续路线的比较，并说明什么结果会让我们停止或换方向。
-
-RDS 从当前文件和对话中整理目标与约束，给出一个推荐方向和至多一个重要备选。需要的实验表单由模型内部构造，研究者可以持续用普通语言调整目标、优先级和预算。
-
-### 2. 运行本地参考示例
-
-需要 **Python 3.11+**。普通标量执行仅依赖 Python 标准库，无需 GPU；实时历史检索另需已安装的 Obelisk。
+需要 **Python 3.11+**。CPU 项目示例和普通标量运行器只用标准库，无需 GPU。历史检索需要另行安装 Obelisk；适用的符号检查有[可选依赖](requirements-formal.txt)。
 
 ```powershell
-git clone --branch v5.5.0-rc.2 https://github.com/kongtou20070406/research-direction-selector.git
+git clone --branch v5.6.0-rc.1 https://github.com/kongtou20070406/research-direction-selector.git
 Set-Location research-direction-selector
 python -B scripts/rds_cli.py --version
+python -B scripts/rds_cli.py --help
 ```
 
-在仓库根目录运行以下示例。每次复制到新的临时目录，让契约与运行状态彼此独立：
+以下命令在 RDS 仓库目录执行。`--root` 放在子命令之前，用于选择科研工作区。
+
+### 在新工作区跑真实 CPU 示例
+
+示例在六行记录数据上拟合常数对照和线性处理。`prepare.py` 在新目录生成代码、数据、评价器、协议和绑定实际文件的运行清单。
 
 ```powershell
-$RdsDemo = Join-Path ([System.IO.Path]::GetTempPath()) ("rds-demo-" + [guid]::NewGuid().ToString("N"))
-New-Item -ItemType Directory -Path $RdsDemo | Out-Null
-Copy-Item -Path 'examples/reference-run/*.json', 'examples/reference-run/*.csv', 'examples/reference-run/*.py' -Destination $RdsDemo
-
-python -B scripts/rds_cli.py --root $RdsDemo init --contract "$RdsDemo/contract.json"
-python -B scripts/rds_cli.py --root $RdsDemo hypothesis add --spec "$RdsDemo/hypothesis.json"
-python -B scripts/rds_cli.py --root $RdsDemo gate check --plan "$RdsDemo/plan.json"
-python -B scripts/rds_cli.py --root $RdsDemo plan create --spec "$RdsDemo/plan.json"
-$RdsRun = python -B scripts/rds_cli.py --root $RdsDemo run execute --id P1 | ConvertFrom-Json
-python -B scripts/rds_cli.py --root $RdsDemo decide --run $RdsRun.run_id
-python -B scripts/rds_cli.py --root $RdsDemo status
+$RdsDemo = Join-Path ([System.IO.Path]::GetTempPath()) ("rds-project-" + [guid]::NewGuid().ToString("N"))
+python -B examples/project-runner/prepare.py --root $RdsDemo
+python -B scripts/rds_cli.py --root $RdsDemo project init --contract "$RdsDemo/contract.json"
+python -B scripts/rds_cli.py --root $RdsDemo project create --manifest "$RdsDemo/control.json"
+python -B scripts/rds_cli.py --root $RdsDemo project execute --id control
+python -B scripts/rds_cli.py --root $RdsDemo project create --manifest "$RdsDemo/treatment.json"
+python -B scripts/rds_cli.py --root $RdsDemo project execute --id treatment
+python -B scripts/rds_cli.py --root $RdsDemo project costs
+python -B scripts/rds_cli.py --root $RdsDemo project status
 ```
 
-示例比较 `control(x) = x` 与 `treatment(x) = 2*x` 在开发数据上的配对 MSE。各步预期结果如下：
+成功收据的 `run_status` 为 `SUCCEEDED`，保留原始 stdout、stderr、指标和产物身份。`task_gain` 和 `mechanism` 仍为 `UNKNOWN`：这里是实测演示输出，科学接受需要单独评价。wall time 为实测；未测的 CPU／GPU／API 资源保持未知，预估收费单独记账。
 
-| 命令 | 输出字段 | 预期值 |
+契约约束精确 argv、输入、输出路径、资源预留和超时。非零退出、产物缺失、评价器或协议变化均不能成功收尾。恢复只对账已有尝试，不重复启动。获准的项目代码是受信任代码，运行器不提供操作系统安全沙箱。
+
+Windows 上，已授权且需要跨对话持续的命令可使用 `project execute --id <id> --background`，注册唯一的 RDS Task Scheduler 任务，以隐藏 worker 执行并记录 TaskID。需要本机注册和启动任务的权限；实际验收在普通权限失败后，通过提权注册成功。其他平台目前支持前台执行。见[项目示例](examples/project-runner/)和[执行指南](docs/development-loop.md#execute-a-locked-project-command--m04)。
+
+原有受限标量示例保留在 [examples/reference-run/](examples/reference-run/)，[流程指南](docs/research-workflow.zh-CN.md)说明预期输出和证据字段。
+
+## 五个组件
+
+五组件是同一科研流程中的软件职责：
+
+| 组件 | 作用 | 入口 |
 | --- | --- | --- |
-| `run execute` | `run_status` | `SUCCEEDED` |
-| `decide` | `assessment.task_gain` | `EXPLORATORY` |
-| `decide` | `assessment.mechanism` | `UNTESTED` |
+| **1 · Skill** | 与研究者澄清目标、提出竞争假设、选择公平比较、解释证据。 | [与 AI 一起使用](#与-ai-一起使用) |
+| **2 · 执行与验收内核** | 检查执行约束、预留资源、执行受支持命令、收集可检查的收据。 | [本地上手](#本地上手) |
+| **3 · 科研状态与记忆** | 保存目标、协议、结果、预算和失败；通过 Obelisk 检索相关原始历史。 | [接续科研](#接续科研) |
+| **4 · Advisor** | 从观测和有适用范围的规则生成诊断、证据请求和有限实验候选。 | [Advisor](#advisor) |
+| **5 · RSI** | 提议、回放、采用和回退 RDS 自身规则与策略的修改。 | [用 RDS 开发 RDS](#用-rds-开发-rds) |
 
-这说明参考执行成功并产生了探索性收益证据。`init` 保留已有状态；更换契约时使用新的 `--root`。所有项目命令的 `--root` 都放在子命令之前。
+前三个支撑基本科研过程，Advisor 和 RSI 增强它。操作账本保留科研状态，Obelisk 检索对话历史；这些职责可以共享实现。[组件说明](docs/rds-purpose.md)给出各自边界。
 
-### 3. 启用条件符号验证
-
-显式声明代数阈值或收缩边界时，安装可选依赖：
-
-```powershell
-python -m pip install -r requirements-formal.txt
+```mermaid
+flowchart LR
+    A[目标与预算] --> B[调查证据]
+    B --> C[选择并检查实验]
+    C --> D[执行与记录]
+    D --> E[评价证据]
+    E --> F[继续、修改或停止]
+    F --> B
+    H[相关原始历史] -.-> B
 ```
 
-普通实验使用轻量 AST 检查与精确有理数计算。符号适配器当前支持有界实域上的标量阈值检查；缺少依赖或不支持的命题返回 `UNKNOWN` 并阻止准入。完整声明方式见 [执行契约](references/l3-state-machine.md)。
+## Advisor
 
-## Advisor：从程序反馈到下一步建议
+Advisor 读取观测并说明尚不确定的内容。它检索有适用范围的规则，组合有限实验模板，保留对照、竞争解释、观测、停止条件和随结果变化的决策。证据缺口形成请求，未知成本保持未知。候选的 assurance 为 `HEURISTIC_ONLY`，需要在实际科研场景中审阅。
 
-Advisor 给出观测、竞争解释、最小判别办法、限制和来源。单点 train/validation loss 返回 `INSUFFICIENT_EVIDENCE`；可用 `--fit-telemetry` 输入同口径配对曲线。数值异常先定位原始故障，再考虑改参数。文档摘录保存到独立 WAL 库，保持 `UNREVIEWED` 身份。
-
-有界搜索原型计算三值条件，沿 `prerequisite_for` 判断依赖组合取证与检查候选，并保存推导链。目前五条规则有可执行绑定，其余规则仍供审查。只有带来源、可比的实测成本参与 Pareto 比较；未知成本保留未知，输入来源保持 `INPUT_REPORTED`。程序不执行训练，图路径也不构成机制因果证明。
+先试仓库内的有限模板示例：
 
 ```powershell
-python -B scripts/rds_cli.py --root $RdsDemo advise
-python -B scripts/rds_cli.py --root $RdsDemo advise --train-loss 0.9 --val-loss 1.0 --baseline-loss 1.0
-python -B scripts/rds_cli.py --root $RdsDemo advise --research-context examples/advisor-search/boundary-context.json
-python -B scripts/rds_cli.py --root . advise --literature "lr"
-python -B scripts/rds_dashboard.py --root $RdsDemo --output dist/dashboard.html
+python -B scripts/rds_cli.py advise --research-context examples/experiment-templates/context.json --templates examples/experiment-templates/templates.json
 ```
 
-边界示例明确标为合成；工作台导出只读离线 HTML 快照。参见[判断图设计](docs/advisor-graph-design.md)、[文献依据](docs/advisor-evidence.md)、[工作台用法](docs/dashboard.md)和[公开任务组件挑战](docs/advisor-benchmark.md)。科研建议质量提升尚未测量。先复用已有证据与匹配对照；只有已观测 seed 不稳定性可能改变决定时，才考虑追加 seed。
+使用自己的记录时，提供指向原始配置、指标、日志和收据的产物清单：
 
-## 历史接续：复用 Obelisk
+```text
+python -B scripts/rds_cli.py --root <project> artifacts import --manifest <manifest.json>
+python -B scripts/rds_cli.py --root <project> advise --artifacts <manifest.json> --templates <templates.json>
+```
 
-当旧决定、已否路线或实验设置可能改变下一步，而当前上下文缺失时，RDS 通过已安装的 Obelisk 公共 CLI 检索相关历史。它保留来源身份与分页信息，当前文件和当前指令优先。
+导入保留字段位置、运行和协议绑定、缺失项与冲突。`DECLARED`、`OBSERVED`、`DERIVED`、`UNKNOWN` 描述事实如何进入报告；从日志读取数值不能证明机制。单个 train/validation loss 对不足以诊断拟合状况。导入的文档摘录在 Advisor 独立 WAL 存储中保持 `UNREVIEWED`。
+
+参考账本可以导出离线 HTML 快照：
 
 ```powershell
-python -B scripts/rds_cli.py history prepare --project-path 'C:\research\my-project' --terms 'baseline' --output 'C:\queries\obq-baseline-unique-token.mjs'
-python -B scripts/rds_cli.py history query --query 'C:\queries\obq-baseline-unique-token.mjs'
+python -B scripts/rds_dashboard.py --root <reference-project> --output dist/dashboard.html
 ```
 
-将占位路径替换为真实绝对路径，并为每次检索使用新的查询文件名。桥接在同一查询中按精确 `project_path` 定位会话并取证；历史结果不产生新授权，也不会自动写入记忆。更多规则见 [Obelisk bridge](references/obelisk.md)。
+见[记录导入与组合](docs/development-loop.md)、[Advisor 设计](docs/advisor-graph-design.md)、[证据](docs/advisor-evidence.md)和[仪表板范围](docs/dashboard.md)。
 
-## 回归场景与验证
+## 接续科研
 
-五类回归场景覆盖常见的科研决策问题：
-
-| 案例 | 重点问题 |
-| --- | --- |
-| 公平基线 | 有限预算下，如何建立可行且公平的比较锚点？ |
-| 混杂因素隔离 | 如何一次改变一个因素，并将开发集小样本收益保持为探索证据？ |
-| 任务转向 | 如何执行明确的任务变化，并重新核对参考配方与比较成本？ |
-| 干预有效性 | 如何核验实际执行的干预确实改变了待检验属性？ |
-| 预算与确认数据 | 如何取消或延期分配，并计入评估成本与测试集复用？ |
-
-安装可选依赖后，在仓库根目录运行：
+在现有操作账本中保存决策边界，继续时与实时状态比较：
 
 ```powershell
-python -B -m unittest discover -s tests -v
-python -B benchmark/run.py
-python -B benchmark/redteam/runner.py
+python -B scripts/rds_cli.py --root $RdsDemo checkpoint save --id after-fit
+python -B scripts/rds_cli.py --root $RdsDemo checkpoint restore --id after-fit
+python -B scripts/rds_cli.py --root $RdsDemo project recover --id treatment
 ```
 
-单元测试核验内核行为；历史回放检查决策包完整性与相关门禁；red-team runner 检查预制协议攻击场景。[GitHub Actions](https://github.com/kongtou20070406/research-direction-selector/actions) 在 Windows / Ubuntu、Python 3.11 / 3.13 上运行单元测试与历史回放。
+保存时可用 `--decision <decision.json>` 记录科研问题和待补证据。恢复返回当前预算、数据曝光和运行，报告后续更新或冲突，并检查当前输入绑定；不覆盖账本、不重复已完成工作。普通状态查询不重新 hash 整个项目。
 
-历史训练分数属于会话报告，自动回放使用合成标量输入。这些案例已参与技能开发，通过回归检查不能证明自主科研质量，也不能替代真实 GPU 实验或独立前瞻评估。评测方法与信息隔离约定见 [benchmark/README.md](benchmark/README.md)。
+相关历史决定或被否方案不在当前上下文时，已安装的 [Obelisk](https://github.com/tommy0103/obelisk) CLI 可在精确项目范围检索原始历史：
 
-## 本预发布版的能力与边界
+```text
+python -B scripts/rds_cli.py history prepare --project-path <absolute-project-path> --terms baseline --output <unique-absolute-query.mjs>
+python -B scripts/rds_cli.py history query --query <unique-absolute-query.mjs>
+```
 
-| 部分 | 当前范围 |
-| --- | --- |
-| 科研协作技能 | 目标契约、竞争解释、公平比较、预算与人类干预协议。 |
-| 参考运行内核 | 受限 `control(x)` / `treatment(x)` 有理表达式、配对 MSE、预算账本、数据暴露记录与执行收据；单次分配最多 60 秒。 |
-| 标量对照缓存 | 同一项目内按对照 AST 与数据字节哈希复用结果；真实随机训练的种子、checkpoint 与训练配方复用需项目自行实现。 |
-| 数学适配器 | 有界标量、已支持仿射动力学、Linear/ReLU 盒区间与具体张量；原生 Lean 检查闭合有理数义务。一般 ODE 与任意网络仍未支持。 |
-| 规则与分支工具 | 带范围和证伪条件的规则审阅、校验与应用，以及显式分叉；对抗筛查与自动修复仍属实验性模块。 |
+使用真实绝对路径，每次请求选择新的查询文件名。检索保留来源身份和分页，以当前文件和指令为准，不产生新授权，也不自动写入记忆。见[实时状态接续](docs/development-loop.md#resume-the-live-research-decision--m06)和 [Obelisk bridge](references/obelisk.md)。
 
-预算账本记录分配的 worker runtime，设置、验证与控制开销需另计。真实长时训练使用项目训练器与宿主调度器。哈希和事务用于审计及一致性检查；拥有本地写权限的人仍可修改程序与产物，因此参考内核不提供 OS 安全沙箱或不可篡改保证。
+## 用 RDS 开发 RDS
 
-<details>
-<summary>实验性模块的工程限制</summary>
+RDS 开发使用自身工具执行真实测试、导入原始输出、查看 Advisor 建议，并评估规则修改。在新的空工作区复现隔离开发循环：
 
-- `auto-repair` 读取 SQLite 一致快照并提出启发式规则；提案数量不证明科研决策提高。
-- alignment 筛查采用关键词启发式，其计数不能解释为独立实测的科研建议准确率。
-- 规则文件应用使用普通文件写入，并无事务锁或原子替换。
+```text
+python -B examples/self-development/run.py --workspace <new-empty-workspace>
+```
 
-</details>
+示例保存 CLI 输出、原始测试日志、成本、进程收据和 checkpoint；还在声明的开发／留出案例上回放隔离规则修改，采用合格结果，再演练回退。原仓库判断图保留。提案、回放和采用分别进行，`--force` 不能跳过证据。
 
-## 文档导航
+这是 RSI 组件的首个人主导的软件反馈循环。有限规则案例通过，只说明所检查的软件行为成立。科研策略改进需要在未使用的独立案例上，按相同完整预算前瞻比较整个研究轨迹，包括失败工作和负结果。这种科学改进仍未测量。见[开发循环](docs/development-loop.md)和 [RSI 证据边界](references/rsi-evidence.md)。
 
-| 入口 | 内容 |
-| --- | --- |
-| [中英文文档导航](docs/README.zh-CN.md) | 科研工作流、形式化验证、23 节点义务与统一术语。 |
-| [调参原则与义务](references/scientific_tuning_principles.json) | 有范围的诊断假说、形式子命题与实证检查。 |
-| [SKILL.md](SKILL.md) | 科研协作、方向选择与证据解释协议。 |
-| [执行契约](references/l3-state-machine.md) | CLI 命令、状态、数据使用、形式声明和信任边界。 |
-| [判断规则库](references/judgment-graph.yaml) | 带适用范围、竞争解释与证伪条件的决策规则。 |
-| [RSI 证据说明](references/rsi-evidence.md) | 研究过程修订所依据的证据与范围。 |
-| [Obelisk bridge](references/obelisk.md) | 有界历史检索与原始证据读取。 |
-| [参考示例](examples/reference-run/) | 可执行的契约、假说、计划与标量数据。 |
-| [历史评测协议](benchmark/README.md) | 决策包、回归检查与前瞻响应评估方法。 |
-| [内核测试](tests/test_rds_l3.py) | 执行、预算、数据暴露、形式路由与收据回归。 |
+## 已验证行为
 
-## 未来计划与验收依据
+**2026-09-30** 本轮完整测试与第二次真实执行器开发循环结果：
 
-以下是优先顺序，不代表已经完成，也不承诺发布日期。
-
-| 优先项 | 下一里程碑 | 所需证据 |
+| 检查 | 实际记录 | 证据范围 |
 | --- | --- | --- |
-| **Advisor** | 沿观测、判断依赖与有适用范围的规则生成区分性候选，再按总成本筛选。 | 可公开且有来源的案例、竞争解释及决策后果，比较建议质量与成本。 |
-| **真实训练观测** | 将支持的训练器配置和日志绑定到干预检查与收据。 | 可复现运行证明预定干预实际发生，明确不支持情况。 |
-| **规则回归与 RSI** | 评测规则／策略修改并保留负结果。 | 独立保留案例与等总预算的前瞻研究轨迹比较；历史回放本身不足。 |
-| **Lean 协作** | 将审阅中的窄范围原生接口扩展到合适的 mathlib 模型义务。 | 期望定理绑定、公理审计、独立复核，以及单独验证的模型对应关系。 |
+| [完整回归测试](tests/) | **269 通过，4 跳过，共 273 项**，45.880 秒 | 组件与集成行为；2 项原生 Lean 检查未配置，2 项 PyTorch 检查缺少依赖。 |
+| [RDS 执行自身开发测试](examples/self-development/run.py) | **65/65 通过**，无跳过 | 真实项目收据 `SUCCEEDED`，原始记录导入为 `IMPORTED`，Advisor 查看下一改动。 |
+| 有限 RSI 开发示例 | **基线 1/4 → 候选 4/4**；声明留出案例 **2 改善、0 回归** | 隔离图 `APPLIED` 后 `ROLLED_BACK`；案例分区由作者声明，不是独立科研策略评分。 |
 
-## 参与贡献
+第一轮 49 案例选择发现了 2 个失败；修正 fixture 和错误断言后，更新后的 65 案例运行通过。这记录了实际开发反馈循环，不代表科研质量增益。
 
-第一次参与可以从修正文档、改进翻译或增加最小可复现示例开始。完整的 **Fork → 分支 → 验证 → PR** 流程与检查命令见[中文贡献指南](CONTRIBUTING.zh-CN.md)。
+本轮还重新执行了以下回归与组件检查：
 
-| 你想贡献什么 | 建议从哪里开始 |
+| 检查 | 记录结果 | 检查内容 |
+| --- | --- | --- |
+| [历史回放](benchmark/README.md) | **6/6 通过** | 决策包与相应 gate，执行输入为合成标量。 |
+| [合成对抗场景](benchmark/redteam/) | **4/4 通过** | 四个预设协议攻击。 |
+| [公开任务改编组件挑战](docs/advisor-benchmark.md) | **8/8 案例，28/28 检查通过** | 改编元数据 fixture 中的契约、证据缺口、依赖、成本、预算和来源身份。 |
+
+组件挑战使用 ScienceAgentBench 和 CORE-Bench 元数据与人工改编规则，记录的 **98.8786 ms** 是八个本地 fixture 的处理和结果组装耗时。[原始输入](benchmark/advisor-public/source-facts.json)和[逐项结果](benchmark/advisor-public/results.json)可查，没有执行相应科学任务。这些检查展示具体行为：证据缺失时发起请求、需求变化时改变候选资格、未知成本不按零处理。
+
+端到端科学任务分数、科研质量收益、独立 RSI 轨迹收益仍然**未测量**。跨 Skill 比较暂缓，[benchmark 说明](docs/benchmark-plan.md)保留候选任务，没有安排比较实验。
+
+## 范围与自主程度目标
+
+近期产品目标是**六个科研环节都有 L2 自动化支持**：澄清目标 → 调查证据 → 选择实验 → 执行 → 评价 → 复盘接续。每个环节提供实用自动化，研究者保留研究方向、关键判断和科学结果接受。这是覆盖目标。
+
+RDS 采用 Kramer 等在 2026 年正式发表的科研发现自动化框架，保留原始 **L0–L5** 编号。L1 辅助科研某一方面；L2 完全自动化一个重要发现环节；L3 自动化限定领域内的完整发现循环；L4 跨多个领域进行发现并有限自主设置目标。长期研究方向是原框架的 **L4、L5**，不是交付日期承诺。见[来源与解释边界](docs/research-autonomy.md)及[路线图](docs/roadmap.md)。
+
+当前 RDS 的参考计算和绑定候选搜索具有**局部 L2 功能**，同时提供面向人的协作规程。完整科研 L3／L4 闭环、端到端 GPU 科研服务尚未证明。已有 `L3` 运行器标识是历史工程名称。自主程度、科学质量、安全认证与 RSI 策略改进是不同维度。
+
+项目运行器已有真实 CPU 验收证据。GPU 科研项目仍需自身训练器、观测工具和科学评价器。成本保留资源单位，wall time 不充当 CPU time；对照复用检查支持的完整协议和产物身份。`run_status`、`task_gain`、`mechanism` 分开记录。
+
+### 数学子问题
+
+Lean4/mathlib 协作适用于科研流程中的数学问题。RDS 复用 Lean 内核验证受支持的闭合有理数义务，并为有限标量、仿射、box 网络和具体张量检查提供独立校验证书。数学成立与实际科学模型对应各自需要证据。通用 mathlib 转换、任意网络和一般 ODE 仍在实现范围之外。
+
+[验证指南](docs/formal-verification.md)、[Lean 接口指南](docs/lean-integration.md)和 [23 个规则义务定义](docs/rule-obligations.md)保留详细类型、假设及 `UNKNOWN` 行为。
+
+## 文档
+
+| 指南 | 内容 |
 | --- | --- |
-| 文档与翻译 | 同步三版 README 的命令、能力与边界，检查链接和渲染。 |
-| 因果判断规则 | 提供原始来源、适用范围、竞争解释、区分性实验和证伪条件。 |
-| 内核与验证器 | 提交最小复现与相关回归；明确支持的类型、定义域和 `UNKNOWN` 行为。 |
-| 新研究案例 | 提供可公开的当时信息、决策问题和评估协议，将后续结果与提案输入分开。 |
+| [文档索引](docs/README.zh-CN.md) | 英中导航与实现范围。 |
+| [SKILL.md](SKILL.md) | 科研协作与方向选择。 |
+| [开发循环](docs/development-loop.md) | 原始记录、有限组合、成本、项目执行、RSI 和接续。 |
+| [科研流程](docs/research-workflow.zh-CN.md) | 证据轴与受限参考示例。 |
+| [五组件](docs/rds-purpose.md) · [自主程度](docs/research-autonomy.md) · [路线图](docs/roadmap.md) | 职责、采用的等级与验收条件。 |
+| [参考执行契约](references/l3-state-machine.md) | 原有标量 CLI 状态与数据使用约束。 |
+| [Advisor 设计](docs/advisor-graph-design.md) · [判断图](references/judgment-graph.yaml) | 有范围的规则、依赖和候选行为。 |
+| [Benchmark 协议](benchmark/README.md) | 历史案例、信息隔离和评价边界。 |
 
-通过 [报告问题](https://github.com/kongtou20070406/research-direction-selector/issues/new/choose) 或 [提交 PR](https://github.com/kongtou20070406/research-direction-selector/compare) 参与。改变目标、证据语义或主要执行接口前，建议先开 issue 对齐设计。保留负结果与证据限制，避免提交 `.rds/` 运行状态、凭据、私人会话或无法公开的数据。
+## 贡献
 
-## 相关生态与设计参考
+欢迎文档、翻译、有适用范围的科研规则和最小复现。阅读 [CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md)，按 **fork → 分支 → 检查 → PR** 参与。规则应提供来源、适用范围、竞争解释、判别实验和反证条件。保留负结果和证据边界。
 
-- [Obelisk](https://github.com/tommy0103/obelisk) 提供已有会话与原始证据的历史检索；RDS 复用它的公共 CLI。
-- [Academic Research Skills](https://github.com/Imbad0202/academic-research-skills) 覆盖研究到写作、审稿与修订流程。本仓库参考它的多语导航与贡献结构；两者可分别服务实验决策和论文工作，当前没有自动交接适配器。
+可以[报告问题](https://github.com/kongtou20070406/research-direction-selector/issues/new/choose)或[提交 PR](https://github.com/kongtou20070406/research-direction-selector/compare)。请勿提交私有对话、凭据、未公开数据及 `.rds/` 操作状态。
 
-品牌图与本仓库文案为 RDS 原创；上述链接说明依赖与设计参考，不代表这些项目为 RDS 背书。
+## 相关项目
 
-## 检索关键词
+- [Obelisk](https://github.com/tommy0103/obelisk) 提供 RDS 复用的公开历史 CLI。其直接用途说明、Agent／人入口和上手组织方式是本 README 的结构参考。
+- [Academic Research Skills](https://github.com/Imbad0202/academic-research-skills) 涵盖研究到写作、审稿和修改；其语言导航和贡献结构影响了先前文档。当前没有自动交接适配器。
 
-科研方向选择 · 人机科研协作 · 实验设计 · 假说检验 · 因果推断 · 可复现研究 · Advisor · 证明义务 · Lean4 兼容 · Agent Skills · Codex · CLI · Obelisk。英文检索词：research direction selection、AI-assisted research、experiment design、hypothesis testing、causal inference、proof obligations、Lean4 interoperability、reproducible research。
+RDS 文字与品牌素材为原创。这些链接说明依赖和设计参考，不表示相关项目为 RDS 背书。

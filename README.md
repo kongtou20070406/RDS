@@ -1,367 +1,266 @@
 <div align="center">
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/rds-hero-dark.svg">
-  <img src=".github/assets/rds-hero-light.svg" alt="Research Direction Selector" width="100%">
-</picture>
+<img src=".github/assets/rds-hero-dark.svg" alt="Research Direction Selector" width="100%">
 
 # Research Direction Selector
 
 **Research assistance for people and their AI**
 
-Give every experiment a clear question, a fair control, and a result that changes the next decision.
+Turn a research question, existing evidence and a limited budget into a useful next experiment — then keep the result available for the next decision.
 
 [![Checks](https://github.com/kongtou20070406/research-direction-selector/actions/workflows/test.yml/badge.svg)](https://github.com/kongtou20070406/research-direction-selector/actions/workflows/test.yml)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white&style=flat-square)
-![Agent Skill](https://img.shields.io/badge/Codex-Agent_Skill-111827?style=flat-square)
-[![Contribute](https://img.shields.io/badge/Contributions-Welcome-0F766E?style=flat-square)](CONTRIBUTING.md)
+[![Version](https://img.shields.io/badge/version-5.6.0--rc.1-0F766E?style=flat-square)](https://github.com/kongtou20070406/research-direction-selector/releases)
 [![Stars](https://img.shields.io/github/stars/kongtou20070406/research-direction-selector?style=flat-square)](https://github.com/kongtou20070406/research-direction-selector/stargazers)
 
 **English** · [简体中文](README.zh-CN.md) · [日本語](README.ja-JP.md)
 
-[Results](#measured-results-and-concrete-strengths) · [Our goal](#our-goal) · [L1–L4](#l1l4) · [Quick start](#quick-start) · [Contribute](#contribute)
+[Use with your AI](#use-with-your-ai) · [Run locally](#run-locally) · [Five components](#five-components) · [Verified behavior](#verified-behavior) · [Docs](#documentation)
 
 </div>
 
-> This checkout is **v5.5.0-rc.2**, a pre-release from `main` for researchers and their AI. [Download the release](https://github.com/kongtou20070406/research-direction-selector/releases/tag/v5.5.0-rc.2). The five components below anchor the project; [the roadmap](docs/roadmap.md) separates implemented behavior from future validation.
+Research Direction Selector (RDS) helps a researcher and their AI investigate evidence, design experiments, arrange execution and decide what follows. Use it when the metric has plateaued, two explanations suggest different interventions, the remaining budget is small, or an interrupted project needs to resume from its actual results.
 
-Research Direction Selector (RDS) is a research collaboration skill for Codex with an executable local reference kernel. It connects research goals, competing explanations, past evidence, and programmatic checks to answer: **given the evidence and budget, which experiment is worth doing next?**
+You describe the goal and constraints in ordinary language. RDS helps identify **what the next experiment can distinguish, how to make the comparison fair, its full cost, and what each possible outcome changes**. It carries the evidence through execution and review so the next conversation can continue the work.
 
-The researcher sets the goal and resources, the model designs candidate routes, the program checks execution constraints, and the results inform the next step. Use it for metric plateaus, mechanism ablations, budget allocation, and resuming interrupted research.
+This checkout is **v5.6.0-rc.1**. The current implementation combines an agent Skill, local command-line tools and operational SQLite ledgers. It supports a human-directed research workflow, with scoped automation of individual tasks. See the [roadmap](docs/roadmap.md) for implemented behavior and remaining work.
 
-> **Two ways to use RDS:** work on a real research project through [SKILL.md](SKILL.md), or run restricted scalar experiments through the reference CLI to inspect budget, data-use, and evidence protocols. Real GPU training stays with your project's trainer.
+| Entry | Use it for |
+| --- | --- |
+| **With your AI** | Discuss a real research question, review code and evidence, and choose the next experiment through [SKILL.md](SKILL.md). |
+| **Local tools** | Import original records, inspect Advisor candidates, run a locked project command, account for costs and resume current state through the CLI. |
+| **For the researcher** | Read structured CLI results or an [offline dashboard](docs/dashboard.md); the dashboard is a read-only snapshot. |
 
-## Measured results and concrete strengths
+## Use with your AI
 
-The 2026-09-30 release checks produced these results:
-
-| Check | Actual result | What it checks |
-| --- | --- | --- |
-| [Regression suite](tests/) | **204 passed; 4 optional checks skipped; 208 total** | Kernel, Advisor, formal adapters and dashboard behavior. Native Lean was not configured; PyTorch was unavailable. |
-| [Historical replay](benchmark/README.md) | **6/6 passed** | Recorded decision packets and associated gates. |
-| [Synthetic adversarial scenarios](benchmark/redteam/) | **4/4 passed** | Four predefined protocol attacks. |
-| [Public-task-adapted component challenge](docs/advisor-benchmark.md) | **8/8 cases; 28/28 checks passed** | Explicit contracts, missing evidence, dependencies, costs, budgets and source identity. |
-
-The public-task challenge used ScienceAgentBench and CORE-Bench metadata with manually adapted rules. It took **83.0743 ms** to process the eight local fixtures and assemble results; this is a small metadata check, not scientific task execution. [Raw inputs](benchmark/advisor-public/source-facts.json) and [per-check outputs](benchmark/advisor-public/results.json) are available. End-to-end scientific task scores and research-quality improvement remain **unmeasured**; these counts establish the listed behavior, not a comparative ranking.
-
-Cross-skill comparisons are deferred while RDS prioritizes usability on real projects and L2 support across the research workflow. The [benchmark selection notes](docs/benchmark-plan.md) retain candidate tasks for later consideration; no comparison has been run or scheduled.
-
-The checks show concrete benefits for the researcher's next decision:
-
-- **Keep missing evidence visible:** a lone training-loss value does not become a convergence diagnosis (C1); deleting a fact's source changes readiness to `NEEDS_EVIDENCE` and creates a query (C4).
-- **Let requirements and workflow change suggestions:** changing a 20-feature contract to 10 exchanges the eligible candidates (C3); missing embedding evidence triggers a request along two prerequisite edges (C6).
-- **Respect uncertain cost and available budget:** unknown cost stays unknown (C5); zero budget blocks a positive-cost check (C7).
-- **Check the source being reproduced:** a different capsule ID blocks the downstream check for the selected source (C8).
-
-These results support explicit, inspectable decision checks within the tested scope. The program retains the conditions and derivation for review; real scientific outcomes still require the project's experiments and evaluation.
-
-## Our goal
-
-RDS's core goal is to automate assistance to human research: investigate evidence, generate and select experiments, arrange execution, assess results, reflect and continue. The researcher's goals and decisions remain central; Lean compatibility serves suitable mathematical subproblems within this process.
-
-Help researchers make the next experiment worth its full cost, carry it through an inspectable process, and resume from the evidence when work is interrupted. The long-term goal is a research loop that can improve its decision policy through tested feedback, while the researcher retains control of goals, resources, and interpretation.
-
-Every proposed experiment should answer three questions: **which explanations does it distinguish, what makes the comparison fair and affordable, and what would each possible result change?**
-
-## For researchers and their AI
-
-1. Install the [Skill](SKILL.md) using the instructions below, then open your research project with your AI assistant.
-2. Describe the question, metric, current baseline and available budget; point to code, logs and previous results. You can start with an uncertain idea.
-3. Review the recommended next experiment, what it can distinguish and its full cost. After execution, ask what the evidence supports and how the next decision changes.
-
-Copy this starting instruction to your AI:
+After installing the Skill, open your research project and give your AI an instruction such as:
 
 ```text
-Use Research Direction Selector (RDS) for this research project.
-Recover existing evidence and decisions first.
-Clarify my goal, metric, baseline and budget; reuse valid controls and logs.
+Use Research Direction Selector (RDS) on this project.
+First inspect the code, completed experiments and relevant past decisions.
+My goal is [research question / primary metric]; my available budget is [budget].
 Recommend the next experiment that can distinguish competing explanations.
-Explain the expected observations, falsifier, full cost and decision consequences.
-Keep mathematical checks, actual execution and mechanism evidence separate.
-Do not default to more seeds; consider them only if observed instability matters
-to the decision and the additional budget is authorized.
+State the control, expected observations, falsifier, full cost and next decision.
+Carry the authorized work through execution, evidence review and continuation.
+Keep execution success, task gain and mechanism evidence separate.
+Consider extra seeds only when observed instability affects this decision.
 ```
 
-## Five components
+You can also start with a concrete problem:
 
-| Component | Responsibility |
-| --- | --- |
-| **1 · Skill** | Research procedures: clarify goals, frame hypotheses, choose controls and interpret evidence. |
-| **2 · Execution and acceptance kernel** | Manage runs, check budgets and evidence, collect receipts and invoke supported mathematical checks. |
-| **3 · Research state and memory** | Preserve goals, configurations, results and failure conditions through `.rds/`, Obelisk and the judgment graph. |
-| **4 · Advisor** | Use observations and scoped rules to suggest diagnostics and candidate actions; develop evidence-driven candidate generation. |
-| **5 · RSI** | Propose changes to RDS's own rules and policies, evaluate them and retain only supported improvements. |
+- “The metric has stopped improving. Use the existing logs to distinguish a training problem from a capacity limit.”
+- “These two ablations changed several things. Design the smallest fair comparison that separates their explanations.”
+- “Continue this project. Check the remaining budget and completed runs before proposing more work.”
+- “Use RDS to develop RDS: run the relevant tests, read the failures and evaluate the next rule change.”
 
-The first three support the basic research loop; Advisor and RSI enhance it. Memory supplies evidence to Advisor, while the kernel checks the chosen action. These are functional responsibilities and can share a local implementation. L1–L4 are autonomy levels, not additional components.
+The researcher sets the direction, budget and acceptance of scientific results. The AI constructs the necessary working records; you can keep discussing the project in ordinary language. Existing evidence and valid controls come first. Additional seeds need observed instability that matters to the decision, rather than being a routine expense.
 
-## L1–L4
+### Install the Skill
 
-RDS supports ordinary conversation and single-model collaboration. Its five components support the loop: clarify the goal → investigate evidence → choose and check an experiment → execute → assess results → record evidence and continue. Each round should explain **what we know, what remains unknown, what comes next, and why it is worth doing**.
+Give a coding agent with local shell access this setup instruction:
 
-RDS adopts **Kramer et al. (2026)'s scientific-discovery automation framework**, which draws an analogy with driving automation. The original scale has **six levels, L0–L5**; the table here highlights L1–L4 without changing their numbering or meaning. See the [original names, source and interpretation limits](docs/research-autonomy.md).
-
-| Level | Scope in the adopted framework |
-| --- | --- |
-| **L1** | Computer assistance in an aspect of scientific work. |
-| **L2** | Complete automation of one significant part of discovery. |
-| **L3** | An automated full discovery cycle in a limited domain. |
-| **L4** | Discovery cycles across multiple domains, with limited autonomous goal setting. |
-
-These are autonomy descriptions, not scientific-quality scores, SAE compliance or safety certification. **Current RDS has scoped L2 functionality in automated reference computations and explicitly bound candidate search, alongside a human-facing protocol. This describes those restricted tasks, not a general research grade. A complete scientific L3 or L4 loop and an end-to-end GPU research service have not been demonstrated.** The runner's existing L3 identifiers are historical engineering names, not an external level claim.
-
-**Near-term product goal: L2 support across all six research stages.** Each stage should offer usable automation while the researcher retains research direction, key judgments and acceptance of scientific results. This is a coverage goal, not a redefinition of the paper's L2 or a claim that the complete L3 loop is already implemented. Longer-term research targets are the original L4 and L5: multi-domain discovery with limited goal setting, and comprehensive autonomy, respectively. These are directions, not delivery dates or current capabilities. See the [roadmap](docs/roadmap.md) for stage-specific deliverables and evidence gates.
-
-**RSI is a separate component and evaluation axis.** A policy-improvement claim requires prospective comparisons of whole research trajectories on unused independent cases at equal total budgets, including failures and negative results. It is not the definition of L4, and that improvement has not yet been established.
-
-## Implemented capabilities
-
-| Capability | Implementation | What it contributes |
-| --- | --- | --- |
-| **Experiments that change a decision** | Skill protocol | Compare causally distinct routes, name competing explanations, and state what positive and negative results would change. |
-| **Checks on the actual intervention** | Protocol + scalar gates | Inspect the executed equations and code; explicit scalar threshold claims can use a conditional symbolic probe. |
-| **Separate evidence axes** | Reference kernel | Record task gain, mechanism assessment, and run status independently, so a completed run or a better score does not silently become mechanism support. |
-| **Budget and data-use gates** | Reference kernel | Reserve reference-run allocations in SQLite transactions, track data exposure, and bind plans, code, data, and verifier versions to execution receipts. |
-| **Reuse of existing work** | Scalar cache + history bridge | Cache scalar controls by control AST and dataset SHA-256; retrieve relevant research history through the installed Obelisk CLI. |
-| **Feedback for the next proposal** | Advisor + judgment rules | Advisor supplies gate-error hints, loss and log diagnostics; scoped judgment rules help review subsequent proposals. |
-
-## Formal verification and rule obligations
-
-The architecture separates declared propositions, backend search, independent checking, and scientific assessment. `main` now includes the scalar AST/SymPy path, a declarative registry, independently checked mathematical certificates and a narrow native Lean4 interface from [PR #2](https://github.com/kongtou20070406/research-direction-selector/pull/2). Python adapters report certificate checks; native Lean checking is limited to supported closed rational obligations and requires a configured executable. The older experimental `LeanFormalEngine`/Tactic dispatcher is a separate prototype: `RULE_ALIGNED` checks metadata, and tactic success labels do not establish a proof of the declared goal. See [verification scope](docs/formal-verification.md) and [raw adapter timing measurements](benchmark/results/formal-windows-python313.json).
-
-Each of the 23 scoped judgment nodes now has explicit **preconditions, a falsifier and a feasible-domain expression**. The table maps obligations rather than claiming 23 proved causal theorems. Full variable definitions, required evidence and candidate tactic mappings are in the [rule obligation guide](docs/rule-obligations.md); none of the added metadata is currently enforced by the dispatcher.
-
-<details>
-<summary>View all 23 rule obligations</summary>
-
-| Rule ID | Preconditions and feasible-domain obligation | Falsifier |
-| --- | --- | --- |
-| [locked-test-selection](docs/rule-obligations.md#locked-test-selection) | selection frozen; clean confirmation cohort; `clean(T) and selection_data intersect T = empty` | confirmation reused or useful gain unsupported |
-| [deployment-information](docs/rule-obligations.md#deployment-information) | audited deployment input lineage; `inputs(model) subseteq I_deploy` | target-only input required |
-| [preserve-quantifiers](docs/rule-obligations.md#preserve-quantifiers) | explicit quantifiers and policy class; `fixed-action failure does_not_imply all-policy failure` | quantifier scope is widened |
-| [computation-graph-identity](docs/rule-obligations.md#computation-graph-identity) | bound tensor graph and checkpoint; `pool(z1)=pool(z2) => h(pool(z1))=h(pool(z2))` | claimed identity is erased |
-| [proxy-primary-bridge](docs/rule-obligations.md#proxy-primary-bridge) | matched route intervention; `Delta_task and Delta_route are separate` | gain survives route removal |
-| [short-budget-fidelity](docs/rule-obligations.md#short-budget-fidelity) | matched short/full endpoint protocols; `early_rank versus full_rank on measured candidates` | ranks reverse |
-| [method-recipe-variance](docs/rule-obligations.md#method-recipe-variance) | existing records and a matched same-seed contrast; extra seeds only after observed decision-relevant instability; `Delta_i=s*(M_T(seed_i)-M_C(seed_i))` | recipe or implementation explains gain |
-| [realized-boundary-not-knob](docs/rule-obligations.md#realized-boundary-not-knob) | finite S>=0; rho>=0; exact modeled equation; `m=rho*S/(1+S); rho>1: m>=1 iff S>=1/(rho-1)` | no realized crossing or source differs |
-| [depth-versus-trajectory](docs/rule-obligations.md#depth-versus-trajectory) | one checkpoint and the same examples; `M_k=M(F_theta_star^k(X),Y)` | different checkpoints replace a trajectory |
-| [reuse-baseline-control](docs/rule-obligations.md#reuse-baseline-control) | successful receipt and full control identity; `H(AST_new)=H(AST_receipt); H(data_new)=H(data_receipt)` | result-affecting binding drifts |
-| [trained-anchor-not-method-win](docs/rule-obligations.md#trained-anchor-not-method-win) | measured anchor plus matched control; `feasible(anchor) does_not_imply Delta>delta_min` | only the anchor completed |
-| [resource-canary-before-campaign](docs/rule-obligations.md#resource-canary-before-campaign) | measured run configuration and overhead; `memory_peak<=limit; makespan+overhead<=B_remaining` | canary invalidates feasibility |
-| [bundled-change-needs-component-control](docs/rule-obligations.md#bundled-change-needs-component-control) | component intervention manifest; `changed_factors={target_component}` | multiple effective components change |
-| [ablation-is-intervention-specific](docs/rule-obligations.md#ablation-is-intervention-specific) | precise executed ablation manifest; `manifest_executed=manifest_declared` | actual arm differs or scope is widened |
-| [transfer-requires-matched-protocol](docs/rule-obligations.md#transfer-requires-matched-protocol) | matched target-task comparison; `Delta_target=s*(M_target(T)-M_target(C))` | matched target gain disappears |
-| [protocol-versioned-evidence](docs/rule-obligations.md#protocol-versioned-evidence) | artifact and protocol lineage; `signatures match except the declared intervention` | historical rows cannot be reconciled |
-| [normalization-removal-confound](docs/rule-obligations.md#normalization-removal-confound) | normalization retained; initial operator matched; `rho*raw/(1+S) versus raw changes the equation` | amplitude or optimization remains confounded |
-| [executed-manipulation-validity](docs/rule-obligations.md#executed-manipulation-validity) | source-derived domain plus observed property; `exists x in D with the declared manipulation` | no realized manipulation |
-| [learned-support-not-allowed-support](docs/rule-obligations.md#learned-support-not-allowed-support) | fitted operator and matched learned/fixed arms; `realized_support differs from allowed_support` | fitted operators never cross |
-| [hard-budget-reallocation](docs/rule-obligations.md#hard-budget-reallocation) | spent/reserved work; protected confirmation floor; `spent+reserved+new+overhead<=total` | replacement exceeds authorized cap |
-| [adaptive-test-reuse](docs/rule-obligations.md#adaptive-test-reuse) | exposure lineage and frozen selection; `used_for_choice(T) => exploratory(T)` | exposed data called independent |
-| [implementation-equivalence-before-speedup](docs/rule-obligations.md#implementation-equivalence-before-speedup) | declared inputs, norms and tolerances; `forward_error<=eps_f; gradient_error<=eps_g` | discrepancies exceed tolerance |
-| [source-aware-evaluator-check](docs/rule-obligations.md#source-aware-evaluator-check) | source-aware audit without later sealed outcomes; `judge_score does_not_imply source_feasibility` | claimed distinction is unattainable |
-
-</details>
-
-[Documentation](docs/README.md) includes the adopted autonomy framework and experiment flow, bilingual terminology and contributor guidance. [Lean4/mathlib compatibility](docs/lean-integration.md) serves suitable mathematical subproblems within RDS's human research-assistance loop. The native adapter reuses the Lean kernel for closed rational obligations; broader mathlib model translation remains planned. C++ is an optional adapter optimization after profiling.
-
-## Workflow
-
-```mermaid
-flowchart LR
-    A[Goal and budget] --> B[Competing explanations and design]
-    H[Relevant historical evidence] -. Retrieve when needed .-> B
-    B --> C[Programmatic gates]
-    C --> D[Reference execution]
-    D --> E[Receipts and evidence assessment]
-    E --> F[Continue, revise, or stop]
-    F --> B
-    C -. Rejection feedback .-> B
+```text
+Install Research Direction Selector from
+https://github.com/kongtou20070406/research-direction-selector
+at tag v5.6.0-rc.1 as the research-direction-selector agent Skill.
+Keep the whole repository, including scripts, references and examples.
+Use this project's .agents/skills directory and verify the CLI version.
+Then read SKILL.md and help me start from my actual research question.
 ```
 
-The skill turns an open research question into a comparison protocol. The reference kernel turns an explicit plan into an inspectable execution record. Passing a gate satisfies the corresponding program constraints; a scientific conclusion still needs evidence and interpretation matched to its question.
-
-## Quick start
-
-### 1. Use the skill in Codex
-
-Place the complete repository in a skill folder named `research-direction-selector`, keeping its scripts and references. To install in your personal skills directory with PowerShell:
+For a manual personal installation on Windows:
 
 ```powershell
 New-Item -ItemType Directory -Path "$env:USERPROFILE/.agents/skills" -Force | Out-Null
-git clone --branch v5.5.0-rc.2 https://github.com/kongtou20070406/research-direction-selector.git "$env:USERPROFILE/.agents/skills/research-direction-selector"
+git clone --branch v5.6.0-rc.1 https://github.com/kongtou20070406/research-direction-selector.git "$env:USERPROFILE/.agents/skills/research-direction-selector"
 ```
 
-You can also place it in your research project's `.agents/skills/research-direction-selector/`. See the [official OpenAI skills documentation](https://learn.chatgpt.com/docs/build-skills) for discovery and invocation.
+A project-local checkout belongs at `.agents/skills/research-direction-selector/`. Keep the repository files together: the Skill uses its scripts and references. Skill discovery and invocation depend on the host; [SKILL.md](SKILL.md) is also readable directly by another assistant.
 
-Then describe your research problem:
+## Run locally
 
-> Use RDS to choose our next experiment. We want to beat the current baseline at the same training budget, with limited resources remaining. Read the completed experiments and code first. Recommend a comparison that can decide the next route, and tell us which result would make us stop or change direction.
-
-RDS extracts goals and constraints from the current files and conversation, then returns one recommended direction and at most one serious alternative. The model constructs the experiment forms internally; the researcher can adjust goals, priorities, and resources in ordinary language.
-
-### 2. Run the local reference example
-
-Requires **Python 3.11+**. Ordinary scalar execution uses only the Python standard library and needs no GPU. Live history retrieval separately requires an installed Obelisk CLI.
+Use **Python 3.11+**. The CPU project example and ordinary scalar runner use the standard library and require no GPU. Obelisk history retrieval needs a separate Obelisk installation; supported symbolic checks have [optional dependencies](requirements-formal.txt).
 
 ```powershell
-git clone --branch v5.5.0-rc.2 https://github.com/kongtou20070406/research-direction-selector.git
+git clone --branch v5.6.0-rc.1 https://github.com/kongtou20070406/research-direction-selector.git
 Set-Location research-direction-selector
 python -B scripts/rds_cli.py --version
+python -B scripts/rds_cli.py --help
 ```
 
-From the repository root, run this example. It uses a fresh temporary directory each time to keep contracts and run state independent:
+Run the following commands from the RDS checkout. Put `--root` before the subcommand; it selects the research workspace.
+
+### A real CPU project in a fresh workspace
+
+This example fits a constant control and a linear treatment to a recorded six-row dataset. `prepare.py` creates the code, data, evaluator, protocol and file-bound manifests in a new directory.
 
 ```powershell
-$RdsDemo = Join-Path ([System.IO.Path]::GetTempPath()) ("rds-demo-" + [guid]::NewGuid().ToString("N"))
-New-Item -ItemType Directory -Path $RdsDemo | Out-Null
-Copy-Item -Path 'examples/reference-run/*.json', 'examples/reference-run/*.csv', 'examples/reference-run/*.py' -Destination $RdsDemo
-
-python -B scripts/rds_cli.py --root $RdsDemo init --contract "$RdsDemo/contract.json"
-python -B scripts/rds_cli.py --root $RdsDemo hypothesis add --spec "$RdsDemo/hypothesis.json"
-python -B scripts/rds_cli.py --root $RdsDemo gate check --plan "$RdsDemo/plan.json"
-python -B scripts/rds_cli.py --root $RdsDemo plan create --spec "$RdsDemo/plan.json"
-$RdsRun = python -B scripts/rds_cli.py --root $RdsDemo run execute --id P1 | ConvertFrom-Json
-python -B scripts/rds_cli.py --root $RdsDemo decide --run $RdsRun.run_id
-python -B scripts/rds_cli.py --root $RdsDemo status
+$RdsDemo = Join-Path ([System.IO.Path]::GetTempPath()) ("rds-project-" + [guid]::NewGuid().ToString("N"))
+python -B examples/project-runner/prepare.py --root $RdsDemo
+python -B scripts/rds_cli.py --root $RdsDemo project init --contract "$RdsDemo/contract.json"
+python -B scripts/rds_cli.py --root $RdsDemo project create --manifest "$RdsDemo/control.json"
+python -B scripts/rds_cli.py --root $RdsDemo project execute --id control
+python -B scripts/rds_cli.py --root $RdsDemo project create --manifest "$RdsDemo/treatment.json"
+python -B scripts/rds_cli.py --root $RdsDemo project execute --id treatment
+python -B scripts/rds_cli.py --root $RdsDemo project costs
+python -B scripts/rds_cli.py --root $RdsDemo project status
 ```
 
-The example compares `control(x) = x` with `treatment(x) = 2*x` using paired MSE on development data. Expected results across the steps:
+A successful receipt has `run_status: SUCCEEDED` and retains raw stdout, stderr, metrics and artifact identities. `task_gain` and `mechanism` remain `UNKNOWN`: this is measured demonstration output, and scientific acceptance requires a separate assessment. Wall time is measured; unmeasured CPU/GPU/API resources remain unknown and separately charged estimates.
 
-| Command | Output field | Expected value |
+The contract bounds exact argv commands, inputs, output paths, resource reservations and timeouts. A nonzero exit, missing output or changed evaluator/protocol prevents successful completion. Recovery reconciles an existing attempt without starting it again. Approved project code is trusted; the runner is not an OS security sandbox.
+
+On Windows, an authorized command that must continue after the conversation can use `project execute --id <id> --background`. This registers one RDS-owned Task Scheduler task with a hidden worker and records its TaskID. Local permission to register and start tasks is required; the actual acceptance run used elevated registration after an ordinary-permission failure. Other platforms currently support foreground execution. See the [project example](examples/project-runner/) and [execution guide](docs/development-loop.md#execute-a-locked-project-command--m04).
+
+The earlier restricted scalar example remains available at [examples/reference-run/](examples/reference-run/), with its [workflow and expected evidence fields](docs/research-workflow.md#one-experiment-in-the-reference-cli).
+
+## Five components
+
+These are software responsibilities within one research workflow:
+
+| Component | What it does | Entry |
 | --- | --- | --- |
-| `run execute` | `run_status` | `SUCCEEDED` |
-| `decide` | `assessment.task_gain` | `EXPLORATORY` |
-| `decide` | `assessment.mechanism` | `UNTESTED` |
+| **1 · Skill** | Clarify the goal, frame competing hypotheses, choose fair comparisons and interpret evidence with the researcher. | [Use with your AI](#use-with-your-ai) |
+| **2 · Execution and acceptance kernel** | Check execution constraints, reserve resources, run supported commands and collect inspectable receipts. | [Run locally](#run-locally) |
+| **3 · Research state and memory** | Preserve goals, protocols, results, budgets and failures; retrieve relevant original history through Obelisk. | [Resume research](#resume-research) |
+| **4 · Advisor** | Turn observations and scoped rules into diagnostics, evidence requests and finite experiment candidates. | [Advisor](#advisor) |
+| **5 · RSI** | Propose, replay, adopt and roll back changes to RDS's own rules and policies. | [Develop RDS with RDS](#develop-rds-with-rds) |
 
-The reference execution succeeds and produces exploratory gain evidence. `init` preserves existing state; use a new `--root` for a different contract. Put the global `--root` before the subcommand.
+The first three support the basic research process; Advisor and RSI extend it. Operational ledgers preserve research state, while Obelisk retrieves conversation history. These functions can share an implementation. [The component guide](docs/rds-purpose.md) explains their boundaries.
 
-### 3. Enable conditional symbolic verification
-
-For explicitly declared algebraic thresholds or contraction boundaries, install the optional dependencies:
-
-```powershell
-python -m pip install -r requirements-formal.txt
+```mermaid
+flowchart LR
+    A[Goal and budget] --> B[Investigate evidence]
+    B --> C[Choose and check an experiment]
+    C --> D[Execute and record]
+    D --> E[Assess evidence]
+    E --> F[Continue, revise or stop]
+    F --> B
+    H[Relevant original history] -.-> B
 ```
 
-Ordinary experiments use lightweight AST checks and exact rational arithmetic. The symbolic adapter currently checks scalar thresholds over bounded real domains; missing dependencies or unsupported claims return `UNKNOWN` and block admission. See the [executable contract](references/l3-state-machine.md) for declarations.
+## Advisor
 
-## Advisor: from program feedback to a next step
+Advisor reads observations and states what remains uncertain. It can retrieve scoped rules and compose finite experiment templates with controls, rival explanations, measurements, stopping conditions and result-dependent decisions. Missing evidence becomes a request; unknown cost stays unknown. Candidates have `HEURISTIC_ONLY` assurance and require review in their actual research context.
 
-Advisor reports observations, competing explanations, minimal tests, limitations and sources. A single train/validation loss pair returns `INSUFFICIENT_EVIDENCE`; comparable paired curves can be supplied with `--fit-telemetry`. Numerical faults prompt source localization before parameter changes. Imported excerpts remain `UNREVIEWED` in an independent WAL store.
-
-The bounded search prototype checks explicit three-valued conditions, follows `prerequisite_for` reasoning edges, combines evidence requests and candidate checks, and retains the derivation. Five rules have executable bindings; the other rules remain review material. Only sourced, comparable observed costs enable Pareto comparisons. Unknown costs remain unknown; input sources remain `INPUT_REPORTED`. The program does not execute training or establish a causal mechanism from a graph path.
+Try the included finite template example:
 
 ```powershell
-python -B scripts/rds_cli.py --root $RdsDemo advise
-python -B scripts/rds_cli.py --root $RdsDemo advise --train-loss 0.9 --val-loss 1.0 --baseline-loss 1.0
-python -B scripts/rds_cli.py --root $RdsDemo advise --research-context examples/advisor-search/boundary-context.json
-python -B scripts/rds_cli.py --root . advise --literature "lr"
-python -B scripts/rds_dashboard.py --root $RdsDemo --output dist/dashboard.html
+python -B scripts/rds_cli.py advise --research-context examples/experiment-templates/context.json --templates examples/experiment-templates/templates.json
 ```
 
-The boundary example is explicitly synthetic. The dashboard exports a read-only offline HTML snapshot. See [graph design](docs/advisor-graph-design.md), [source evidence](docs/advisor-evidence.md), [dashboard usage](docs/dashboard.md), and [public-task component challenges](docs/advisor-benchmark.md). Research-quality improvement remains unmeasured. Reuse existing evidence and matched controls first; consider extra seeds only after observed instability could change the decision.
+For your own records, provide an artifact manifest that names the original configuration, metrics, logs and receipts:
 
-## Resume research with Obelisk
+```text
+python -B scripts/rds_cli.py --root <project> artifacts import --manifest <manifest.json>
+python -B scripts/rds_cli.py --root <project> advise --artifacts <manifest.json> --templates <templates.json>
+```
 
-When a missing prior decision, rejected route, or experiment setting could change the next step, RDS retrieves relevant history through the installed Obelisk public CLI. Source identities and pagination are retained; current files and instructions take priority.
+The importer retains field locations, run/protocol bindings, missing items and conflicts. `DECLARED`, `OBSERVED`, `DERIVED` and `UNKNOWN` describe how a fact entered the report; reading a value from a log does not prove its mechanism. A single train/validation loss pair remains insufficient for a fit diagnosis. Imported document excerpts remain `UNREVIEWED` in the Advisor's independent WAL store.
+
+For a reference-ledger snapshot, the dashboard exports offline HTML:
 
 ```powershell
-python -B scripts/rds_cli.py history prepare --project-path 'C:\research\my-project' --terms 'baseline' --output 'C:\queries\obq-baseline-unique-token.mjs'
-python -B scripts/rds_cli.py history query --query 'C:\queries\obq-baseline-unique-token.mjs'
+python -B scripts/rds_dashboard.py --root <reference-project> --output dist/dashboard.html
 ```
 
-Replace the placeholder paths with real absolute paths and use a new query filename each time. The bridge locates sessions by exact `project_path` and searches within them in one query. Retrieved history grants no new authority and does not automatically write memories. See the [Obelisk bridge](references/obelisk.md).
+See [record import and composition](docs/development-loop.md), [Advisor design](docs/advisor-graph-design.md), [evidence](docs/advisor-evidence.md) and [dashboard scope](docs/dashboard.md).
 
-## Regression scenarios & verification
+## Resume research
 
-Five regression scenarios cover recurring research decisions:
-
-| Case | Decision under review |
-| --- | --- |
-| Fair baseline | Establish a feasible comparison anchor under a limited budget. |
-| Confound isolation | Change one factor at a time and keep small development-set gains exploratory. |
-| Task pivot | Follow an explicit change of task and audit the reference recipe and comparison cost. |
-| Intervention validity | Verify that the executed intervention actually changes the property under test. |
-| Budget and confirmation data | Cancel or defer allocations, account for evaluation cost, and track test-set reuse. |
-
-After installing the optional dependencies, run from the repository root:
+Save the decision boundary in the existing operational ledger, then compare it with live state when continuing:
 
 ```powershell
-python -B -m unittest discover -s tests -v
-python -B benchmark/run.py
-python -B benchmark/redteam/runner.py
+python -B scripts/rds_cli.py --root $RdsDemo checkpoint save --id after-fit
+python -B scripts/rds_cli.py --root $RdsDemo checkpoint restore --id after-fit
+python -B scripts/rds_cli.py --root $RdsDemo project recover --id treatment
 ```
 
-Unit tests check kernel behavior; historical replays check packet integrity and associated gates; the red-team runner checks predefined protocol attacks. [GitHub Actions](https://github.com/kongtou20070406/research-direction-selector/actions) runs the unit tests and historical replays on Windows / Ubuntu with Python 3.11 / 3.13.
+Use `--decision <decision.json>` when saving to retain the research question and pending evidence. Restore returns current budgets, data exposures and runs, reports forward updates or conflicts, and checks current input bindings. It does not replace the ledger or repeat completed work. Ordinary status reads do not hash the whole project.
 
-Historical training scores are session reports, and automated replays use synthetic scalar inputs. These cases have informed skill development. Passing regression checks does not establish autonomous research quality or replace real GPU experiments and independent prospective evaluation. See the [benchmark protocol](benchmark/README.md) for evaluation and information-separation conventions.
+When relevant earlier decisions or rejected approaches are missing from the current context, the installed [Obelisk](https://github.com/tommy0103/obelisk) CLI can retrieve original history in the exact project scope:
 
-## Scope of this pre-release
+```text
+python -B scripts/rds_cli.py history prepare --project-path <absolute-project-path> --terms baseline --output <unique-absolute-query.mjs>
+python -B scripts/rds_cli.py history query --query <unique-absolute-query.mjs>
+```
 
-| Component | Supported scope |
-| --- | --- |
-| Research skill | Goal contracts, competing explanations, fair comparisons, budgets, and human intervention. |
-| Reference kernel | Restricted `control(x)` / `treatment(x)` rational expressions, paired MSE, budget ledger, data-exposure records, and receipts; at most 60 seconds per allocation. |
-| Scalar control cache | Reuse by control AST and dataset-byte hash within a project; real stochastic training needs project-owned seed, checkpoint, and recipe validation. |
-| Mathematical adapters | Bounded scalar checks, supported affine dynamics, Linear/ReLU boxes and concrete tensors; native Lean checks closed rational obligations. General ODEs and arbitrary networks remain unsupported. |
-| Rules and branches | Review, validate, and apply scoped rules with falsifiers, plus explicit branching; adversarial screening and automatic repair remain experimental. |
+Use real absolute paths and a new query filename for each request. Retrieval retains source identity and paging, respects current files and instructions, grants no new authority and does not automatically write memories. See [live-state continuation](docs/development-loop.md#resume-the-live-research-decision--m06) and the [Obelisk bridge](references/obelisk.md).
 
-The ledger accounts for allocated worker runtime; setup, validation, and control overhead must be counted separately. Use your project's trainer and host scheduler for real long jobs. Hashes and transactions support audit and consistency checks; a local writer can still alter the program and artifacts, so this kernel provides neither an OS security sandbox nor tamper-proof guarantees.
+## Develop RDS with RDS
 
-<details>
-<summary>Engineering limits in experimental modules</summary>
+RDS development uses its own tools to execute real tests, import their original output, inspect Advisor suggestions and evaluate a rule revision. Reproduce the isolated development loop in a new empty workspace:
 
-- `auto-repair` reads a consistent SQLite snapshot and proposes heuristic rules; proposal counts do not establish improved research decisions.
-- Alignment screening uses keyword heuristics; its counters are not independent measurements of scientific recommendation accuracy.
-- Rule application uses ordinary file writes without a transaction lock or atomic replacement.
+```text
+python -B examples/self-development/run.py --workspace <new-empty-workspace>
+```
 
-</details>
+The example retains CLI output, raw test logs, costs, a process receipt and a checkpoint. It also replays an isolated rule change against declared development/held-out cases, adopts an eligible result, and exercises rollback. The original repository graph is preserved. Proposal, replay and adoption remain separate; `--force` does not bypass evidence.
+
+This is the RSI component's first human-directed software feedback loop. Passing finite rule cases establishes the checked software behavior. A claim that a research policy improved needs prospective whole-trajectory comparisons on unused independent cases at equal total budgets, including failed work and negative results. That scientific improvement remains unmeasured. See the [development loop](docs/development-loop.md) and [RSI evidence boundary](references/rsi-evidence.md).
+
+## Verified behavior
+
+The latest full suite and second real executor iteration on **2026-09-30** produced:
+
+| Check | Recorded result | Evidence scope |
+| --- | --- | --- |
+| [Full regression suite](tests/) | **269 passed; 4 skipped; 273 total**, 45.880 s | Component and integration behavior. Two native Lean checks lacked configuration; two PyTorch checks lacked the dependency. |
+| [RDS executes its development tests](examples/self-development/run.py) | **65/65 passed**, no skips | Actual project receipt `SUCCEEDED`; original records imported as `IMPORTED`; Advisor inspected the next change. |
+| Finite RSI development example | **Baseline 1/4 → candidate 4/4**; declared held-out cases: **2 improvements, 0 regressions** | Isolated graph `APPLIED` then `ROLLED_BACK`; author-declared case partitions, not an independent scientific-policy score. |
+
+The first development iteration exposed two failures in a 49-case selection. Fixing the fixture and an incorrect assertion preceded the updated 65-case passing run. This records an actual development feedback cycle; it does not imply research quality gains.
+
+The remaining regression and component checks were also rerun for this release:
+
+| Check | Recorded result | What it checked |
+| --- | --- | --- |
+| [Historical replay](benchmark/README.md) | **6/6 passed** | Recorded decision packets and associated gates, with synthetic scalar execution inputs. |
+| [Synthetic adversarial scenarios](benchmark/redteam/) | **4/4 passed** | Four predefined protocol attacks. |
+| [Public-task-adapted component challenge](docs/advisor-benchmark.md) | **8/8 cases; 28/28 checks passed** | Contracts, evidence gaps, dependencies, costs, budgets and source identity in adapted metadata fixtures. |
+
+The component challenge used ScienceAgentBench and CORE-Bench metadata with manually adapted rules. Its recorded **98.8786 ms** covers processing eight local fixtures and assembling results. [Inputs](benchmark/advisor-public/source-facts.json) and [per-check results](benchmark/advisor-public/results.json) are available. It did not execute the scientific tasks. These checks show concrete behavior: missing evidence produces a request, changed requirements change eligible candidates, and unknown cost is preserved rather than treated as zero.
+
+End-to-end scientific task scores, scientific research-quality gains and independent RSI trajectory gains remain **unmeasured**. Cross-skill comparisons are deferred; [benchmark notes](docs/benchmark-plan.md) retain candidate tasks without scheduling a comparison.
+
+## Scope and autonomy goals
+
+The near-term product goal is **L2 support across all six research stages**: clarify the goal → investigate evidence → select experiments → execute → assess → reflect and continue. Each stage should provide useful automation while the researcher retains research direction, key judgments and acceptance of scientific results. This is a coverage goal.
+
+RDS adopts Kramer et al.'s scientific-discovery automation framework, published in 2026, with the original **L0–L5** numbering. L1 assists an aspect of research; L2 fully automates one significant discovery component; L3 automates the whole discovery cycle in a limited domain; L4 extends discovery across multiple domains with limited autonomous goal setting. The long-term research directions are the original **L4 and L5**, rather than delivery-date promises. See the [source and interpretation limits](docs/research-autonomy.md) and [roadmap](docs/roadmap.md).
+
+Current RDS has **scoped L2 functionality** in reference computation and bound candidate search, plus a human-facing collaboration protocol. A complete scientific L3/L4 loop or end-to-end GPU research service has not been demonstrated. Existing `L3` runner identifiers are historical engineering names. Autonomy is separate from scientific quality, safety certification and RSI policy improvement.
+
+The project runner has real CPU acceptance evidence. A GPU research project still needs its own trainer, instrumentation and scientific evaluator. Costs preserve resource units; wall time is not CPU time. Control reuse checks the complete supported protocol and artifact identity. Evidence axes keep `run_status`, `task_gain` and `mechanism` separate.
+
+### Mathematical subproblems
+
+Lean4/mathlib cooperation is part of the research workflow for suitable mathematical questions. RDS reuses the Lean kernel for supported closed rational obligations and has independently checked Python certificates for narrow scalar, affine, box-network and concrete-tensor checks. Mathematical validity and correspondence to the actual scientific model require their own evidence. General mathlib translation, arbitrary networks and general ODEs remain outside the implemented scope.
+
+The [verification guide](docs/formal-verification.md), [Lean integration guide](docs/lean-integration.md) and [23 rule-obligation definitions](docs/rule-obligations.md) hold the detailed types, assumptions and `UNKNOWN` behavior.
 
 ## Documentation
 
-| Start here | What it covers |
+| Guide | Start here for |
 | --- | --- |
-| [Documentation index](docs/README.md) | English/Chinese guides for the workflow, verification, all 23 rule obligations and terminology. |
-| [Tuning principle obligations](references/scientific_tuning_principles.json) | Scoped diagnostic hypotheses, formal subclaims and empirical checks. |
-| [SKILL.md](SKILL.md) | Research collaboration, direction selection, and evidence interpretation. |
-| [Executable contract](references/l3-state-machine.md) | CLI commands, state, data use, formal declarations, and trust boundaries. |
-| [Judgment rules](references/judgment-graph.yaml) | Scoped decision rules with competing explanations and falsifiers. |
-| [RSI evidence](references/rsi-evidence.md) | Evidence and limits behind revisions to the research process. |
-| [Obelisk bridge](references/obelisk.md) | Bounded history retrieval and original evidence. |
-| [Reference example](examples/reference-run/) | Runnable contract, hypothesis, plan, and scalar dataset. |
-| [Benchmark protocol](benchmark/README.md) | Decision packets, regression checks, and prospective response evaluation. |
-| [Kernel tests](tests/test_rds_l3.py) | Execution, budgets, data exposure, formal routing, and receipt regressions. |
-
-## Roadmap and acceptance criteria
-
-These are priorities, not completed capabilities or promised dates.
-
-| Priority | Next milestone | Evidence required |
-| --- | --- | --- |
-| **Advisor** | Generate discriminating candidates from observations, graph dependencies and scoped rules; filter by total cost. | Public cases with provenance, competitive explanations and decision consequences; compare recommendation quality and cost. |
-| **Actual training observations** | Bind supported trainer configurations and logs to intervention checks and receipts. | Reproducible runs showing that the intended intervention occurred; explicit unsupported cases. |
-| **Rule regressions and RSI** | Evaluate rule/policy changes and retain negative results. | Held-out cases and prospective whole-trajectory comparisons at equal total budgets. Historical replay alone is insufficient. |
-| **Lean collaboration** | Extend the narrow reviewed native interface to suitable mathlib model obligations. | Expected-theorem binding, axiom audit, independent checking and separately verified model correspondence. |
+| [Documentation index](docs/README.md) | English/Chinese navigation and implementation scope. |
+| [SKILL.md](SKILL.md) | Research collaboration and direction selection. |
+| [Development loop](docs/development-loop.md) | Original records, finite composition, costs, project execution, RSI and continuation. |
+| [Research workflow](docs/research-workflow.md) | Evidence axes and the restricted reference example. |
+| [Five components](docs/rds-purpose.md) · [Autonomy](docs/research-autonomy.md) · [Roadmap](docs/roadmap.md) | Responsibilities, adopted levels and acceptance gates. |
+| [Reference execution contract](references/l3-state-machine.md) | Existing scalar CLI states and data-use constraints. |
+| [Advisor design](docs/advisor-graph-design.md) · [Judgment graph](references/judgment-graph.yaml) | Scoped rules, dependencies and candidate behavior. |
+| [Benchmark protocol](benchmark/README.md) | Historical cases, information separation and evaluation limits. |
 
 ## Contribute
 
-Start with a documentation fix, translation improvement, or minimal reproducible example. [CONTRIBUTING.md](CONTRIBUTING.md) explains the **fork → branch → verify → PR** workflow and check commands.
+Documentation, translations, scoped research rules and minimal reproducible cases are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md), then **fork → branch → check → PR**. For a rule, include its source, applicable scope, rival explanations, discriminating experiment and falsifier. Preserve negative results and the limits of the evidence.
 
-| Contribution | A useful starting point |
-| --- | --- |
-| Docs & translations | Keep commands, capabilities, and limits aligned across the three READMEs; check links and rendering. |
-| Causal judgment rules | Provide original sources, scope, competing explanations, a discriminating experiment, and a falsifier. |
-| Kernel & verifiers | Include a minimal reproduction and relevant regression checks; specify types, domains, and `UNKNOWN` behavior. |
-| Research cases | Provide shareable information available at the decision time, the question, and an evaluation protocol; separate later outcomes from proposer inputs. |
+[Report an issue](https://github.com/kongtou20070406/research-direction-selector/issues/new/choose) or [open a PR](https://github.com/kongtou20070406/research-direction-selector/compare). Keep private conversations, credentials, unpublished data and `.rds/` operational state out of commits.
 
-[Report an issue](https://github.com/kongtou20070406/research-direction-selector/issues/new/choose) or [open a PR](https://github.com/kongtou20070406/research-direction-selector/compare). For changes to goals, evidence semantics, or major execution interfaces, discuss the design in an issue first. Preserve negative results and evidence limits; keep `.rds/` runtime state, credentials, private sessions, and non-public data out of submissions.
+## Related projects
 
-## Ecosystem & design references
+- [Obelisk](https://github.com/tommy0103/obelisk) provides the public history CLI reused by RDS. Its direct explanation of purpose, agent/human entry points and setup informed this README's organization.
+- [Academic Research Skills](https://github.com/Imbad0202/academic-research-skills) covers research-to-writing, review and revision. Its language navigation and contribution structure informed earlier documentation. An automatic handoff adapter is not included.
 
-- [Obelisk](https://github.com/tommy0103/obelisk) retrieves prior sessions and original evidence. RDS reuses its public CLI.
-- [Academic Research Skills](https://github.com/Imbad0202/academic-research-skills) covers research, writing, review, and revision. Its language navigation and contribution structure informed this repository's presentation. The projects can support experiment decisions and manuscript work separately; no automatic handoff adapter is included.
-
-RDS branding and copy are original. These links identify a dependency and design references, and do not imply endorsement.
-
-## Search terms
-
-Research direction selection · AI-assisted research · experiment design · hypothesis testing · causal inference · reproducible research · Advisor · proof obligations · Lean4 interoperability · agent skills · Codex · CLI · Obelisk.
+RDS text and brand assets are original. These links describe dependencies and design references, without implying endorsement.

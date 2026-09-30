@@ -2,11 +2,11 @@
 name: research-direction-selector
 description: Select and audit metric-driven research directions using scoped hypotheses, falsifiable interventions, budgets and human instructions. Includes bounded declarative certificate checks, an L3 reference runner and Obelisk history retrieval; use for choosing experiments, evaluating proposals or checking supported mathematical model claims, not scheduling general GPU training.
 metadata:
-  version: v5.5.0-rc.2
-  engine: rds-cli-v5.5
+  version: v5.6.0-rc.1
+  engine: rds-cli-v5.6
 ---
 
-# Research Direction Selector — RDS-L3
+# Research Direction Selector
 
 Help the researcher choose experiments that advance the stated metric or resolve a consequential mechanism question. Keep the researcher in control of the claim and budget. Use scoped evidence, precommitted tests and the CLI's execution receipts; a hash binds an artifact but does not prove its scientific interpretation.
 
@@ -14,9 +14,11 @@ RDS automates assistance to human research: understand the objective, investigat
 
 The five components are Skill, execution and acceptance kernel, research state and memory, Advisor, and RSI. Graph and Obelisk history support research state and memory; budget, telemetry, probes and formal adapters support the execution kernel. Advisor generates candidate tests from sourced facts and explicit rule conditions, composes reasoning prerequisites, and retains the derivation. Missing facts remain unknown. See [RDS purpose](docs/rds-purpose.md) and [Advisor graph design](docs/advisor-graph-design.md).
 
+Respect the current researcher's preferences. [Optional research preferences](references/optional-preferences.md) records 空投's scientific working preferences for explicit opt-in; it is not a universal default or a new source of experiment/resource authority.
+
 ## Evidence and execution boundaries
 
-The local CLI executes restricted scalar rational ASTs and paired MSE comparisons. It separates task gain, mechanism evidence and run status, reserves budget atomically and records data exposure. It does not execute arbitrary PyTorch training or certify PSNR claims. Do not import handwritten success flags, substitute toy outcomes for real experiments, or describe the local verifier as an OS security boundary. Read [the executable contract](references/l3-state-machine.md) before using the runner.
+The reference CLI executes restricted scalar rational ASTs and paired MSE comparisons. The separate `project` runner executes exact authorized argv commands under locked code, configuration, data, evaluator and protocol files, collecting raw logs and receipts. Both separate task gain, mechanism evidence and run status. A project command is trusted code, not an OS sandbox; exit code 0 does not certify a scientific claim. Do not import handwritten success flags or substitute toy outcomes for real experiments. Read [the reference contract](references/l3-state-machine.md) or [project and development tools](docs/development-loop.md) for the corresponding runner.
 
 For mathematical declarations, use the separate [formal framework](references/formal_framework.md).
 It checks supported affine matrix/dynamical, dense Linear/ReLU network and concrete
@@ -105,12 +107,7 @@ Before recommending a material run, compare its whole cost with the remaining au
 
 ### Baseline Control Reuse Principle (空白对照复用原则)
 
-When designing and evaluating experiments across candidate directions, **never repeatedly re-run a blank baseline control** once executed for a given dataset split, random seed, and control code AST. The system caches the baseline evaluation and reuses it across subsequent treatment plans to conserve remote GPU hours. Harmless environmental variations (different host machines, minor driver/OS differences, network/runtime jitter) are explicitly ignored as long as the three critical invariants match:
-1. **Control Code AST**: identical baseline computation graph;
-2. **Random Seed**: matched initialization and data shuffling;
-3. **Dataset Split SHA-256**: identical evaluation partition.
-
-Invalidate the cached baseline and demand a fresh control run only if the baseline source, seed, or dataset partition has changed.
+Prefer a completed compatible control over rerunning it. The scalar reference cache checks control AST and data bytes. For a training control, use `project control-check` to compare code/configuration/data hashes, partition, initial state, seed, checkpoint, schedule, sample-work and numerical protocol, and reread hash-bound output artifacts. Identical seeds do not establish identical random paths. Missing identity or changed inputs invalidate reuse; a cache hit does not restore independent confirmation. Hardware and software changes that can affect results belong in the numerical protocol.
 
 For a one-shot request, return **one recommended direction** and at most one serious alternative. State the competing explanation, prediction that separates them, fair baseline, precommitted selection and final test rules, exact metric, budget, reproducibility artifacts, and the result that would stop or revise the idea. Do not rank by novelty, elegance, or apparent mechanism alone. Treat task gain and mechanism knowledge as separate outcomes: either can change the next research decision, while only a fair primary-metric gain supports a performance claim.
 
@@ -153,7 +150,9 @@ human_intervention: {editable: [goal, constraints, priority, budget],
 
 ## Deterministic CLI Engine (`scripts/rds_cli.py`)
 
-Use the CLI for the supported scalar reference protocol. For actual research training, retain the skill's decision discipline and use the project's real runner and raw artifacts. Do not claim that a reference receipt verified an external experiment.
+Use the reference commands below for the supported scalar protocol. For an external project, use the separate `project` commands and its real raw artifacts. Do not claim that a scalar reference receipt verified an external experiment.
+
+When developing RDS itself, **use its programs throughout the development iteration**: record the concrete problem and next decision, run the actual regression workload through `project`, import its original outputs through `artifacts`/`advise --artifacts`, checkpoint the decision, and use `meta evaluate-rule` before adopting a rule. Repair observed shortcomings and use the repaired tools in the next iteration. This development feedback loop is part of RSI; passing software regressions alone does not establish improved scientific research policy. The reproducible [self-development example](examples/self-development/run.py) and [tool guide](docs/development-loop.md) provide the commands.
 
 ```bash
 # 1. Initialize research contract & lock SHA-256
@@ -175,10 +174,12 @@ python -B scripts/rds_cli.py decide --run RUN_ID
 # 6. Audit live research tree, branch statuses, and budget ledger
 python -B scripts/rds_cli.py status
 
-# 7. RSI Step 1: Meta-Reflection & Judgment Graph Evolution
+# 7. Inspect candidates, replay declared cases, then adopt on a bound graph
 python -B scripts/rds_cli.py meta list-rules
 python -B scripts/rds_cli.py meta validate-rule --rule rule.json
-python -B scripts/rds_cli.py meta apply-rule --rule rule.json
+python -B scripts/rds_cli.py meta evaluate-rule --rule rule.json --graph isolated-graph.json --cases cases.json --output evaluation.json
+python -B scripts/rds_cli.py meta apply-rule --rule rule.json --graph isolated-graph.json --cases cases.json --evaluation evaluation.json
+python -B scripts/rds_cli.py meta rollback-rule --record adoption-record.json --graph isolated-graph.json
 python -B scripts/rds_cli.py meta reflect [--terms "topic_query"]
 
 # 8. RSI Step 2: Policy Stagnation & Orthogonal Branching (FML-Bench v2)

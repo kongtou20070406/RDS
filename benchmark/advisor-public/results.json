@@ -5,17 +5,17 @@
   "scientific_tasks_completed": 0,
   "gpu_runs": 0,
   "paid_api_calls": 0,
-  "generated_at_utc": "2026-09-30T08:37:42.354135+00:00",
+  "generated_at_utc": "2026-09-30T11:09:47.588198+00:00",
   "python": "3.13.5",
   "platform": "Windows-11-10.0.26200-SP0",
   "input_snapshot_sha256": "41e40fc86b3e561cafb8443848062e3dcdf499e3a268de443b05a148151ee00e",
   "runner_sha256": "a93aeae3790112914f15b80907fa3e9c1bc6bf64005f60716237f5623d36f409",
   "implementation_sha256": {
-    "rds_advisor.py": "b70b480d46493ba1eecd00221657d61790fb5051f7808ce643e40c916f53b820",
-    "rds_advisor_search.py": "ca68505c3a94035e25b2b1b6accc940815ae09e838b3d0bbc6f93a0314241369"
+    "rds_advisor.py": "5a4ce6d65f79d5ae5baef2bd87a9389e7d47f49a26ea0db51130dd8843f9a3ff",
+    "rds_advisor_search.py": "81e4325b599d2dd0a2f23a09436c3b31bea9728422ba3b734a136827053ad0f3"
   },
   "cost_measurement": {
-    "elapsed_ms": 0.3766,
+    "elapsed_ms": 0.3402,
     "operation": "read/parse local source-facts.json once",
     "scope": "local metadata check only; not a SHAP, model-training, or scientific reproduction cost"
   },
@@ -230,7 +230,7 @@
   },
   "case_pass_count": 8,
   "case_count": 8,
-  "elapsed_ms": 83.0743,
+  "elapsed_ms": 98.8786,
   "limitations": [
     "Public-task-adapted component checks; not ScienceAgentBench or CORE-Bench official execution/evaluator scores.",
     "Bindings and completion-state perturbations are manually authored fixtures; scientific completion flags were not measured.",
@@ -277,7 +277,7 @@
         "diagnostics": [],
         "action_items": []
       },
-      "elapsed_ms": 0.0141
+      "elapsed_ms": 0.016
     },
     {
       "id": "C2-shap-contract-20",
@@ -306,20 +306,20 @@
         },
         "costs": {
           "check-shap-20": {
-            "value": 0.3766,
+            "value": 0.3402,
             "unit": "elapsed_ms",
             "comparison_group": "local_metadata_check_only",
             "source": "This run: perf_counter_ns around reading/parsing source-facts.json. Not model training or full scientific artifact validation."
           },
           "check-shap-10": {
-            "value": 0.3766,
+            "value": 0.3402,
             "unit": "elapsed_ms",
             "comparison_group": "local_metadata_check_only",
             "source": "This run: perf_counter_ns around reading/parsing source-facts.json. Not model training or full scientific artifact validation."
           }
         },
         "budget": {
-          "value": 3.766,
+          "value": 3.402,
           "unit": "elapsed_ms",
           "comparison_group": "local_metadata_check_only",
           "source": "ADAPTED_USER_BUDGET: ten times the measured local metadata-read cost; no original benchmark runtime limit inferred."
@@ -471,7 +471,7 @@
             ],
             "incremental_cost": {
               "status": "INPUT_REPORTED",
-              "value": 0.3766,
+              "value": 0.3402,
               "unit": "elapsed_ms",
               "comparison_group": "local_metadata_check_only",
               "sources": [
@@ -479,6 +479,9 @@
               ],
               "components": [
                 "check-shap-20"
+              ],
+              "evidence_statuses": [
+                "INPUT_REPORTED"
               ]
             },
             "budget_status": "WITHIN_REPORTED_BUDGET",
@@ -557,11 +560,11 @@
           ]
         },
         "limitations": [
-          "Derivations are reasoning dependencies, not causal proof. Sources and costs remain INPUT_REPORTED.",
+          "Derivations are reasoning dependencies, not causal proof. Imported source labels do not certify causal claims.",
           "Only explicit executable configuration is searched; text triggers and unconfigured rules are not evaluated."
         ]
       },
-      "elapsed_ms": 0.1668
+      "elapsed_ms": 2.71
     },
     {
       "id": "C3-shap-contract-10-perturbation",
@@ -587,20 +590,20 @@
         },
         "costs": {
           "check-shap-20": {
-            "value": 0.3766,
+            "value": 0.3402,
             "unit": "elapsed_ms",
             "comparison_group": "local_metadata_check_only",
             "source": "This run: perf_counter_ns around reading/parsing source-facts.json. Not model training or full scientific artifact validation."
           },
           "check-shap-10": {
-            "value": 0.3766,
+            "value": 0.3402,
             "unit": "elapsed_ms",
             "comparison_group": "local_metadata_check_only",
             "source": "This run: perf_counter_ns around reading/parsing source-facts.json. Not model training or full scientific artifact validation."
           }
         },
         "budget": {
-          "value": 3.766,
+          "value": 3.402,
           "unit": "elapsed_ms",
           "comparison_group": "local_metadata_check_only",
           "source": "ADAPTED_USER_BUDGET: ten times the measured local metadata-read cost; no original benchmark runtime limit inferred."
@@ -749,7 +752,7 @@
             ],
             "incremental_cost": {
               "status": "INPUT_REPORTED",
-              "value": 0.3766,
+              "value": 0.3402,
               "unit": "elapsed_ms",
               "comparison_group": "local_metadata_check_only",
               "sources": [
@@ -757,6 +760,9 @@
               ],
               "components": [
                 "check-shap-10"
+              ],
+              "evidence_statuses": [
+                "INPUT_REPORTED"
               ]
             },
             "budget_status": "WITHIN_REPORTED_BUDGET",
@@ -832,11 +838,11 @@
           ]
         },
         "limitations": [
-          "Derivations are reasoning dependencies, not causal proof. Sources and costs remain INPUT_REPORTED.",
+          "Derivations are reasoning dependencies, not causal proof. Imported source labels do not certify causal claims.",
           "Only explicit executable configuration is searched; text triggers and unconfigured rules are not evaluated."
         ]
       },
-      "elapsed_ms": 0.2718
+      "elapsed_ms": 2.2822
     },
     {
       "id": "C4-shap-source-withdrawal",
@@ -861,20 +867,20 @@
         },
         "costs": {
           "check-shap-20": {
-            "value": 0.3766,
+            "value": 0.3402,
             "unit": "elapsed_ms",
             "comparison_group": "local_metadata_check_only",
             "source": "This run: perf_counter_ns around reading/parsing source-facts.json. Not model training or full scientific artifact validation."
           },
           "check-shap-10": {
-            "value": 0.3766,
+            "value": 0.3402,
             "unit": "elapsed_ms",
             "comparison_group": "local_metadata_check_only",
             "source": "This run: perf_counter_ns around reading/parsing source-facts.json. Not model training or full scientific artifact validation."
           }
         },
         "budget": {
-          "value": 3.766,
+          "value": 3.402,
           "unit": "elapsed_ms",
           "comparison_group": "local_metadata_check_only",
           "source": "ADAPTED_USER_BUDGET: ten times the measured local metadata-read cost; no original benchmark runtime limit inferred."
@@ -1238,11 +1244,11 @@
           ]
         },
         "limitations": [
-          "Derivations are reasoning dependencies, not causal proof. Sources and costs remain INPUT_REPORTED.",
+          "Derivations are reasoning dependencies, not causal proof. Imported source labels do not certify causal claims.",
           "Only explicit executable configuration is searched; text triggers and unconfigured rules are not evaluated."
         ]
       },
-      "elapsed_ms": 0.1418
+      "elapsed_ms": 1.5268
     },
     {
       "id": "C5-shap-unknown-cost",
@@ -1271,14 +1277,14 @@
         },
         "costs": {
           "check-shap-10": {
-            "value": 0.3766,
+            "value": 0.3402,
             "unit": "elapsed_ms",
             "comparison_group": "local_metadata_check_only",
             "source": "This run: perf_counter_ns around reading/parsing source-facts.json. Not model training or full scientific artifact validation."
           }
         },
         "budget": {
-          "value": 3.766,
+          "value": 3.402,
           "unit": "elapsed_ms",
           "comparison_group": "local_metadata_check_only",
           "source": "ADAPTED_USER_BUDGET: ten times the measured local metadata-read cost; no original benchmark runtime limit inferred."
@@ -1512,11 +1518,11 @@
           ]
         },
         "limitations": [
-          "Derivations are reasoning dependencies, not causal proof. Sources and costs remain INPUT_REPORTED.",
+          "Derivations are reasoning dependencies, not causal proof. Imported source labels do not certify causal claims.",
           "Only explicit executable configuration is searched; text triggers and unconfigured rules are not evaluated."
         ]
       },
-      "elapsed_ms": 0.0993
+      "elapsed_ms": 1.1463
     },
     {
       "id": "C6-core-dependency-evidence",
@@ -1558,14 +1564,14 @@
         },
         "costs": {
           "check-core-output": {
-            "value": 0.3766,
+            "value": 0.3402,
             "unit": "elapsed_ms",
             "comparison_group": "local_metadata_check_only",
             "source": "This run: perf_counter_ns around reading/parsing source-facts.json. Not model training or full scientific artifact validation."
           }
         },
         "budget": {
-          "value": 3.766,
+          "value": 3.402,
           "unit": "elapsed_ms",
           "comparison_group": "local_metadata_check_only",
           "source": "ADAPTED_USER_BUDGET: ten times the measured local metadata-read cost; no original benchmark runtime limit inferred."
@@ -1845,11 +1851,11 @@
           ]
         },
         "limitations": [
-          "Derivations are reasoning dependencies, not causal proof. Sources and costs remain INPUT_REPORTED.",
+          "Derivations are reasoning dependencies, not causal proof. Imported source labels do not certify causal claims.",
           "Only explicit executable configuration is searched; text triggers and unconfigured rules are not evaluated."
         ]
       },
-      "elapsed_ms": 0.1321
+      "elapsed_ms": 1.926
     },
     {
       "id": "C7-core-zero-budget",
@@ -1896,7 +1902,7 @@
         },
         "costs": {
           "check-core-output": {
-            "value": 0.3766,
+            "value": 0.3402,
             "unit": "elapsed_ms",
             "comparison_group": "local_metadata_check_only",
             "source": "This run: perf_counter_ns around reading/parsing source-facts.json. Not model training or full scientific artifact validation."
@@ -2112,7 +2118,7 @@
             ],
             "incremental_cost": {
               "status": "INPUT_REPORTED",
-              "value": 0.3766,
+              "value": 0.3402,
               "unit": "elapsed_ms",
               "comparison_group": "local_metadata_check_only",
               "sources": [
@@ -2120,6 +2126,9 @@
               ],
               "components": [
                 "check-core-output"
+              ],
+              "evidence_statuses": [
+                "INPUT_REPORTED"
               ]
             },
             "budget_status": "OVER_REPORTED_BUDGET",
@@ -2146,11 +2155,11 @@
           "pareto_front": []
         },
         "limitations": [
-          "Derivations are reasoning dependencies, not causal proof. Sources and costs remain INPUT_REPORTED.",
+          "Derivations are reasoning dependencies, not causal proof. Imported source labels do not certify causal claims.",
           "Only explicit executable configuration is searched; text triggers and unconfigured rules are not evaluated."
         ]
       },
-      "elapsed_ms": 0.1264
+      "elapsed_ms": 3.553
     },
     {
       "id": "C8-core-capsule-identity",
@@ -2194,14 +2203,14 @@
         },
         "costs": {
           "check-core-output": {
-            "value": 0.3766,
+            "value": 0.3402,
             "unit": "elapsed_ms",
             "comparison_group": "local_metadata_check_only",
             "source": "This run: perf_counter_ns around reading/parsing source-facts.json. Not model training or full scientific artifact validation."
           }
         },
         "budget": {
-          "value": 3.766,
+          "value": 3.402,
           "unit": "elapsed_ms",
           "comparison_group": "local_metadata_check_only",
           "source": "ADAPTED_USER_BUDGET: ten times the measured local metadata-read cost; no original benchmark runtime limit inferred."
@@ -2293,11 +2302,11 @@
           "pareto_front": []
         },
         "limitations": [
-          "Derivations are reasoning dependencies, not causal proof. Sources and costs remain INPUT_REPORTED.",
+          "Derivations are reasoning dependencies, not causal proof. Imported source labels do not certify causal claims.",
           "Only explicit executable configuration is searched; text triggers and unconfigured rules are not evaluated."
         ]
       },
-      "elapsed_ms": 0.0604
+      "elapsed_ms": 0.3602
     }
   ]
 }

@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 5.6.0-rc.1 — 2026-09-30
+
+Connect the first M01–M06 tool workflow: import actual records, propose finite experiments, track resource costs, execute a locked project command, evaluate rule changes and restore a live decision. Use RDS itself to develop and verify this release.
+
+- Import local configuration, CSV/JSON metrics, raw logs and RDS receipts with source locations and protocol bindings. Preserve conflicts, missing evidence and the distinction between manual input, file observations and program derivations.
+- Compose candidates from finite typed intervention templates, retain competing explanations, deduplicate interventions and report bounded search truncation. No fabricated success probabilities or information-gain scores.
+- Report measured and estimated costs separately, including failed attempts; check complete control identity at reuse. Add a CPU-validated project runner with locked commands, output checks, reservations and interruption recovery. Windows background execution uses Task Scheduler; the local registration test required elevated permissions.
+- Require an independently repeated, version-bound case replay before rule adoption. Keep candidate, adoption/rejection and rollback records; structural lint and `--force` cannot bypass the gate. Reflect real failed receipts into execution-review candidates.
+- Save append-only decision checkpoints and reconcile them with live state without rerunning completed jobs, resetting budgets or turning historical text into authorization.
+- Hash at evidence import, execution boundaries, control reuse and rule adoption/rollback. Reuse a read within one operation; ordinary status does not scan all project files. Retain the necessary artifact bindings and use canonical JSON for ordinary equality checks.
+- Record optional scientific preferences separately from project-development instructions. Rewrite the three README entry points and both contribution guides for people and their AI; use the supplied Penrose triangle as a native SVG logo with light/dark wordmarks.
+
+Validation: 273 unit tests (269 passed, 4 optional skips); six historical replay checks; four synthetic red-team scenarios; eight public-task-adapted component cases with 28 passing criteria. The actual RDS project workflow ran 65 development checks with no failures or skips, imported their results, produced Advisor output, replayed four finite rule cases and performed isolated adoption plus rollback. The rule fixture changed from 1/4 to 4/4 passing cases, with two improvements on its declared held-out cases and no regressions. These are software/component checks, not independent research-policy or end-to-end scientific scores. No GPU, paid model API or multi-seed campaign was used.
+
 - Rename the GitHub repository to `kongtou20070406/research-direction-selector` with the owner's authorization, and update the public documentation links and clone instructions. RDS remains the project abbreviation.
 - Adopt the published scientific-autonomy taxonomy from Kramer et al. (Machine Learning, 2026, §5/Table 5), retaining its L0–L5 numbering and definitions. Distinguish it from the older `L3`/`L4` engineering labels and from RSI improvement claims.
 - Describe current scoped L2 functionality, the near-term goal of L2 automation across all six research stages, and long-term L4/L5 research targets without claiming completed autonomous discovery.

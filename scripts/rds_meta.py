@@ -6,11 +6,16 @@ Zero external runtime dependencies; supports PyYAML if installed, with a standar
 """
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import shlex
 import sys
 import time
+import tempfile
+from contextlib import contextmanager
+from copy import deepcopy
+from uuid import uuid4
 
 try:
     import yaml
@@ -187,6 +192,10 @@ def load_judgment_graph(graph_path=None):
     path = Path(graph_path).resolve() if graph_path else default_graph_path()
     require(path.exists(), f"Judgment graph file not found: {path}")
     raw = path.read_text(encoding="utf-8-sig")
+    return path, _parse_graph(raw)
+
+
+def _parse_graph(raw):
     if yaml is not None:
         try:
             data = yaml.safe_load(raw)
@@ -198,51 +207,227 @@ def load_judgment_graph(graph_path=None):
         except Exception:
             data = parse_simple_yaml(raw)
     require(isinstance(data, dict) and "nodes" in data, "Judgment graph must have a top-level 'nodes' list")
-    return path, data
+    return data
 
 
 def save_judgment_graph(path, data):
     path = Path(path).resolve()
     # Keep saved graphs readable when optional PyYAML is later unavailable.
     content = dump_simple_yaml(data)
-    path.write_text(content, encoding="utf-8")
+    _atomic_bytes(path, content.encode("utf-8"))
 
 
-def apply_rule(rule_dict, graph_path=None, force=False, dry_run=False):
-    """Applies a validated rule to judgment-graph.yaml atomically."""
-    path, graph = load_judgment_graph(graph_path)
+def _atomic_bytes(path, content):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".rds-", delete=False) as handle:
+            temporary = Path(handle.name)
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary and temporary.exists():
+            temporary.unlink()
+
+
+def _load_object(value, name):
+    if isinstance(value, (str, Path)):
+        raw = Path(value).read_bytes()
+        require(len(raw) <= 2 * 1024 * 1024, f"{name} exceeds 2 MiB")
+        value = json.loads(raw.decode("utf-8-sig"), parse_constant=lambda v: (_ for _ in ()).throw(ValueError(f"Nonfinite {name}")))
+    require(isinstance(value, dict), f"{name} must be an object or JSON path")
+    require(len(json.dumps(value, allow_nan=False).encode("utf-8")) <= 2 * 1024 * 1024,
+            f"{name} exceeds 2 MiB")
+    return deepcopy(value)
+
+
+def _records_dir(path, record_dir):
+    base = path.parent.parent if path.parent.name == "references" else path.parent
+    return Path(record_dir).resolve() if record_dir else base / ".rds" / "rsi"
+
+
+def _write_record(directory, record, path=None):
+    record = deepcopy(record)
+    record.pop("record_sha256", None)
+    record["record_sha256"] = digest(record)
+    path = Path(path) if path else directory / "records" / f"{time.time_ns()}-{uuid4().hex[:8]}.json"
+    _atomic_bytes(path, json.dumps(record, sort_keys=True, ensure_ascii=False, allow_nan=False,
+                                indent=2).encode("utf-8"))
+    return path
+
+
+@contextmanager
+def _graph_lock(directory):
+    directory.mkdir(parents=True, exist_ok=True)
+    lock = directory / "adoption.lock"
+    try:
+        descriptor = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError as exc:
+        raise ValueError("Another adoption/rollback holds the RSI lock; inspect an abandoned lock before retrying") from exc
+    try:
+        os.write(descriptor, str(os.getpid()).encode("ascii"))
+        yield
+    finally:
+        os.close(descriptor)
+        lock.unlink()
+
+
+def apply_rule(rule_dict, graph_path=None, force=False, dry_run=False, *,
+               evaluation=None, cases=None, record_dir=None):
+    """Adopt only after independent CPU replay; force never bypasses this gate."""
+    from rds_rsi import evaluate_candidate
+    path = Path(graph_path).resolve() if graph_path else default_graph_path()
+    original = path.read_bytes()
+    graph = _parse_graph(original.decode("utf-8-sig"))
     nodes = graph.get("nodes", [])
     existing_map = {n["id"]: idx for idx, n in enumerate(nodes)}
-    
     validate_rule(rule_dict, existing_ids=set(existing_map), allow_update=force)
-    
     rid = rule_dict["id"]
-    updated = False
-    if rid in existing_map:
-        if not force:
-            raise ValueError(f"Rule '{rid}' exists. Set force=True to update.")
-        nodes[existing_map[rid]] = rule_dict
-        updated = True
-    else:
-        nodes.append(rule_dict)
-    
+    updated = rid in existing_map
     rule_sha = digest(rule_dict)
+    result = {"status": "VALIDATED_ONLY", "action": "UPDATED" if updated else "CREATED",
+              "rule_id": rid, "rule_sha256": rule_sha, "graph_path": str(path),
+              "total_rules": len(nodes) + int(not updated), "adopted": False,
+              "research_policy_gain_measured": False}
+    if dry_run and evaluation is None and cases is None:
+        result["assurance"] = "SCHEMA_ONLY"
+        return result
+    directory = _records_dir(path, record_dir)
+    _atomic_bytes(directory / "candidates" / f"{rule_sha}.json",
+                  json.dumps(rule_dict, sort_keys=True, ensure_ascii=False, allow_nan=False, indent=2).encode("utf-8"))
+    record = {"status": "REJECTED", "rule_id": rid, "candidate_sha256": rule_sha,
+              "graph_path": str(path), "before_raw_sha256": digest(original),
+              "base_graph_sha256": digest(graph), "research_policy_gain_measured": False}
+    try:
+        supplied = _load_object(evaluation, "Evaluation report")
+        pack = _load_object(cases, "Original casepack")
+        # Do not trust report flags: execute both variants again and bind outputs.
+        replay = evaluate_candidate(rule_dict, graph, pack)
+        require(json.dumps({k: v for k, v in supplied.items() if k != "elapsed_ms"}, sort_keys=True, allow_nan=False) ==
+                json.dumps({k: v for k, v in replay.items() if k != "elapsed_ms"}, sort_keys=True, allow_nan=False),
+                "Evaluation report differs from independently executed replay")
+        require(supplied.get("bindings") == replay.get("bindings"), "Evaluation bindings changed or are absent")
+        require(supplied.get("replay_sha256") == replay.get("replay_sha256") and replay.get("replay_sha256"),
+                "Evaluation outputs were rewritten or do not match independent replay")
+        require(supplied.get("status") == replay["status"] == "ACCEPTABLE_REGRESSION_CHANGE"
+                and supplied.get("adoption_eligible") is True and replay["adoption_eligible"] is True,
+                "Independent case replay rejects adoption: " + "; ".join(replay["rejection_reasons"]))
+        require(supplied.get("cases_evaluated") == replay["cases_evaluated"] > 0,
+                "Evaluation case counts do not match actual replay")
+        record.update(bindings=replay["bindings"], replay_sha256=replay["replay_sha256"],
+                      cases_evaluated=replay["cases_evaluated"], counts=replay["counts"])
+        result.update(assurance="CPU_CASE_REPLAY", evaluation=replay)
+        if dry_run:
+            record.update(status="VALIDATED_ONLY", reason="Dry run; no adoption")
+            result["record_path"] = str(_write_record(directory, record))
+            return result
+        if updated:
+            nodes[existing_map[rid]] = deepcopy(rule_dict)
+        else:
+            nodes.append(deepcopy(rule_dict))
+        new_bytes = dump_simple_yaml(graph).encode("utf-8")
+        backup = directory / "backups" / f"{digest(original)}.graph"
+        with _graph_lock(directory):
+            require(path.read_bytes() == original, "Graph changed during evaluation; rerun against the current graph")
+            _atomic_bytes(backup, original)
+            _atomic_bytes(directory / "casepacks" / f"{digest(pack)}.json",
+                          json.dumps(pack, sort_keys=True, ensure_ascii=False, allow_nan=False, indent=2).encode("utf-8"))
+            record.update(status="PREPARED_ADOPTION", backup_path=str(backup),
+                          after_raw_sha256=digest(new_bytes), candidate_graph_sha256=digest(graph))
+            record_path = _write_record(directory, record)
+            _atomic_bytes(path, new_bytes)
+            try:
+                record["status"] = "ADOPTED"
+                _write_record(directory, record, record_path)
+            except Exception:
+                _atomic_bytes(path, original)
+                raise
+        result.update(status="APPLIED", adopted=True, record_path=str(record_path),
+                      backup_path=str(backup), total_rules=len(nodes))
+        return result
+    except (ValueError, TypeError, KeyError, OSError) as exc:
+        record["status"] = "REJECTED"
+        record["reason"] = str(exc)
+        rejected = _write_record(directory, record)
+        raise ValueError(f"{exc}; rejection record: {rejected}") from exc
+
+
+def rollback_rule(record_path, graph_path=None, dry_run=False, *, record_dir=None):
+    """Restore the complete original bytes, refusing to overwrite newer edits."""
+    record = _load_object(record_path, "Adoption record")
+    signature = record.pop("record_sha256", None)
+    require(signature == digest(record), "Adoption record was changed")
+    require(record.get("status") in {"ADOPTED", "PREPARED_ADOPTION"}, "Record is not an adoption")
+    path = Path(graph_path or record["graph_path"]).resolve()
+    require(str(path) == record["graph_path"], "Rollback graph does not match adoption record")
+    original = Path(record["backup_path"]).read_bytes()
+    require(digest(original) == record["before_raw_sha256"], "Original graph backup was changed")
+    require(digest(path.read_bytes()) == record["after_raw_sha256"], "Graph has newer edits; rollback would overwrite them")
+    result = {"status": "VALIDATED_ONLY" if dry_run else "ROLLED_BACK", "graph_path": str(path),
+              "restored_raw_sha256": digest(original), "adoption_record": str(Path(record_path).resolve())}
     if not dry_run:
-        save_judgment_graph(path, graph)
-    
-    return {
-        "status": "APPLIED" if not dry_run else "VALIDATED_ONLY",
-        "action": "UPDATED" if updated else "CREATED",
-        "rule_id": rid,
-        "rule_sha256": rule_sha,
-        "graph_path": str(path),
-        "total_rules": len(nodes)
-    }
+        directory = _records_dir(path, record_dir)
+        with _graph_lock(directory):
+            current = path.read_bytes()
+            require(digest(current) == record["after_raw_sha256"], "Graph changed before rollback")
+            rollback = {"status": "PREPARED_ROLLBACK", "adoption_record": result["adoption_record"],
+                        "adoption_record_sha256": signature, "graph_path": str(path),
+                        "restored_raw_sha256": digest(original)}
+            result["record_path"] = str(_write_record(directory, rollback))
+            _atomic_bytes(path, original)
+            try:
+                rollback["status"] = "ROLLED_BACK"
+                _write_record(directory, rollback, result["record_path"])
+            except Exception:
+                _atomic_bytes(path, current)
+                raise
+    return result
 
 
 def reflect_from_state(state, receipts, obelisk_evidence=None):
     """Synthesizes candidate rules from empirical failures, refutations, or stagnations."""
     proposals = []
+    # Execution diagnostics are scoped to registered run identities, not science.
+    runs = state.get("runs", {})
+    if isinstance(runs, list):
+        runs = {r.get("run_id", r.get("id")): r for r in runs if isinstance(r, dict)}
+    if not isinstance(runs, dict):
+        runs = {}
+    failures = []
+    for receipt in receipts:
+        if not isinstance(receipt, dict) or receipt.get("run_status") not in {"FAILED", "INTERRUPTED"}:
+            continue
+        rid, receipt_id = receipt.get("run_id"), receipt.get("sha256")
+        run = runs.get(rid)
+        if not isinstance(rid, str) or not rid or not isinstance(receipt_id, str) or not receipt_id or not isinstance(run, dict):
+            continue
+        if run.get("attempt_id") and run["attempt_id"] != receipt.get("attempt_id"):
+            continue
+        errors = receipt.get("errors", [])
+        if not isinstance(errors, list) or not all(isinstance(error, str) for error in errors):
+            continue
+        if not errors and receipt["run_status"] != "INTERRUPTED":
+            continue
+        failures.append((receipt, errors))
+    for receipt, errors in failures[:16]:
+        rid = receipt["run_id"]
+        proposals.append({
+            "id": "execution-review-" + identity(rid),
+            "scope": "execution-protocol-review",
+            "trigger": f"Registered run {rid} has a {receipt['run_status']} receipt",
+            "correction": "Inspect this attempt's execution error and protocol before interpreting task or mechanism outcomes",
+            "alternatives": ["runtime or dependency failure", "invalid protocol, binding, or missing output"],
+            "discriminator": "Read the existing stderr, stdout, manifest and receipt for this run and attempt; locate the failing check",
+            "primary_gate": "Any authorized repair must complete the execution checks; successful execution alone does not establish research gain",
+            "falsifier": "Reject this diagnostic if the receipt or log belongs to a different registered run or attempt",
+            "sources": [f"Project receipt run_id={rid} attempt_id={receipt.get('attempt_id')} sha256={receipt['sha256']}", *errors[:8]],
+            "source_receipt": {"run_id": rid, "attempt_id": receipt.get("attempt_id"), "sha256": receipt["sha256"]},
+            "candidate_only": True, "auto_apply": False, "research_policy_gain_measured": False,
+            "reflection_limits": {"failed_candidates": 16, "truncated": len(failures) > 16}
+        })
     
     # 1. Check for mechanism refutations or failed manipulation gates
     for hid, node in state.get("hypotheses", {}).items():
