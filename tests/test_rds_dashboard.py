@@ -108,7 +108,7 @@ class DashboardTests(unittest.TestCase):
         response = json.loads(result.stdout.decode("utf-8"))
         self.assertEqual(response["output"], str(output.resolve()))
         self.assertEqual(response["ledger_type"], "REFERENCE")
-        self.assertEqual(response["source"], str(path))
+        self.assertEqual(response["source"], str(path.resolve()))
         self.assertTrue(response["available"])
 
     def test_script_injection_is_encoded_and_roundtrips(self):
