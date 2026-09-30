@@ -6,7 +6,55 @@ It does not solve parameter ranges or establish causes from endpoint telemetry.
 import json
 import math
 from pathlib import Path
+import hashlib
+import sqlite3
+import time
 from typing import Any, Dict, List, Optional
+
+MAX_DOCUMENT_BYTES = 2 * 1024 * 1024
+MAX_KNOWLEDGE_ROWS = 10000
+
+
+def _configure_wal(db):
+    # SQLite's initial journal-mode transition can return BUSY without using
+    # busy_timeout. Retry only this cold-start transition, before any transaction.
+    deadline = time.monotonic() + 15
+    while True:
+        try:
+            db.execute("PRAGMA journal_mode=WAL")
+            return
+        except sqlite3.OperationalError as exc:
+            code = getattr(exc, "sqlite_errorcode", 0) & 255
+            if code not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED) or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.01)
+
+
+def _read_document(path):
+    if not path.is_file():
+        raise ValueError("Document must be an existing regular file")
+    with path.open("rb") as handle:
+        raw = handle.read(MAX_DOCUMENT_BYTES + 1)
+    if len(raw) > MAX_DOCUMENT_BYTES:
+        raise ValueError("Advisor document exceeds the 2 MiB limit")
+    try:
+        return raw, raw.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ValueError("Advisor document must be UTF-8") from exc
+
+
+def _knowledge_entry(rule, entry_id, document_sha):
+    if (not isinstance(rule, dict) or type(rule.get("line_number")) is not int
+            or rule["line_number"] < 1 or not isinstance(rule.get("excerpt"), str)
+            or not rule["excerpt"].strip() or not isinstance(rule.get("source"), str)
+            or not rule["source"].strip() or len(rule["source"]) > 1024
+            or not isinstance(rule.get("topic"), str) or not rule["topic"].strip()
+            or len(rule["topic"]) > 256):
+        raise ValueError("Invalid legacy advisor knowledge entry")
+    normalized = {key: rule[key] for key in ("line_number", "excerpt", "topic", "source")}
+    normalized["excerpt"] = normalized["excerpt"][:120]
+    return entry_id, document_sha, json.dumps(normalized, ensure_ascii=False, allow_nan=False, sort_keys=True)
+
 
 
 def _finite_nonnegative(value):
@@ -21,6 +69,33 @@ def _finite_nonnegative(value):
 class RDSAdvisor:
     def __init__(self, root_dir: Path):
         self.root_dir = root_dir.resolve()
+        self.knowledge_db = self.root_dir / ".rds" / "advisor.sqlite3"
+
+    def _legacy_entries(self):
+        path = self.root_dir / ".rds" / "advisor_knowledge.json"
+        if not path.exists():
+            return []
+        raw, text = _read_document(path)
+        rows = json.loads(text)
+        if not isinstance(rows, list) or len(rows) > MAX_KNOWLEDGE_ROWS:
+            raise ValueError("Legacy advisor knowledge must contain at most 10000 entries")
+        digest = hashlib.sha256(raw).hexdigest()
+        entries = []
+        for row in rows:
+            entry_id = hashlib.sha256(json.dumps(row, sort_keys=True, ensure_ascii=False,
+                                                allow_nan=False).encode("utf-8")).hexdigest()
+            entries.append(_knowledge_entry(row, "legacy:" + entry_id, digest))
+        return entries
+
+    def _needs_legacy_migration(self):
+        if not self.knowledge_db.exists():
+            return True
+        db = sqlite3.connect(self.knowledge_db.as_uri() + "?mode=ro", uri=True, timeout=15)
+        try:
+            table = db.execute("SELECT 1 FROM sqlite_master WHERE name='metadata'").fetchone()
+            return table is None or db.execute("SELECT 1 FROM metadata WHERE key='legacy_migrated'").fetchone() is None
+        finally:
+            db.close()
 
     def advise_on_rejection(self, gate_error: str, plan_spec: Dict[str, Any]) -> Dict[str, Any]:
         """Provides actionable, programmatic mathematical advice when a plan is rejected."""
@@ -92,7 +167,13 @@ class RDSAdvisor:
             "action_items": []
         }
 
-        if compressed_telemetry.get("nan_or_inf"):
+        if not isinstance(compressed_telemetry, dict):
+            advice["diagnostics"].append("遥测必须是具名字段对象；无法据此诊断。")
+            return advice
+        nan_flag = compressed_telemetry.get("nan_or_inf")
+        if nan_flag is not None and type(nan_flag) is not bool:
+            advice["diagnostics"].append("nan_or_inf 必须是布尔报告字段；字符串或数值不构成非有限值证据。")
+        if nan_flag is True:
             advice["status"] = "CRITICAL_ANOMALY"
             advice["diagnostics"].append("遥测报告 NaN/Inf；原因未知，需要定位首个非有限张量与运算。")
             advice["action_items"].append("检查除法/对数定义域；eps=1e-7 或缩小学习率仅作为待对照验证的候选。")
@@ -110,6 +191,9 @@ class RDSAdvisor:
             advice["action_items"].append("检查注意力权重或深度残差分支的缩放因子 (1/sqrt(d_k))。")
 
         trend = compressed_telemetry.get("loss_trend")
+        if trend is not None and not isinstance(trend, str):
+            advice["diagnostics"].append("损失趋势字段无效；无法据此诊断。")
+            trend = None
         if trend == "STAGNANT":
             advice["status"] = "PLATEAU_SIGNAL"
             advice["diagnostics"].append("日志端点提示损失变化较小；这不确定收敛状态或停滞原因。")
@@ -166,12 +250,14 @@ class RDSAdvisor:
         return result
 
     def ingest_document(self, doc_path: Path, topic: Optional[str] = None) -> Dict[str, Any]:
-        """Ingests guidelines from research papers or tuning docs to expand the advisor's knowledge."""
+        """Store heuristic excerpts with a short isolated WAL transaction."""
         doc_path = doc_path.resolve()
         if not doc_path.exists():
             raise FileNotFoundError(f"Document not found: {doc_path}")
-
-        text = doc_path.read_text(encoding="utf-8", errors="replace")
+        if topic is not None and (not isinstance(topic, str) or not topic.strip() or len(topic) > 256):
+            raise ValueError("Advisor topic must be a nonempty string of at most 256 characters")
+        raw, text = _read_document(doc_path)
+        document_sha = hashlib.sha256(raw).hexdigest()
         extracted_rules = []
         
         # Pattern matching for heuristics (e.g. "if ... suggest ...", "when ... avoid ...")
@@ -185,25 +271,45 @@ class RDSAdvisor:
                     "topic": topic or "general_tuning",
                     "source": doc_path.name
                 })
-
-        knowledge_file = self.root_dir / ".rds" / "advisor_knowledge.json"
-        existing = []
-        if knowledge_file.exists():
-            try:
-                with open(knowledge_file, "r", encoding="utf-8") as f:
-                    existing = json.load(f)
-            except Exception:
-                existing = []
-
-        existing.extend(extracted_rules)
-        knowledge_file.parent.mkdir(parents=True, exist_ok=True)
-        knowledge_file.write_text(json.dumps(existing, indent=2, ensure_ascii=False), encoding="utf-8")
+                if len(extracted_rules) > MAX_KNOWLEDGE_ROWS:
+                    raise ValueError("Advisor document exceeds the 10000-excerpt limit")
+        entries = []
+        for rule in extracted_rules:
+            key = f"{document_sha}:{rule['line_number']}:{rule['topic']}"
+            entries.append(_knowledge_entry(rule, hashlib.sha256(key.encode("utf-8")).hexdigest(), document_sha))
+        # Parsing and possible legacy loading finish before any writer lock.
+        legacy = self._legacy_entries() if self._needs_legacy_migration() else []
+        self.knowledge_db.parent.mkdir(parents=True, exist_ok=True)
+        db = sqlite3.connect(self.knowledge_db, timeout=15, isolation_level=None)
+        try:
+            _configure_wal(db)
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("CREATE TABLE IF NOT EXISTS knowledge (entry_id TEXT PRIMARY KEY, document_sha TEXT NOT NULL, body TEXT NOT NULL)")
+            db.execute("CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            migrate = db.execute("SELECT 1 FROM metadata WHERE key='legacy_migrated'").fetchone() is None
+            existing_ids = {row[0] for row in db.execute("SELECT entry_id FROM knowledge")}
+            candidates = {entry[0]: entry for entry in ((legacy if migrate else []) + entries)}
+            added = [entry for entry_id, entry in candidates.items() if entry_id not in existing_ids]
+            if len(existing_ids) + len(added) > MAX_KNOWLEDGE_ROWS:
+                raise ValueError("Advisor knowledge exceeds the 10000-entry limit")
+            db.executemany("INSERT INTO knowledge VALUES (?,?,?)", added)
+            if migrate:
+                db.execute("INSERT INTO metadata VALUES ('legacy_migrated','1')")
+            total = len(existing_ids) + len(added)
+            db.commit()
+        except BaseException:
+            db.rollback()
+            raise
+        finally:
+            db.close()
 
         return {
             "status": "INGESTED",
+            "assurance": "HEURISTIC_ONLY",
             "doc_path": str(doc_path),
             "rules_extracted": len(extracted_rules),
-            "total_knowledge_entries": len(existing)
+            "rules_added": len(added),
+            "total_knowledge_entries": total
         }
 
     def recommend_next_directions(self, state: Dict[str, Any], judgment_graph: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -218,7 +324,7 @@ class RDSAdvisor:
             recommendations.append({
                 "type": "ORTHOGONAL_BRANCH_RECOMMENDATION",
                 "urgency": "HIGH",
-                "reason": f"当前分支 '{active_branch}' 已连续 {stagnation_count} 次无有效收益，已濒临或触发停滞熔断。",
+                "reason": f"状态记录当前分支 '{active_branch}' 连续 {stagnation_count} 次无有效收益；可比较正交研究路线。",
                 "recommended_action": "执行 'branch fork'，转向正交维度。",
                 "candidate_dimensions": [
                     {"dimension": "frequency_representation", "concept": "频域残差滤波 / FFT 特征分离", "basis": "避免在空间微调参数"},
@@ -232,24 +338,32 @@ class RDSAdvisor:
             recommendations.append({
                 "type": "COMPUTE_REUSE_ADVICE",
                 "urgency": "INFO",
-                "reason": f"本地已有 {len(cache)} 组验证过的空白对照缓存。",
+                "reason": f"本地账本记录了 {len(cache)} 组对照缓存，具体绑定仍需核对。",
                 "recommended_action": "当前仅复用标量参考运行器的对照结果；需基线、数据和执行器绑定匹配，并检查 control_reused 收据。"
             })
 
         # Priority 3: Check learned document knowledge
-        knowledge_file = self.root_dir / ".rds" / "advisor_knowledge.json"
-        if knowledge_file.exists():
+        if self.knowledge_db.exists():
             try:
-                with open(knowledge_file, "r", encoding="utf-8") as f:
-                    k_list = json.load(f)
-                if k_list:
+                db = sqlite3.connect(self.knowledge_db.as_uri() + "?mode=ro", uri=True, timeout=0.05,
+                                     isolation_level=None)
+                try:
+                    db.execute("BEGIN")
+                    count = db.execute("SELECT COUNT(*) FROM knowledge").fetchone()[0]
+                    latest = db.execute("SELECT body FROM knowledge ORDER BY rowid DESC LIMIT 1").fetchone()
+                finally:
+                    db.close()
+                if count:
                     recommendations.append({
                         "type": "DOC_GROUNDED_INSIGHT",
                         "urgency": "INFO",
-                        "reason": f"从调查的文档中提炼了 {len(k_list)} 条领域先验。",
-                        "latest_insight": k_list[-1].get("excerpt")
+                        "reason": f"导入文档中有 {count} 条关键词摘录；适用性和真实性仍需检验。",
+                        "latest_insight": json.loads(latest[0])["excerpt"]
                     })
-            except Exception:
-                pass
+            except (sqlite3.Error, ValueError, KeyError, TypeError, AttributeError):
+                recommendations.append({"type": "DOC_KNOWLEDGE_UNAVAILABLE", "urgency": "INFO",
+                                        "reason": "无法读取文档摘录库；现有摘录数量和内容未确认。"})
 
+        for recommendation in recommendations:
+            recommendation["assurance"] = "HEURISTIC_ONLY"
         return recommendations

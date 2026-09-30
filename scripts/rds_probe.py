@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from rds_formal_kernel import (ResourceLimit, STATEMENTS, UnsupportedExpression,
                                bounded, check_certificate, exact_probe)
 
-FORMAL_KINDS = {"strict_algebraic_threshold", "contraction_boundary", "dynamics", "threshold_necessity"}
+FORMAL_KINDS = {"strict_algebraic_threshold", "contraction_boundary", "dynamics", "threshold_necessity", "declarative"}
 
 
 def formal_requirement(hypothesis):
@@ -33,8 +33,14 @@ def formal_requirement(hypothesis):
     claim = hypothesis.get("formal")
     if claim is None:
         return None
-    if not isinstance(claim, dict) or claim.get("kind") not in FORMAL_KINDS:
-        raise ValueError("formal.kind must be strict_algebraic_threshold, contraction_boundary or dynamics")
+    if not isinstance(claim, dict) or not isinstance(claim.get("kind"), str) or claim["kind"] not in FORMAL_KINDS:
+        raise ValueError("Unsupported formal.kind; use an explicit threshold or declarative statement")
+    if claim["kind"] == "declarative":
+        if set(claim) != {"kind", "statement"} or not isinstance(claim["statement"], dict):
+            raise ValueError("Declarative formal requires exactly kind and statement")
+        from rds_verify import _bounded_json
+        _bounded_json(claim["statement"])
+        return claim
     if claim.get("kind") != "dynamics":
         if claim.get("quantity", "scalar_property") != "scalar_property":
             raise ValueError("Reference adapter requires quantity=scalar_property; general matrix/dynamical claims need another verifier")
@@ -65,13 +71,27 @@ def admission_probe(hypothesis, source):
     if formal is None:
         return {"status": "PASS", "assurance": "AST_ONLY", "backend": "ast",
                 "reason": "Syntax checked; no formal property was declared"}
+    if formal["kind"] == "declarative":
+        return declarative_probe(formal)
     if formal["kind"] == "dynamics":
         return {"status": "UNKNOWN", "assurance": "NONE",
-                "reason": "Dynamics declared; no dynamics verifier is installed in this reference adapter"}
+                "reason": "Use formal.kind=declarative and an explicit affine dynamics statement"}
     try:
         return formal_probe(functions, formal)
     except (ImportError, NotImplementedError, ValueError, TypeError) as exc:
         return {"status": "UNKNOWN", "assurance": "NONE", "reason": str(exc)}
+
+
+def declarative_probe(formal, committed=None):
+    from rds_verify import checked_result, verify
+    if committed is None:
+        result = verify(formal["statement"])
+    else:
+        certificate = committed.get("certificate") if isinstance(committed, dict) else None
+        result = checked_result(formal["statement"], certificate)
+    return {**result, "claim_relation": "declared_side_condition_only",
+            "observed_status": "NOT_APPLICABLE",
+            "reason": "Declared mathematical model; no equivalence to runner or training execution was proved"}
 
 
 def rational(value):
@@ -222,7 +242,13 @@ def formal_probe(functions, formal, committed_probe=None):
     except ResourceLimit as exc:
         return {"status": "UNKNOWN", "assurance": "NONE", "reason": str(exc)}
     except UnsupportedExpression:
-        return symbolic_probe(functions, formal)
+        try:
+            return symbolic_probe(functions, formal)
+        except Exception as exc:
+            # Solver failures (including SymPy PolynomialError) are lack of a
+            # result, never scientific FAIL. Process deadlines are enforced by
+            # the isolated CLI caller; BaseException is not swallowed here.
+            return {"status": "UNKNOWN", "assurance": "NONE", "reason": str(exc)}
 
 
 def symbolic_probe(functions, formal):
@@ -287,13 +313,13 @@ def execute(payload):
         raise ValueError("Declare formal on the hypothesis, not an unbound payload.formal")
     if formal and formal["kind"] == "dynamics":
         return {"probe": {"status": "UNKNOWN", "assurance": "NONE",
-                          "reason": "Dynamics verifier unavailable"}}
+                          "reason": "Use a declarative affine dynamics statement"}}
     functions = parse_source(payload["source"])
     rows = read_rows(payload["data"])
     cached_control = payload.get("cached_control")
     observations = []
     for sid, x, target in rows:
-        if formal and not rational(formal["domain"][0]) <= x <= rational(formal["domain"][1]):
+        if formal and formal["kind"] != "declarative" and not rational(formal["domain"][0]) <= x <= rational(formal["domain"][1]):
             raise ValueError("Observed input outside committed formal domain")
         if cached_control and sid in cached_control:
             control = bounded(Fraction(cached_control[sid]["control"]))
@@ -313,7 +339,10 @@ def execute(payload):
             total = bounded(total + Fraction(row[key]))
         return bounded(total / len(rows))
     probe = {"status": "NOT_APPLICABLE", "assurance": "NONE"}
-    if formal:
+    if formal and formal["kind"] == "declarative":
+        probe = declarative_probe(formal, payload.get("admission_probe"))
+        probe["execution_assurance"] = "EXACT_OBSERVATION_CHECKED"
+    elif formal:
         try:
             probe = formal_probe(functions, formal, payload.get("admission_probe"))
         except (ImportError, NotImplementedError, ValueError, TypeError) as exc:

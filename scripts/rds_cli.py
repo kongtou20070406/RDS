@@ -102,9 +102,11 @@ def engine_id():
     except importlib.metadata.PackageNotFoundError:
         sympy_version = None
     here = Path(__file__).resolve().parent
+    from rds_verify import verifier_id
     return digest({"cli": digest((here / "rds_cli.py").read_bytes()),
                    "probe": digest((here / "rds_probe.py").read_bytes()),
                    "formal_kernel": digest((here / "rds_formal_kernel.py").read_bytes()),
+                   "declarative_verifier": verifier_id(),
                    "python": sys.version, "sympy": sympy_version})
 
 
@@ -138,10 +140,14 @@ def cached_admission(state, binding, hypothesis, source):
             continue
         probe = old.get("admission_probe", {})
         certificate = probe.get("certificate")
-        if (probe.get("status") == "PASS" and isinstance(certificate, dict)
-                and certificate.get("verdict") == "PASS"
-                and check_certificate(parse_source(source), formal, certificate)):
-            return probe
+        if probe.get("status") == "PASS" and isinstance(certificate, dict) and certificate.get("verdict") == "PASS":
+            if formal["kind"] == "declarative":
+                from rds_verify import check_certificate as check_declarative
+                valid = check_declarative(formal["statement"], certificate)
+            else:
+                valid = check_certificate(parse_source(source), formal, certificate)
+            if valid:
+                return probe
     return None
 
 
@@ -575,16 +581,24 @@ def assess(result, contract, purpose, clean, formal):
     final = purpose == "confirm" and clean and contract["evaluation_scope"] == "finite_locked_dataset"
     task = ("CONFIRMED" if useful else "REFUTED") if final else ("EXPLORATORY" if useful else "INCONCLUSIVE")
     probe, mechanism = result["probe"], "UNTESTED"
-    if formal:
+    side_condition = formal and formal.get("kind") == "declarative"
+    if side_condition:
+        mechanism = "NOT_TESTED"
+    elif formal:
         mechanism = "NOT_TESTED" if probe["status"] == "FAIL" else "INCONCLUSIVE"
         # Passing manipulation never supports causality. This adapter can refute
         # ONLY its typed necessity claim with an executed exact counterexample.
         necessity = formal_requirement({"formal": formal}).get("statement") == "threshold_necessity"
         if necessity and probe["status"] == "PASS" and probe.get("necessity_counterexamples"):
             mechanism = "REFUTED"
-    return {"task_gain": task, "mechanism": mechanism, "search_policy": "UNTESTED",
-            "scope": contract["evaluation_scope"], "gain": result["gain"], "manipulation": probe["status"],
+    outcome = {"task_gain": task, "mechanism": mechanism, "search_policy": "UNTESTED",
+            "scope": contract["evaluation_scope"], "gain": result["gain"],
+            "manipulation": "NOT_APPLICABLE" if side_condition else probe["status"],
             "note": "Finite benchmark comparison only; no population inference or causal support"}
+    if side_condition:
+        outcome.update(formal_status=probe["status"], formal_assurance=probe.get("assurance", "NONE"),
+                       claim_relation="declared_side_condition_only")
+    return outcome
 
 
 def cmd_decide(args, rds):
@@ -851,6 +865,20 @@ def parser():
     commands.add_parser("decide").add_argument("--run", required=True)
     commands.add_parser("status")
 
+    formal = commands.add_parser("formal", help="Declare, prove and replay bounded mathematical statements")
+    f_actions = formal.add_subparsers(dest="action", required=True)
+    f_actions.add_parser("rules")
+    f_verify = f_actions.add_parser("verify")
+    f_verify.add_argument("--spec", required=True)
+    f_verify.add_argument("--output")
+    f_verify.add_argument("--no-cache", action="store_true")
+    f_verify.add_argument("--tactics", nargs="+", choices=["rule", "gershgorin", "spectral_radius",
+                                                         "scale_invariance", "lean4", "interval"],
+                          help="Run a bounded explicit tactic chain without the default proof cache")
+    f_check = f_actions.add_parser("check")
+    f_check.add_argument("--spec", required=True)
+    f_check.add_argument("--certificate", required=True)
+
     # Policy RSI: Branch & Stagnation Engine
     branch = commands.add_parser("branch", help="RSI Policy Stagnation & Branching engine")
     b_actions = branch.add_subparsers(dest="action", required=True)
@@ -915,6 +943,31 @@ def main():
             from rds_obelisk import history_command
             history_command(args)
             return 0
+        if args.command == "formal":
+            from rds_verify import checked_result, rules, verify
+            from rds_verify_types import MAX_CERTIFICATE_BYTES
+            if args.action == "rules":
+                result = {"rules": rules()}
+            else:
+                spec = strict_json(read_bounded(args.spec, MAX_CERTIFICATE_BYTES).decode("utf-8-sig"))
+                if args.action == "check":
+                    artifact = strict_json(read_bounded(args.certificate, MAX_CERTIFICATE_BYTES).decode("utf-8-sig"))
+                    certificate = artifact.get("certificate", artifact) if isinstance(artifact, dict) else artifact
+                    result = checked_result(spec, certificate)
+                elif args.tactics:
+                    from rds_verify import LeanFormalEngine
+                    result = LeanFormalEngine().verify(spec, args.tactics)
+                elif args.no_cache:
+                    result = verify(spec)
+                else:
+                    from rds_proof_cache import ProofCache
+                    result = ProofCache(rds.directory / "proofs.sqlite3").verify(spec)
+                if args.action == "verify" and args.output:
+                    raw = canonical(result).encode("utf-8")
+                    require(len(raw) <= MAX_CERTIFICATE_BYTES, "Proof artifact exceeds byte limit")
+                    Path(args.output).write_bytes(raw)
+            print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
+            return {"PASS": 0, "FAIL": 1, "UNKNOWN": 2}.get(result.get("status"), 0)
         if args.command == "advise":
             result = cmd_advise(args, rds)
         elif args.command == "branch":

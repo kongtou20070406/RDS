@@ -1,6 +1,6 @@
 ---
 name: research-direction-selector
-description: Select and audit metric-driven research directions using scoped hypotheses, falsifiable interventions, budgets and human instructions. Use for choosing the next experiment or evaluating research proposals; includes a bounded L3 reference runner and Obelisk history retrieval, not a general GPU experiment service.
+description: Select and audit metric-driven research directions using scoped hypotheses, falsifiable interventions, budgets and human instructions. Includes bounded declarative certificate checks, an L3 reference runner and Obelisk history retrieval; use for choosing experiments, evaluating proposals or checking supported mathematical model claims, not scheduling general GPU training.
 metadata:
   version: v5.4.0
   engine: rds-cli-v5.4
@@ -13,6 +13,12 @@ Help the researcher choose experiments that advance the stated metric or resolve
 ## Evidence and execution boundaries
 
 The local CLI executes restricted scalar rational ASTs and paired MSE comparisons. It separates task gain, mechanism evidence and run status, reserves budget atomically and records data exposure. It does not execute arbitrary PyTorch training or certify PSNR claims. Do not import handwritten success flags, substitute toy outcomes for real experiments, or describe the local verifier as an OS security boundary. Read [the executable contract](references/l3-state-machine.md) before using the runner.
+
+For mathematical declarations, use the separate [formal framework](references/formal_framework.md).
+It checks supported affine matrix/dynamical, dense Linear/ReLU network and concrete
+tensor claims, and composes named theorems through registered trusted rules.
+A checked mathematical property belongs to the declared model and input domain;
+it does not promote task gain, mechanism or research policy evidence.
 
 ## Start with the decision contract
 
@@ -188,6 +194,59 @@ python -c "from rds_compress import compress_training_log; print(compress_traini
 
 ## Conditional formal verification
 
+### Standalone declarations and trusted theorem rules
+
+Write the exact mathematical statement in a supported `schema: 1` declaration.
+Use `scripts/rds_verify.py` (`verify`, `check_certificate`, `rules`) or the CLI:
+
+```bash
+python -B scripts/rds_cli.py --root . formal rules
+python -B scripts/rds_cli.py --root . formal verify --spec declaration.json --output proof.json
+python -B scripts/rds_cli.py --root . formal check --spec declaration.json --certificate proof.json
+```
+
+The framework separates proof generation from certificate checking and rechecks
+the full declaration and engine binding on every cache hit. Named modules reuse
+declared models with `$ref`; theorem `by.rule` must match a registered rule for
+that statement. Cycles, unbound references, unsupported declarations and unknown
+rules produce `UNKNOWN`, not a theorem. Do not treat a nonempty rule string or a
+YAML judgment-graph node as a trusted inference rule.
+
+Record `PASS`, checked `FAIL`, and `UNKNOWN` separately. Their CLI exit codes are
+0, 1, and 2, including `formal check`; checking a valid refutation does not make
+the claim pass. An interval network bound that cannot establish the property is
+`UNKNOWN` unless a real exact input violates it. Concrete tensor equalities say
+nothing about all possible symbolic tensors.
+
+The PyTorch adapter exports only exact eval-mode `Sequential`/`Linear`/`ReLU`
+classes with finite parameter snapshots and checked shapes. Hooks, overrides,
+parametrizations, unknown layers and arbitrary checkpoint loading are outside
+this adapter. Binary parameter ratios denote exact real values; float execution
+and arbitrary `forward` equivalence need separate evidence. Do not install a
+dependency merely to hide an optional-backend test skip.
+
+Native Lean supports generated closed rational obligations through an explicitly
+configured existing binary. Require `LEAN_KERNEL_CHECKED` and an empty axiom audit
+for that subtask; Python certificates remain `CERTIFICATE_CHECKED`. Broader
+mathlib model translation, ONNX and alpha-beta-CROWN are preparation work. Before
+transferring their research or guarantees, consult their
+latest primary sources and the [framework's backend boundaries](references/formal_framework.md).
+
+### Research-run mathematical side conditions
+
+Use `hypothesis.formal: {kind: declarative, statement: ...}` for a supported
+mathematical side condition. Admission proves it before reserving compute, and
+execution replays the committed certificate. The receipt's
+`declared_side_condition_only` scope does not establish equivalence to the runner
+or a training graph. Assessment records `formal_status`, sets `manipulation` to
+`NOT_APPLICABLE` and leaves mechanism `NOT_TESTED`. Preserve this distinction when
+using a proof to select the next experiment.
+
+Do not default to multiple seeds. Consider a budgeted stability experiment only
+after observed seed instability could change the research decision.
+
+### Research-run scalar admission
+
 Declare `hypothesis.formal` only when the hypothesis claims a strict algebraic threshold, contraction boundary or dynamical property. Ordinary parameter comparisons and routine experiments omit it and take the lightweight AST path; a numeric hyperparameter or PSNR target is not a formal claim. Do not omit a real mathematical claim to bypass its gate.
 
 The exact adapter separates certificate generation from checking for bounded
@@ -195,7 +254,7 @@ affine-rational scalar expressions. The checker validates original denominator
 obligations, the universal control bound and an exact treatment crossing witness;
 it reports `CERTIFICATE_CHECKED`. Other supported scalar expressions may fall back
 to SymPy and remain `SYMBOLIC_CHECKED`. Neither result is a Lean certificate or a
-general neural-network stability proof. Unsupported dynamics, singularities,
+general neural-network stability proof. Unsupported research-run dynamics, singularities,
 resource limits and unavailable required solvers return `UNKNOWN`.
 
 Use `formal.statement: threshold_necessity` only for the explicit scalar necessity
