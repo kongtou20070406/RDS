@@ -3,7 +3,8 @@ __pycache__/
 .venv/
 .rds/
 .rds.lock
-.codex/
+.codex/*
+!.codex/instructions.md
 *.sqlite*
 *.log
 *.zip
