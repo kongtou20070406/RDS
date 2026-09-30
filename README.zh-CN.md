@@ -5,14 +5,14 @@
   <img src=".github/assets/rds-hero-light.svg" alt="Research Direction Selector" width="100%">
 </picture>
 
-# Research Direction Selector (RDS)
+# Research Direction Selector
 
 [![stars](https://img.shields.io/github/stars/kongtou20070406/research-direction-selector?style=flat-square)](https://github.com/kongtou20070406/research-direction-selector/stargazers)
 [![version](https://img.shields.io/github/v/tag/kongtou20070406/research-direction-selector?label=version&style=flat-square)](https://github.com/kongtou20070406/research-direction-selector/releases)
-[![license](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](LICENSE)
-[![tests](https://img.shields.io/badge/tests-passing-brightgreen.svg?style=flat-square)](tests/)
+[![license](https://img.shields.io/badge/license-Apache%202.0-blue.svg?style=flat-square)](LICENSE)
+[![tests](https://github.com/kongtou20070406/research-direction-selector/actions/workflows/test.yml/badge.svg)](https://github.com/kongtou20070406/research-direction-selector/actions/workflows/test.yml)
 
-**把“下一步试什么”变成一个有证据、有对照、有预算、能改变决策的科学实验 —— 由 Agent 引导，由本地内核严格验收。**
+把研究问题、已有证据和有限预算转化为能改变决策的实验——由你的 Agent 推进，由本地内核验证。
 
 [English](README.md) · **简体中文** · [日本語](README.ja-JP.md)
 
@@ -20,85 +20,85 @@
 
 <br />
 
-## 科研闭环的双面体系
+## 科研闭环的两端
 
-RDS 具备由同一套科研状态驱动的“双面”能力：
+RDS 的两端共享同一套研究状态：
 
-**Agent 端** — 智能体规程（`SKILL.md`）教导编码 Agent（如 Codex、Claude Code 等）如何结构化理解研究目标、形式化假说、设计公平对照组，并将门禁拒绝信息转化为具体的下一步探索方案。Agent 通过日常自然语言与研究者对话协同。
+**Agent 端** — `research-direction-selector` 智能体技能（`SKILL.md`）指导编码 Agent（Codex、Claude Code 等）理解研究目标、提出可证伪假说、设计公平对照，并将门禁反馈转化为结构化的下一步计划。Agent 用自然语言交流并规划实验。
 
-**内核端** — 本地确定性参考引擎（`scripts/rds_cli.py`）管理事务级 SQLite 预算账本、AST 与 Lean4 启发的形式化战术证明门禁、基线对照缓存、遥测压缩以及具备因果图先验的 Advisor 建议引擎。
+**内核端** — 本地参考引擎（`scripts/rds_cli.py`）管理事务级 SQLite 预算、AST 与有限声明式形式化门禁、基线缓存、遥测压缩，以及基于证据的 Advisor 建议引擎。
 
-两端共同读取和维护 `.rds/` 状态存储与 `references/judgment-graph.yaml` 因果决策图。
+两端共同读写 `.rds/` 状态存储和 `references/judgment-graph.yaml` 因果规则。
 
 ---
 
-## 五大关键组件架构
+## 5 个核心功能组件
 
-按职责清晰拆分，RDS 严格归纳为 **5 个关键组件**（3 个基础闭环组件 + 2 个增强组件）：
+按职责划分，RDS 有 **5 个核心组件**：3 个基础组件和 2 个增强组件。
 
-| 关键组件 | 主要职责 | 它回答的问题 |
+| 核心组件 | 主要职责 | 它回答的问题 |
 | :--- | :--- | :--- |
-| **① 科研规程：Skill** | 引导 AI 理解目标、提出假说、设计对照、组织下一步计划 | **这轮研究应该怎样思考和推进？** |
-| **② 执行与验收内核** | 管理实验状态、调用运行工具、收集结果，执行预算和证据检查 | **实验怎么跑？结果符合哪些预定条件？** |
-| **③ 研究状态与记忆** | 保存目标、配置、结果、失败条件和决策依据，支持跨会话恢复 | **我们已经做过什么、知道什么，为什么走到这里？** |
-| **④ Advisor 建议引擎** | 根据当前观测、历史经验和规则，提出诊断线索与候选行动 | **现在遇到这个情况，下一步可以怎么做？** |
-| **⑤ 自改进模块：RSI** | 提出规则或策略修改，经过评测后决定是否采用 | **RDS 自己哪些判断和做法需要改进？** |
+| **① 科研规程：Skill** | 引导 Agent 理解目标、提出假说、设计对照并规划下一步 | **这轮研究应该怎样思考和推进？** |
+| **② 执行与验收内核** | 管理实验状态、调用运行工具、收集结果，检查预算和证据 | **实验怎么跑？结果满足哪些预定条件？** |
+| **③ 研究状态与记忆** | 跨会话保存目标、配置、结果、失败条件和决策依据 | **我们已经做过什么、知道什么，为什么走到这里？** |
+| **④ Advisor 建议引擎** | 根据观测、历史和规则，提出诊断线索与候选行动 | **面对当前情况，下一步可以尝试什么？** |
+| **⑤ 自改进模块：RSI** | 提出规则或策略修改，并在采用前进行评测 | **RDS 自己哪些判断和做法需要改进？** |
 
 ```mermaid
 flowchart TD
-    subgraph 基础闭环
-        S["① Skill (科研规程)"] --> K["② 执行与验收内核"]
+    subgraph Foundational_loop[基础闭环]
+        S["① Skill（科研规程）"] --> K["② 执行与验收内核"]
         K --> M["③ 研究状态与记忆"]
         M --> S
     end
-    subgraph 增强引擎
+    subgraph Enhancement_engines[增强引擎]
         M -. 历史记录与规则图 .-> A["④ Advisor 建议引擎"]
         A -. 候选探索建议 .-> S
         M -. 失败记录与反例 .-> R["⑤ RSI 自改进模块"]
-        R -. 改进规则与策略 .-> M
+        R -. 修订后的规则与策略 .-> M
     end
 ```
 
-### 最容易混淆的是这三组关系
+### 容易混淆的三组关系
 
-- **Skill 和 Advisor：** Skill 规定研究的基本做法，例如要求公平对照、区分指标与机制；Advisor 针对当前情况提供具体建议，例如先检查训练是否充分，或尝试另一条候选路线。
-- **记忆和 Advisor：** 记忆保存“发生过什么、有什么依据”；Advisor 利用这些记录判断“接下来值得检查什么”。
-- **Advisor 和 RSI：** Advisor 帮你改进正在研究的模型或实验；RSI 尝试改进 **RDS 自身的规则和决策策略**。
+- **Skill 和 Advisor：** Skill 定义研究的基本做法，例如公平对照，以及指标与机制的区别。Advisor 针对当前情况提出行动建议，例如检查训练是否充分，或尝试另一条候选路线。
+- **记忆和 Advisor：** 记忆保存发生过什么及其证据。Advisor 利用这些记录，建议接下来值得检查什么。
+- **Advisor 和 RSI：** Advisor 帮助改进正在研究的模型或实验。RSI 尝试改进 **RDS 自身的规则和决策策略**。
 
-### 其他名字算在哪里？
+### 其他名称属于哪里？
 
-- **预算控制、基线缓存、日志提取、探针、形式化检查**：主要属于 **② 执行与验收内核** 的子模块。
-- **`.rds/` 项目记录、Obelisk 历史接口、判断图谱**：主要归入 **③ 研究状态与记忆**，供其他组件读取。
-- **L1～L4**：是讨论中的能力层级，不能另算组件。
+- **预算控制、基线缓存、日志提取、探针和形式化检查**主要属于 **② 执行与验收内核** 的底层模块。
+- **`.rds/` 项目记录、Obelisk 历史接口和判断图谱（`judgment-graph.yaml`）**主要属于 **③ 研究状态与记忆**，供其他组件读取。
+- **L1–L5** 是研究框架中讨论的[能力层级](docs/research-autonomy.md)，不是额外组件。
 
-**前 3 个组件支撑基本科研闭环；Advisor 增加主动建议；RSI 增加对工具自身的改进。** 最清晰的系统构成是：**3 个基础组件＋2 个增强组件，共 5 个。**
+**前 3 个组件支撑基本科研闭环；Advisor 增加主动建议；RSI 增加对工具自身的改进。** 系统由 **3 个基础组件 + 2 个增强组件组成，共 5 个**。
 
 ---
 
-## Skill: Agent 优先的科研协同
+## Skill：以 Agent 为入口的科研指导
 
-你可以在 Agent 中直接用自然语言唤起 RDS：
+你可以在 Agent 中这样使用 RDS：
 
 ```text
-/rds 指标不再提升了，用现有日志区分训练问题和容量限制
-/rds 这两个消融同时改了好几件事，设计一个最小公平比较来区分解释
-/rds 继续这个项目，先检查剩余预算和已完成运行，再提出新工作
-/rds 帮我评估当前的收缩性假说，并生成形式化验证证明
+用 RDS 检查为什么指标不再提升。利用现有日志区分训练问题和容量限制。
+用 RDS 审查这两个同时改变多项因素的消融实验。设计一个最小公平比较，以区分不同解释。
+用 RDS 继续这个项目。先检查剩余预算和已完成的运行，再提出新工作。
+用 RDS 评估当前的收缩性假说，并为支持的形式化陈述生成经过检查的证据。
 ```
 
 ### 安装
 
-#### 让 Agent 自动安装（推荐）
+#### 让 Agent 安装（推荐）
 
-将此提示直接发给具备终端访问能力的 Codex 或 Claude Code：
+将以下配置指令直接交给 Codex、Claude Code 或任何具备终端访问能力的 Agent：
 
 ```text
-Install Research Direction Selector from
+从以下地址安装 Research Direction Selector：
 https://github.com/kongtou20070406/research-direction-selector
-as the research-direction-selector agent Skill.
-Keep the whole repository, including scripts, references, and examples.
-Use this project's .agents/skills directory and verify the CLI version.
-Then read SKILL.md and help me start from my actual research question.
+将其作为 research-direction-selector 智能体 Skill。
+保留完整仓库，包括 scripts、references 和 examples。
+使用当前项目的 .agents/skills 目录，并验证 CLI 版本。
+然后阅读 SKILL.md，从我的实际研究问题开始协作。
 ```
 
 #### 手动安装
@@ -110,56 +110,74 @@ git clone https://github.com/kongtou20070406/research-direction-selector.git "$e
 
 ---
 
-## 确定性执行与验收内核
+## 确定性的执行与验收内核
 
-内核（`scripts/rds_cli.py`）无需任何重型依赖，完全基于 Python 3.11+ 标准库运行：
+内核（`scripts/rds_cli.py`）仅使用 Python 3.11+ 标准库：
+
+从仓库根目录运行以下 CPU 演示，并使用全新的空目录 `./my-project`。准备步骤会为对照组和实验组创建绑定契约及清单；本演示不构成科学结论的确认。执行与回执细节见[项目执行器示例](examples/project-runner/README.md)。
 
 ```powershell
-# 1. 从研究契约初始化状态
+# 0. 准备示例契约、数据和清单
+python -B examples/project-runner/prepare.py --root ./my-project
+
+# 1. 根据契约初始化研究状态
 python -B scripts/rds_cli.py --root ./my-project project init --contract ./my-project/contract.json
 
-# 2. 创建并在事务预算下执行计划
+# 2. 在事务级预算管理下创建并执行两组
+python -B scripts/rds_cli.py --root ./my-project project create --manifest ./my-project/control.json
+python -B scripts/rds_cli.py --root ./my-project project execute --id control
 python -B scripts/rds_cli.py --root ./my-project project create --manifest ./my-project/treatment.json
 python -B scripts/rds_cli.py --root ./my-project project execute --id treatment
 
-# 3. 查看开销核算与当前状态
+# 3. 检查成本和状态
 python -B scripts/rds_cli.py --root ./my-project project costs
 python -B scripts/rds_cli.py --root ./my-project project status
 ```
 
 ---
 
-## Lean4 风格声明式形式化验证
+## Lean4 风格的声明式形式化验证
 
-`scripts/rds_probe.py` 将数学边界、深度学习动力学条件与因果判据统一收敛至类似 Lean 4 / Mathlib 的**模块化战术证明引擎**：
+`scripts/rds_verify.py` 提供有限声明式陈述、已注册的领域规则和独立证书检查。其有限战术接口借鉴了 Lean 风格的证明工作流；它不是通用的 Lean 或 Mathlib 证明器。
 
-- **FormalRuleRegistry** — 预置 28 个规则与引理（`lemma.gershgorin`、`lemma.spectral_radius`、`lemma.residual_contraction`、`lemma.scale_invariance`、`lemma.parameter_box`）。
-- **Tactic 战术证明分发** — 以声明式脚本消解形式化证明义务：
-  `tactics: [gershgorin, spectral_radius, lipschitz_scaling, scale_invariance, interval_check, linarith, by_rule, lean4]`
-- **原生 Lean 4 支持与 2.0s 熔断保护** — 当提供 Lean 源码时直接调用本地 `lean.exe` 验证；所有求解具备严格的 2.0s 超时熔断。
+- **可信规则注册表** — 注册了 12 条原子数学规则，覆盖有理数标量阈值、仿射动力学、适用范围明确的矩阵谱检查、支持的 Linear/ReLU 性质、具体张量，以及原生 Lean 封闭有理数证明义务。有限定理模块组合这些陈述。该注册表与包含 23 个节点的方法论判断图谱彼此独立。
+- **有限战术分派器** — `LeanFormalEngine().verify(spec, tactics)` 接受 `rule`、`gershgorin`、`spectral_radius`、`scale_invariance`、`interval` 和 `lean4`。战术选择兼容的已注册检查；不支持或无法确定的输入返回 `UNKNOWN`。
+- **原生 Lean 4 适配器** — 配置原生 Lean 可执行程序后，固定模板的封闭有理数 `eq`、`lt` 或 `le` 证明义务，经原生复检及空公理审计后获得 `LEAN_KERNEL_CHECKED`。它不接受任意 Lean 源码或用户战术。
+
+从仓库根目录运行以下 Python 示例：
 
 ```python
-from rds_probe import LeanFormalEngine
+import json
+import sys
+from pathlib import Path
 
-cert = LeanFormalEngine({
-    "kind": "theorem",
-    "theorem": "contraction_boundary",
-    "tactics": [
-        {"tactic": "gershgorin", "matrix": [[0.4, 0.1], [0.1, 0.4]]},
-        {"tactic": "linarith", "claim": "0.5 < 1.0"}
-    ]
-}).verify()
-# 返回: {"status": "PASS", "assurance": "LEAN_TACTIC_PROVED", "proof_trace": [...]}
+sys.path.insert(0, "scripts")
+from rds_verify import LeanFormalEngine, check_certificate
+
+spec = json.loads(Path("examples/formal/theorem_module.json").read_text(encoding="utf-8"))
+result = LeanFormalEngine().verify(spec, tactics=("rule",))
+assert result["status"] == "PASS"
+assert result["assurance"] == "CERTIFICATE_CHECKED"
+assert check_certificate(spec, result["certificate"])
 ```
+
+同一声明也可通过 CLI 验证：
+
+```powershell
+python -B scripts/rds_cli.py --root . formal verify --spec examples/formal/theorem_module.json --output proof.json --no-cache
+python -B scripts/rds_cli.py --root . formal check --spec examples/formal/theorem_module.json --certificate proof.json
+```
+
+经过检查的数学陈述不能证明任务性能、因果隔离，或其与实际执行的训练图一致。数据结构、保证等级标签和支持范围见[形式化验证](docs/formal-verification.md)。
 
 ---
 
-## 证据优先的 Advisor 建议引擎
+## Advisor：基于证据的建议
 
-`scripts/rds_advisor.py` 坚持因果严谨性：
-- **拒绝无证据单点伪诊断** — 严禁仅凭单一 Loss 数值推断“过拟合”或“欠拟合”，强制要求配对曲线与声明的 `trend_tolerance`。
-- **定位先行** — 监测到 NaN/Inf 时，指导优先排查首个非有限值与 FP32 重放，拒绝直接添加 `eps` 掩盖数值缺陷。
-- **拓扑剪枝候选生成** — 遍历因果图推荐 Pareto 最优的正交探索分支。
+`scripts/rds_advisor.py` 利用已记录的证据和方法论图谱提出下一步建议：
+- **先有证据，再做诊断** — 单个 loss 值不足以支持过拟合或欠拟合诊断。成对曲线或可比较的观测为候选解释提供背景。
+- **先定位，再干预** — 遇到 NaN/Inf 时，建议优先定位第一个非有限值，并检查精度或更新路径，再调整数值保护措施。
+- **图谱引导候选方案** — 方法论规则组织诊断线索和探索候选方案。候选排序不能证明因果效应、帕累托最优性，或某项实验满足所有规则义务。
 
 ```powershell
 python -B scripts/rds_cli.py --root ./my-project advise
@@ -167,9 +185,9 @@ python -B scripts/rds_cli.py --root ./my-project advise
 
 ---
 
-## Obelisk 历史会话集成
+## Obelisk 历史集成
 
-RDS 复用 [Obelisk](https://github.com/tommy0103/obelisk) 本地检索能力，无须重复搭建向量数据库：
+RDS 连接 [Obelisk](https://github.com/tommy0103/obelisk)，检索过去的会话历史，无需重复建立向量存储：
 
 ```powershell
 python -B scripts/rds_cli.py history prepare --project-path 'C:\research\project' --terms 'C7' --output 'query.mjs'
@@ -181,37 +199,38 @@ python -B scripts/rds_cli.py history query --query 'query.mjs'
 ## 验证与测试
 
 ```powershell
-# 运行全量测试套件
+# 运行完整测试套件
 python -m unittest discover -s tests -p "test_*.py" -v
 
-# 运行历史案例重放
+# 运行历史案例回放
 python benchmark/run.py
 
-# 运行对抗性红蓝基准测试
+# 运行对抗性红队压力测试
 python benchmark/redteam/runner.py
 ```
 
 ---
 
-## 仓库结构导航
+## 仓库结构
 
 ```text
-SKILL.md                         智能体协作规程（组件 ①）
-scripts/rds_cli.py               执行内核与预算事务账本（组件 ②）
-scripts/rds_probe.py             AST 沙箱与 Lean4 战术证明引擎（组件 ②）
-scripts/rds_compress.py          遥测日志提炼与异常特征压缩（组件 ②）
-references/judgment-graph.yaml   28 节点因果规则与形式化引理拓扑（组件 ③）
+SKILL.md                         Agent 协作规程（组件 ①）
+scripts/rds_cli.py               执行内核与事务级预算账本（组件 ②）
+scripts/rds_probe.py             受限 AST 与标量形式化准入检查（组件 ②）
+scripts/rds_verify.py            声明式规则、有限战术与证书检查（组件 ②）
+scripts/rds_compress.py          遥测日志压缩与尖峰监测（组件 ②）
+references/judgment-graph.yaml   23 节点的方法论判断图谱（组件 ③）
 references/                      状态机契约与 RSI 证据（组件 ③）
-scripts/rds_obelisk.py           Obelisk 长程历史检索桥接（组件 ③）
-scripts/rds_advisor.py           证据优先的 Advisor 建议引擎（组件 ④）
-scripts/rds_meta.py              RSI 规则反思与图谱演进（组件 ⑤）
-scripts/rds_adversary.py         RSI 对抗测试与自愈机制（组件 ⑤）
-benchmark/                       历史案例决策包与红蓝对抗套件
-tests/                           全量测试套件
+scripts/rds_obelisk.py           Obelisk 会话历史桥接（组件 ③）
+scripts/rds_advisor.py           基于证据的 Advisor 引擎（组件 ④）
+scripts/rds_meta.py              RSI 规则反思与图谱修改（组件 ⑤）
+scripts/rds_adversary.py         RSI 对抗性变体与评测候选方案（组件 ⑤）
+benchmark/                       历史决策包与红队基准
+tests/                           完整回归测试套件
 ```
 
 ---
 
 ## 许可证
 
-本项目遵循 [MIT License](LICENSE)。
+Apache License 2.0。详情见 [LICENSE](LICENSE)。

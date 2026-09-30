@@ -1,265 +1,236 @@
 <div align="center">
 
-<img src=".github/assets/rds-hero-dark.svg" alt="Research Direction Selector" width="100%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/rds-hero-dark.svg">
+  <img src=".github/assets/rds-hero-light.svg" alt="Research Direction Selector" width="100%">
+</picture>
 
 # Research Direction Selector
 
-**人とその AI のための研究支援**
+[![stars](https://img.shields.io/github/stars/kongtou20070406/research-direction-selector?style=flat-square)](https://github.com/kongtou20070406/research-direction-selector/stargazers)
+[![version](https://img.shields.io/github/v/tag/kongtou20070406/research-direction-selector?label=version&style=flat-square)](https://github.com/kongtou20070406/research-direction-selector/releases)
+[![license](https://img.shields.io/badge/license-Apache%202.0-blue.svg?style=flat-square)](LICENSE)
+[![tests](https://github.com/kongtou20070406/research-direction-selector/actions/workflows/test.yml/badge.svg)](https://github.com/kongtou20070406/research-direction-selector/actions/workflows/test.yml)
 
-研究の問い、既存の証拠、限られた予算から次の実験を選び、その結果を次の判断へつなげます。
-
-[![Checks](https://github.com/kongtou20070406/research-direction-selector/actions/workflows/test.yml/badge.svg)](https://github.com/kongtou20070406/research-direction-selector/actions/workflows/test.yml)
-![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white&style=flat-square)
-[![Version](https://img.shields.io/badge/version-5.6.0--rc.1-0F766E?style=flat-square)](https://github.com/kongtou20070406/research-direction-selector/releases)
-[![Stars](https://img.shields.io/github/stars/kongtou20070406/research-direction-selector?style=flat-square)](https://github.com/kongtou20070406/research-direction-selector/stargazers)
+研究の問い、既存の証拠、限られた予算から、判断を変える実験へ。あなたの Agent が進め、ローカルカーネルが検証します。
 
 [English](README.md) · [简体中文](README.zh-CN.md) · **日本語**
 
-[AI と使う](#ai-と使う) · [ローカルで実行](#ローカルで実行) · [五つの構成要素](#五つの構成要素) · [検証済みの動作](#検証済みの動作) · [ドキュメント](#ドキュメント)
-
 </div>
 
-Research Direction Selector（RDS）は、研究者とその AI が証拠を調べ、実験を設計し、実行を手配し、次の行動を判断するためのツールです。指標が停滞したとき、異なる説明が異なる介入を要求するとき、残りの予算が少ないとき、中断した研究を実際の結果から再開するときに使えます。
+<br />
 
-目標と制約を普段の言葉で伝えてください。RDS は、**次の実験がどの説明を区別できるか、比較を公平にする条件、総コスト、各結果が次の判断に与える影響**を整理します。証拠を実行と振り返りに結び付け、次の会話で作業を続けられるようにします。
+## 研究ループの二つの側面
 
-現在のバージョンは **v5.6.0-rc.1** です。Agent Skill、ローカル CLI、操作状態を記録する SQLite 台帳を組み合わせ、人間が主導する研究フローと個別タスクの限定的な自動化を支援します。実装済みの動作と残る課題は[ロードマップ](docs/roadmap.md)で確認できます。
+RDS の二つの側面は、同じ研究状態を共有します。
 
-| 入口 | 用途 |
-| --- | --- |
-| **AI と協働** | [SKILL.md](SKILL.md)を通じて実際の研究課題を議論し、コードと証拠を調べ、次の実験を選びます。 |
-| **ローカルツール** | CLI で元の記録を取り込み、Advisor 候補を確認し、固定したプロジェクトコマンドを実行し、コストと現在の状態を確認します。 |
-| **研究者が確認** | 構造化された CLI 結果や[オフラインダッシュボード](docs/dashboard.md)を読みます。ダッシュボードは読み取り専用のスナップショットです。 |
+**Agent 側** — `research-direction-selector` Agent Skill（`SKILL.md`）は、コーディング Agent（Codex、Claude Code など）に、研究目標の理解、反証可能な仮説の設定、公平な対照の設計、ゲートのフィードバックを構造化した次の計画に変える方法を教えます。Agent は自然言語で対話し、実験を計画します。
 
-## AI と使う
+**カーネル側** — ローカル参照エンジン（`scripts/rds_cli.py`）は、トランザクションで管理する SQLite 予算、AST と範囲を限定した宣言型の形式ゲート、ベースラインのキャッシュ、テレメトリの圧縮、証拠に基づく Advisor を管理します。
 
-Skill をインストールしたら研究プロジェクトを開き、AI に次のように伝えます。
+両者は同じ `.rds/` 状態ストアと `references/judgment-graph.yaml` の因果ルールを読み書きします。
 
-```text
-このプロジェクトを Research Direction Selector（RDS）で進めてください。
-まずコード、完了した実験、関連する過去の判断を確認してください。
-目標は［研究の問い／主要指標］、使える予算は［予算］です。
-競合する説明を区別できる次の実験を推薦してください。
-対照、予想される観測、反証条件、総コスト、結果ごとの次の判断を示してください。
-許可された作業を実行、証拠の検討、継続まで進めてください。
-実行成功、課題の改善、機構の証拠を分けて記録してください。
-観測済みの seed 不安定性が今回の判断に影響するときだけ、追加 seed を検討してください。
+---
+
+## 5 つの主要機能コンポーネント
+
+責務ごとに整理すると、RDS は **5 つの主要コンポーネント**で構成されます。基盤となる 3 つと、機能を拡張する 2 つです。
+
+| 主要コンポーネント | 主な責務 | 答える問い |
+| :--- | :--- | :--- |
+| **① 研究プロトコル：Skill** | Agent に目標の理解、仮説の設定、対照の設計、次の計画を導く | **この研究をどう考え、進めるべきか？** |
+| **② 実行・受け入れカーネル** | 実験状態の管理、実行ツールの呼び出し、結果の収集、予算と証拠の検査 | **実験をどう実行するか？結果は事前に定めたどの条件を満たすか？** |
+| **③ 研究状態と記憶** | 目標、設定、結果、失敗条件、判断の証拠をセッションをまたいで保持する | **何を実施し、何がわかり、なぜこの地点に至ったか？** |
+| **④ Advisor エンジン** | 観測、履歴、ルールから診断の手がかりと行動候補を提案する | **現在の状況で、次に何を試せるか？** |
+| **⑤ 自己改善モジュール：RSI** | ルールや方針の変更を提案し、採用前に評価する | **RDS 自身のどの判断や実践を改善すべきか？** |
+
+```mermaid
+flowchart TD
+    subgraph Foundational_loop[基盤となるループ]
+        S["① Skill（研究プロトコル）"] --> K["② 実行・受け入れカーネル"]
+        K --> M["③ 研究状態と記憶"]
+        M --> S
+    end
+    subgraph Enhancement_engines[拡張エンジン]
+        M -. 履歴とルールグラフ .-> A["④ Advisor エンジン"]
+        A -. 探索候補の提案 .-> S
+        M -. 失敗記録と反例 .-> R["⑤ RSI 自己改善モジュール"]
+        R -. 改訂したルールと方針 .-> M
+    end
 ```
 
-具体的な問題から始めることもできます。
+### 混同しやすい三つの関係
 
-- 「指標が改善しなくなりました。既存のログから学習の問題と容量の限界を区別してください。」
-- 「この二つのアブレーションは複数の要素を変えています。説明を区別する最小の公平な比較を設計してください。」
-- 「このプロジェクトを続けてください。新しい作業の前に、残りの予算と完了済みの実行を確認してください。」
-- 「RDS を使って RDS を開発してください。関連テストを実行し、失敗を読み、次のルール変更を評価してください。」
+- **Skill と Advisor：** Skill は公平な対照や指標と機構の区別など、研究の実践を定めます。Advisor は、学習が十分か確認する、別の候補を試すなど、現在の状況に応じた行動を提案します。
+- **記憶と Advisor：** 記憶は何が起きたかとその証拠を保持します。Advisor はその記録を使い、次に何を確認する価値があるかを提案します。
+- **Advisor と RSI：** Advisor は研究対象のモデルや実験の改善を支援します。RSI は **RDS 自身のルールと判断方針**の改善を試みます。
 
-研究者が方向、予算、科学的結果の受け入れを決めます。AI は必要な作業記録を構成し、研究者は普段の言葉で議論を続けられます。既存の証拠と有効な対照を優先します。追加 seed は、判断に影響する観測済みの不安定性から必要性を説明できる場合に検討します。
+### その他の名称はどこに属するか？
 
-### Skill をインストール
+- **予算管理、ベースラインのキャッシュ、ログ抽出、プローブ、形式検査**は、主に **② 実行・受け入れカーネル**の内部モジュールに属します。
+- **`.rds/` のプロジェクト記録、Obelisk の履歴インターフェース、判断グラフ（`judgment-graph.yaml`）**は、主に **③ 研究状態と記憶**に属し、他のコンポーネントから参照されます。
+- **L1–L5** は研究フレームワークで議論する[能力レベル](docs/research-autonomy.md)であり、追加のコンポーネントではありません。
 
-ローカル端末を使えるコーディング Agent に、この設定指示を渡せます。
+**最初の 3 つが基本的な研究ループを支え、Advisor は能動的な提案を、RSI はツール自体の改善を加えます。** システムは **基盤 3 つ + 拡張 2 つ、計 5 つのコンポーネント**で構成されます。
+
+---
+
+## Skill：Agent を入口とする研究支援
+
+Agent で、次のように RDS を使えます。
 
 ```text
-https://github.com/kongtou20070406/research-direction-selector から
-tag v5.6.0-rc.1 を research-direction-selector Agent Skill としてインストールしてください。
+RDS を使って、指標が改善しなくなった理由を調べてください。既存のログから学習の問題と容量の限界を区別してください。
+RDS を使って、複数の要素を同時に変えた二つのアブレーションを検討してください。異なる説明を区別できる最小の公平な比較を設計してください。
+RDS を使って、このプロジェクトを続けてください。新しい作業を提案する前に、残りの予算と完了した実行を確認してください。
+RDS を使って、現在の収縮性の仮説を評価し、対応する形式的な命題について検査済みの証拠を生成してください。
+```
+
+### インストール
+
+#### Agent にインストールしてもらう（推奨）
+
+端末にアクセスできる Codex、Claude Code、その他の Agent に、次の設定指示を直接渡してください。
+
+```text
+次のリポジトリから Research Direction Selector をインストールしてください。
+https://github.com/kongtou20070406/research-direction-selector
+research-direction-selector Agent Skill として配置してください。
 scripts、references、examples を含むリポジトリ全体を保持してください。
-現在のプロジェクトの .agents/skills に配置し、CLI のバージョンを確認してください。
+現在のプロジェクトの .agents/skills ディレクトリを使い、CLI のバージョンを確認してください。
 その後 SKILL.md を読み、私の実際の研究課題から協働を始めてください。
 ```
 
-Windows で個人用に手動インストールする場合：
+#### 手動インストール
 
 ```powershell
 New-Item -ItemType Directory -Path "$env:USERPROFILE/.agents/skills" -Force | Out-Null
-git clone --branch v5.6.0-rc.1 https://github.com/kongtou20070406/research-direction-selector.git "$env:USERPROFILE/.agents/skills/research-direction-selector"
+git clone https://github.com/kongtou20070406/research-direction-selector.git "$env:USERPROFILE/.agents/skills/research-direction-selector"
 ```
 
-プロジェクト内の配置先は `.agents/skills/research-direction-selector/` です。Skill はスクリプトと参考資料を使用するため、ファイルの相対配置を保ってください。Skill の検出と呼び出し方はホストによります。他の助手も [SKILL.md](SKILL.md)を直接読めます。
+---
 
-## ローカルで実行
+## 決定的な実行・受け入れカーネル
 
-**Python 3.11+** が必要です。CPU プロジェクト例と通常のスカラー実行は標準ライブラリのみで動き、GPU は不要です。履歴検索には Obelisk を別途インストールします。適用できる記号検査には[オプション依存](requirements-formal.txt)があります。
+カーネル（`scripts/rds_cli.py`）は Python 3.11+ の標準ライブラリのみで動作します。
+
+リポジトリのルートから、新しい空の `./my-project` ディレクトリを使って、以下の CPU デモを実行してください。準備ステップは、対照群と処置群の両方について、実ファイルに結び付いた契約とマニフェストを作成します。このデモは科学的な確認を示すものではありません。実行とレシートの詳細は[プロジェクト実行器の例](examples/project-runner/README.md)を参照してください。
 
 ```powershell
-git clone --branch v5.6.0-rc.1 https://github.com/kongtou20070406/research-direction-selector.git
-Set-Location research-direction-selector
-python -B scripts/rds_cli.py --version
-python -B scripts/rds_cli.py --help
+# 0. 例の契約、データ、マニフェストを準備
+python -B examples/project-runner/prepare.py --root ./my-project
+
+# 1. 契約から研究状態を初期化
+python -B scripts/rds_cli.py --root ./my-project project init --contract ./my-project/contract.json
+
+# 2. トランザクションによる予算管理のもとで両群を作成・実行
+python -B scripts/rds_cli.py --root ./my-project project create --manifest ./my-project/control.json
+python -B scripts/rds_cli.py --root ./my-project project execute --id control
+python -B scripts/rds_cli.py --root ./my-project project create --manifest ./my-project/treatment.json
+python -B scripts/rds_cli.py --root ./my-project project execute --id treatment
+
+# 3. コストと状態を確認
+python -B scripts/rds_cli.py --root ./my-project project costs
+python -B scripts/rds_cli.py --root ./my-project project status
 ```
 
-以下のコマンドは RDS のチェックアウトから実行します。研究用ワークスペースを指定する `--root` はサブコマンドの前に置きます。
+---
 
-### 新しいワークスペースで実際の CPU 例を実行
+## Lean4 スタイルの宣言型形式検証
 
-この例は、記録済みの六行のデータに定数の対照と線形の処理を当てはめます。`prepare.py` が新しいディレクトリにコード、データ、評価器、プロトコル、実ファイルに結び付いた実行マニフェストを作成します。
+`scripts/rds_verify.py` は、有限の宣言的命題、登録済みの領域ルール、独立した証明書検査を提供します。範囲を限定したタクティックインターフェースは Lean スタイルの証明ワークフローに着想を得ています。汎用の Lean や Mathlib の証明器ではありません。
+
+- **信頼するルールの登録簿** — 有理数スカラーの閾値、アフィン力学、適用範囲を定めた行列スペクトル検査、対応する Linear/ReLU の性質、具体的なテンソル、ネイティブ Lean の閉じた有理数の証明義務を扱う 12 個の原子的数学ルールを登録しています。有限の定理モジュールはこれらの命題を組み合わせます。この登録簿は、23 ノードの方法論判断グラフとは別です。
+- **範囲を限定したタクティックのディスパッチャー** — `LeanFormalEngine().verify(spec, tactics)` は `rule`、`gershgorin`、`spectral_radius`、`scale_invariance`、`interval`、`lean4` を受け付けます。タクティックは互換性のある登録済み検査を選び、未対応または結論を出せない入力には `UNKNOWN` を返します。
+- **ネイティブ Lean 4 アダプター** — ネイティブ Lean 実行ファイルを設定すると、固定テンプレートの閉じた有理数の `eq`、`lt`、`le` 証明義務は、ネイティブ再検査と公理が空であることの監査後に `LEAN_KERNEL_CHECKED` を受け取ります。任意の Lean ソースやユーザーのタクティックは受け付けません。
+
+リポジトリのルートから、次の Python 例を実行してください。
+
+```python
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, "scripts")
+from rds_verify import LeanFormalEngine, check_certificate
+
+spec = json.loads(Path("examples/formal/theorem_module.json").read_text(encoding="utf-8"))
+result = LeanFormalEngine().verify(spec, tactics=("rule",))
+assert result["status"] == "PASS"
+assert result["assurance"] == "CERTIFICATE_CHECKED"
+assert check_certificate(spec, result["certificate"])
+```
+
+同じ宣言を CLI から検証することもできます。
 
 ```powershell
-$RdsDemo = Join-Path ([System.IO.Path]::GetTempPath()) ("rds-project-" + [guid]::NewGuid().ToString("N"))
-python -B examples/project-runner/prepare.py --root $RdsDemo
-python -B scripts/rds_cli.py --root $RdsDemo project init --contract "$RdsDemo/contract.json"
-python -B scripts/rds_cli.py --root $RdsDemo project create --manifest "$RdsDemo/control.json"
-python -B scripts/rds_cli.py --root $RdsDemo project execute --id control
-python -B scripts/rds_cli.py --root $RdsDemo project create --manifest "$RdsDemo/treatment.json"
-python -B scripts/rds_cli.py --root $RdsDemo project execute --id treatment
-python -B scripts/rds_cli.py --root $RdsDemo project costs
-python -B scripts/rds_cli.py --root $RdsDemo project status
+python -B scripts/rds_cli.py --root . formal verify --spec examples/formal/theorem_module.json --output proof.json --no-cache
+python -B scripts/rds_cli.py --root . formal check --spec examples/formal/theorem_module.json --certificate proof.json
 ```
 
-成功したレシートの `run_status` は `SUCCEEDED` で、元の stdout、stderr、指標、成果物の識別情報を保持します。`task_gain` と `mechanism` は `UNKNOWN` のままです。これは実測したデモ出力であり、科学的受け入れには別の評価が必要です。wall time は実測し、未測定の CPU／GPU／API 資源は不明のまま、推定の課金を分けて記録します。
+検査済みの数学的命題だけでは、タスク性能、因果的な切り分け、実際に実行された学習グラフとの対応は示せません。スキーマ、保証レベルのラベル、対応範囲は[形式検証](docs/formal-verification.md)を参照してください。
 
-契約は、正確な argv、入力、出力先、資源の予約、タイムアウトを制限します。非ゼロ終了、必要な出力の欠落、評価器やプロトコルの変更は成功になりません。復旧は既存の試行を照合し、重複起動しません。許可されたプロジェクトコードを信頼する仕組みであり、OS のセキュリティサンドボックスではありません。
+---
 
-Windows で、許可済みのコマンドを会話終了後も継続する場合は `project execute --id <id> --background` を使えます。一意の RDS Task Scheduler タスクを登録し、非表示 worker で実行して TaskID を記録します。ローカルでの登録・開始権限が必要です。実際の受け入れ確認では通常権限の失敗後、昇格した登録が成功しました。他のプラットフォームは現在、前景実行に対応しています。[プロジェクト例](examples/project-runner/)と[実行ガイド](docs/development-loop.md#execute-a-locked-project-command--m04)を参照してください。
+## Advisor：証拠に基づく提案
 
-以前の限定スカラー例は [examples/reference-run/](examples/reference-run/)に残しています。[ワークフロー](docs/research-workflow.md#one-experiment-in-the-reference-cli)に期待する出力と証拠フィールドがあります。
-
-## 五つの構成要素
-
-同じ研究フロー内のソフトウェアの責務です。
-
-| 構成要素 | 役割 | 入口 |
-| --- | --- | --- |
-| **1 · Skill** | 研究者と目標を整理し、競合仮説、公平な比較、証拠の解釈を扱います。 | [AI と使う](#ai-と使う) |
-| **2 · 実行・受け入れカーネル** | 実行条件を検査し、資源を予約し、対応コマンドを実行して確認可能なレシートを集めます。 | [ローカルで実行](#ローカルで実行) |
-| **3 · 研究状態と記憶** | 目標、プロトコル、結果、予算、失敗を保持し、Obelisk で関連する元の履歴を取得します。 | [研究を再開](#研究を再開) |
-| **4 · Advisor** | 観測と適用範囲を持つルールから、診断、証拠要求、有限の実験候補を生成します。 | [Advisor](#advisor) |
-| **5 · RSI** | RDS 自身のルールや方針の変更を提案し、リプレイ、採用、ロールバックを行います。 | [RDS で RDS を開発](#rds-で-rds-を開発) |
-
-最初の三つが基本的な研究プロセスを支え、Advisor と RSI が拡張します。操作台帳は研究状態を保持し、Obelisk は会話履歴を検索します。複数の責務が実装を共有する場合もあります。[構成要素ガイド](docs/rds-purpose.md)に境界を示しています。
-
-```mermaid
-flowchart LR
-    A[目標と予算] --> B[証拠を調べる]
-    B --> C[実験を選び条件を確認]
-    C --> D[実行と記録]
-    D --> E[証拠を評価]
-    E --> F[継続・修正・停止]
-    F --> B
-    H[関連する元の履歴] -.-> B
-```
-
-## Advisor
-
-Advisor は観測を読み、未確定の内容を示します。適用範囲を持つルールを検索し、対照、競合する説明、測定、停止条件、結果に応じた判断を含む有限の実験テンプレートを組み合わせます。欠けた証拠は要求となり、未知のコストは未知のままです。候補の assurance は `HEURISTIC_ONLY` で、実際の研究状況に照らして検討します。
-
-付属の有限テンプレート例を試せます。
+`scripts/rds_advisor.py` は記録された証拠と方法論グラフから、次の手順を提案します。
+- **診断の前に証拠を確認** — 単一の loss 値では過学習や学習不足の診断を支えられません。対になった曲線や比較可能な観測が、説明候補の背景を与えます。
+- **介入の前に発生箇所を特定** — NaN/Inf に対しては、数値的な保護策を変える前に、最初の非有限値を特定し、精度や更新経路を確認する提案を優先します。
+- **グラフに基づく候補** — 方法論ルールが診断の手がかりと探索候補を整理します。その順位付けは、因果効果、パレート最適性、実験がすべてのルール義務を満たすことを証明しません。
 
 ```powershell
-python -B scripts/rds_cli.py advise --research-context examples/experiment-templates/context.json --templates examples/experiment-templates/templates.json
+python -B scripts/rds_cli.py --root ./my-project advise
 ```
 
-自分の記録には、元の設定、指標、ログ、レシートを指定する成果物マニフェストを用意します。
+---
+
+## Obelisk 履歴との連携
+
+RDS は [Obelisk](https://github.com/tommy0103/obelisk) と連携し、ベクトルストアを重複して作らずに過去のセッション履歴を取得します。
+
+```powershell
+python -B scripts/rds_cli.py history prepare --project-path 'C:\research\project' --terms 'C7' --output 'query.mjs'
+python -B scripts/rds_cli.py history query --query 'query.mjs'
+```
+
+---
+
+## 検証とテスト
+
+```powershell
+# 全テストスイートを実行
+python -m unittest discover -s tests -p "test_*.py" -v
+
+# 過去のケースをリプレイ
+python benchmark/run.py
+
+# 対抗的なレッドチームのストレステストを実行
+python benchmark/redteam/runner.py
+```
+
+---
+
+## リポジトリ構成
 
 ```text
-python -B scripts/rds_cli.py --root <project> artifacts import --manifest <manifest.json>
-python -B scripts/rds_cli.py --root <project> advise --artifacts <manifest.json> --templates <templates.json>
+SKILL.md                         Agent の協働プロトコル（コンポーネント ①）
+scripts/rds_cli.py               実行カーネルとトランザクション予算台帳（コンポーネント ②）
+scripts/rds_probe.py             制限された AST とスカラーの形式的受け入れ検査（コンポーネント ②）
+scripts/rds_verify.py            宣言型ルール、限定タクティック、証明書検査（コンポーネント ②）
+scripts/rds_compress.py          テレメトリログ圧縮とスパイク監視（コンポーネント ②）
+references/judgment-graph.yaml   23 ノードの方法論判断グラフ（コンポーネント ③）
+references/                      状態機械の契約と RSI の証拠（コンポーネント ③）
+scripts/rds_obelisk.py           Obelisk セッション履歴ブリッジ（コンポーネント ③）
+scripts/rds_advisor.py           証拠に基づく Advisor エンジン（コンポーネント ④）
+scripts/rds_meta.py              RSI のルール振り返りとグラフ変更（コンポーネント ⑤）
+scripts/rds_adversary.py         RSI の対抗的な変種と評価候補（コンポーネント ⑤）
+benchmark/                       過去の判断パケットとレッドチームベンチマーク
+tests/                           全回帰テストスイート
 ```
 
-取り込みはフィールドの位置、実行とプロトコルの結び付き、欠落、矛盾を保持します。`DECLARED`、`OBSERVED`、`DERIVED`、`UNKNOWN` は事実がレポートに入った方法を示します。ログの値を読むことは機構の証明ではありません。一組の train/validation loss だけでは適合状態を診断できません。取り込んだ文書抜粋は、Advisor の独立 WAL ストアで `UNREVIEWED` のままです。
+---
 
-参照台帳からオフライン HTML を出力できます。
+## ライセンス
 
-```powershell
-python -B scripts/rds_dashboard.py --root <reference-project> --output dist/dashboard.html
-```
-
-[記録の取り込みと組み合わせ](docs/development-loop.md)、[Advisor 設計](docs/advisor-graph-design.md)、[証拠](docs/advisor-evidence.md)、[ダッシュボードの範囲](docs/dashboard.md)を参照してください。
-
-## 研究を再開
-
-既存の操作台帳に判断の境界を保存し、再開時に現在の状態と比較します。
-
-```powershell
-python -B scripts/rds_cli.py --root $RdsDemo checkpoint save --id after-fit
-python -B scripts/rds_cli.py --root $RdsDemo checkpoint restore --id after-fit
-python -B scripts/rds_cli.py --root $RdsDemo project recover --id treatment
-```
-
-保存時の `--decision <decision.json>` で、研究の問いと未取得の証拠を保持できます。復元は現在の予算、データアクセス、実行を返し、その後の更新や矛盾を報告して現在の入力を確認します。台帳を置き換えず、完了した作業を繰り返しません。通常の状態表示はプロジェクト全体を再 hash しません。
-
-関連する過去の判断や棄却済みの方針が現在のコンテキストにない場合、インストール済みの [Obelisk](https://github.com/tommy0103/obelisk) CLI で、正確なプロジェクト範囲の元の履歴を検索できます。
-
-```text
-python -B scripts/rds_cli.py history prepare --project-path <absolute-project-path> --terms baseline --output <unique-absolute-query.mjs>
-python -B scripts/rds_cli.py history query --query <unique-absolute-query.mjs>
-```
-
-実際の絶対パスと毎回新しいクエリファイル名を使います。取得は出典の識別情報とページングを保持し、現在のファイルと指示を優先します。新たな権限を与えず、記憶を自動作成しません。[現在の状態からの継続](docs/development-loop.md#resume-the-live-research-decision--m06)と [Obelisk bridge](references/obelisk.md)を参照してください。
-
-## RDS で RDS を開発
-
-RDS 開発は自身のツールで実際のテストを実行し、元の出力を取り込み、Advisor の提案を調べ、ルール変更を評価します。新しい空のワークスペースで隔離した開発ループを再現できます。
-
-```text
-python -B examples/self-development/run.py --workspace <new-empty-workspace>
-```
-
-例は CLI 出力、元のテストログ、コスト、プロセスレシート、checkpoint を保持します。さらに、宣言した開発／留保ケースに対して隔離したルール変更をリプレイし、適格な結果を採用してロールバックを試します。元のリポジトリの判断グラフは保持されます。提案、リプレイ、採用は別々で、`--force` は証拠を省略しません。
-
-これは RSI の最初の人間主導のソフトウェアフィードバックループです。有限ケースの合格は、検査したソフトウェア動作を示します。研究方針の改善には、未使用の独立ケースで、失敗や負の結果を含む同じ総予算で研究軌跡全体を前向きに比較する必要があります。その科学的改善は未測定です。[開発ループ](docs/development-loop.md)と [RSI の証拠境界](references/rsi-evidence.md)を参照してください。
-
-## 検証済みの動作
-
-**2026-09-30** の今回の全テストと、実際の実行器による二回目の開発ループの結果です。
-
-| 検査 | 記録された結果 | 証拠の範囲 |
-| --- | --- | --- |
-| [全回帰テスト](tests/) | **269 合格、4 スキップ、計 273**、45.880 秒 | 構成要素と統合の動作。ネイティブ Lean 2 件は未設定、PyTorch 2 件は依存パッケージなし。 |
-| [RDS が自身の開発テストを実行](examples/self-development/run.py) | **65/65 合格**、スキップなし | 実プロジェクトレシートは `SUCCEEDED`、元の記録は `IMPORTED`、Advisor が次の変更を検討。 |
-| 有限 RSI 開発例 | **基準 1/4 → 候補 4/4**、宣言した留保ケースで **2 改善、0 回帰** | 隔離したグラフを `APPLIED` 後 `ROLLED_BACK`。作者が宣言したケース分割であり、独立した研究方針スコアではありません。 |
-
-一回目の 49 ケースの選択では 2 件の失敗が見つかりました。fixture と誤った assertion を修正した後、更新した 65 ケースが合格しました。これは実際の開発フィードバックの記録であり、研究品質の向上を示すものではありません。
-
-以下の回帰と構成要素の検査も今回再実行しました。
-
-| 検査 | 記録結果 | 検査対象 |
-| --- | --- | --- |
-| [過去の事例リプレイ](benchmark/README.md) | **6/6 合格** | 決定パケットと関連ゲート。実行入力は合成スカラー。 |
-| [合成対抗シナリオ](benchmark/redteam/) | **4/4 合格** | あらかじめ定義した四つのプロトコル攻撃。 |
-| [公開タスクから改編した構成要素テスト](docs/advisor-benchmark.md) | **8/8 ケース、28/28 検査合格** | 改編したメタデータ fixture の契約、証拠欠落、依存関係、コスト、予算、出典識別。 |
-
-構成要素テストは ScienceAgentBench と CORE-Bench のメタデータおよび手動で改編したルールを使いました。記録された **98.8786 ms** は八つのローカル fixture の処理と結果組み立ての時間です。[入力](benchmark/advisor-public/source-facts.json)と[各検査の結果](benchmark/advisor-public/results.json)を公開しています。科学タスクそのものは実行していません。欠けた証拠を要求し、条件変更で候補の適格性を変え、未知のコストをゼロにしない動作を検査しています。
-
-端から端までの科学タスクスコア、研究品質の向上、独立 RSI 軌跡の改善は**未測定**です。Skill 間の比較は保留中です。[benchmark の検討記録](docs/benchmark-plan.md)は候補タスクを保持していますが、比較実験を予定していません。
-
-## 対応範囲と自律性の目標
-
-短期の製品目標は、**研究の六段階すべてに L2 支援を提供すること**です。目標の整理 → 証拠の調査 → 実験の選択 → 実行 → 評価 → 振り返りと継続を支援します。各段階を実用的に自動化し、研究者は方向、重要な判断、科学的結果の受け入れを担います。これはカバレッジの目標です。
-
-RDS は Kramer らが 2026 年に正式発表した科学発見の自動化フレームワークを採用し、元の **L0–L5** 番号を保持します。L1 は研究の一側面を支援、L2 は重要な発見要素一つを完全自動化、L3 は限定領域の発見サイクル全体を自動化、L4 は複数領域で発見を行い限定的に目標を自律設定します。長期の研究方向は元の **L4 と L5** で、納期の約束ではありません。[出典と解釈の限界](docs/research-autonomy.md)および[ロードマップ](docs/roadmap.md)を参照してください。
-
-現在の RDS は、参照計算と明示的に結び付いた候補探索で**限定的な L2 機能**を持ち、人間向けの協働手順を提供します。完全な科学的 L3／L4 ループや端から端までの GPU 研究サービスは実証していません。既存の `L3` 実行器識別子は歴史的な実装名です。自律性、科学的品質、安全認証、RSI による方針改善は別の軸です。
-
-プロジェクト実行器には実 CPU での受け入れ証拠があります。GPU 研究プロジェクトには、そのプロジェクトの学習器、観測手段、科学的評価器が必要です。コストは資源の単位を保ち、wall time を CPU time と見なしません。対照の再利用は対応する完全なプロトコルと成果物の識別を確認します。`run_status`、`task_gain`、`mechanism` は分けて記録します。
-
-### 数学的部分問題
-
-Lean4/mathlib との協働は、研究フロー内の適切な数学的問題を対象とします。RDS は対応する閉じた有理数の義務に Lean カーネルを再利用し、限定スカラー、アフィン、box ネットワーク、具体的テンソルの検査には独立して確認した Python 証明書を提供します。数学的妥当性と実際の科学モデルへの対応には、それぞれの証拠が必要です。一般 mathlib 変換、任意のネットワーク、一般 ODE は実装範囲外です。
-
-[検証ガイド](docs/formal-verification.md)、[Lean 接続ガイド](docs/lean-integration.md)、[23 個のルール義務](docs/rule-obligations.md)に型、仮定、`UNKNOWN` の動作を記載しています。
-
-## ドキュメント
-
-| ガイド | 内容 |
-| --- | --- |
-| [ドキュメント索引](docs/README.md) | 英中ナビゲーションと実装範囲。 |
-| [SKILL.md](SKILL.md) | 研究協働と方向選択。 |
-| [開発ループ](docs/development-loop.md) | 元の記録、有限の組み合わせ、コスト、プロジェクト実行、RSI、継続。 |
-| [研究ワークフロー](docs/research-workflow.md) | 証拠の軸と限定参照例。 |
-| [五つの構成要素](docs/rds-purpose.md) · [自律性](docs/research-autonomy.md) · [ロードマップ](docs/roadmap.md) | 責務、採用したレベル、受け入れ条件。 |
-| [参照実行契約](references/l3-state-machine.md) | 既存スカラー CLI の状態とデータ使用制約。 |
-| [Advisor 設計](docs/advisor-graph-design.md) · [判断グラフ](references/judgment-graph.yaml) | 適用範囲を持つルール、依存関係、候補の動作。 |
-| [Benchmark プロトコル](benchmark/README.md) | 過去のケース、情報分離、評価の限界。 |
-
-## コントリビュート
-
-文書、翻訳、適用範囲を持つ研究ルール、最小の再現例を歓迎します。[CONTRIBUTING.md](CONTRIBUTING.md)を読み、**fork → ブランチ → 検査 → PR** で参加してください。ルールには出典、適用範囲、競合する説明、判別実験、反証条件を含めます。負の結果と証拠の限界を保持してください。
-
-[問題を報告](https://github.com/kongtou20070406/research-direction-selector/issues/new/choose)するか、[PR を提出](https://github.com/kongtou20070406/research-direction-selector/compare)できます。私的な会話、認証情報、未公開データ、`.rds/` の操作状態はコミットしないでください。
-
-## 関連プロジェクト
-
-- [Obelisk](https://github.com/tommy0103/obelisk) は RDS が再利用する公開の履歴 CLI を提供します。用途、Agent／人向けの入口、セットアップを直接説明する構成が、この README の参考です。
-- [Academic Research Skills](https://github.com/Imbad0202/academic-research-skills) は研究から執筆、査読、修正までを扱います。多言語ナビゲーションと貢献の構成を以前の文書で参考にしました。自動的な引き継ぎアダプターはありません。
-
-RDS の文章とブランド素材は独自のものです。リンクは依存関係や設計上の参考を示し、他のプロジェクトによる支持を意味しません。
+Apache License 2.0。詳細は [LICENSE](LICENSE) を参照してください。
