@@ -17,7 +17,7 @@ Give every experiment a clear question, a fair control, and a result that change
 
 **English** · [简体中文](README.zh-CN.md) · [日本語](README.ja-JP.md)
 
-[Quick start](#quick-start) · [Workflow](#workflow) · [Historical cases](#historical-cases--verification) · [Contribute](#contribute) · [Documentation](#documentation)
+[Our goal](#our-goal) · [L1–L4](#l1l4) · [Quick start](#quick-start) · [Validation](#regression-scenarios--verification) · [Contribute](#contribute)
 
 </div>
 
@@ -27,16 +27,35 @@ The researcher sets the goal and resources, the model designs candidate routes, 
 
 > **Two ways to use RDS:** work on a real research project through [SKILL.md](SKILL.md), or run restricted scalar experiments through the reference CLI to inspect budget, data-use, and evidence protocols. Real GPU training stays with your project's trainer.
 
-## What RDS brings
+## Our goal
 
-| Capability | What it contributes |
-| --- | --- |
-| **Experiments that change a decision** | Compare causally distinct routes, name competing explanations, and state what positive and negative results would change. |
-| **Checks on the actual intervention** | Inspect the executed equations and code; explicit scalar threshold claims can use a conditional symbolic probe. |
-| **Separate evidence axes** | Record task gain, mechanism assessment, and run status independently, so a completed run or a better score does not silently become mechanism support. |
-| **Budget and data-use gates** | Reserve reference-run allocations in SQLite transactions, track data exposure, and bind plans, code, data, and verifier versions to execution receipts. |
-| **Reuse of existing work** | Cache scalar controls by control AST and dataset SHA-256; retrieve relevant research history through the installed Obelisk CLI. |
-| **Feedback for the next proposal** | Advisor supplies gate-error hints, loss and log diagnostics; scoped judgment rules help review subsequent proposals. |
+Help researchers make the next experiment worth its full cost, carry it through an inspectable process, and resume from the evidence when work is interrupted. The long-term goal is a research loop that can improve its decision policy through tested feedback, while the researcher retains control of goals, resources, and interpretation.
+
+Every proposed experiment should answer three questions: **which explanations does it distinguish, what makes the comparison fair and affordable, and what would each possible result change?**
+
+## L1–L4
+
+These are RDS's working levels for explaining its roadmap, not an industry standard or a score for a model's scientific ability.
+
+| Level | Responsibility | Evidence needed |
+| --- | --- | --- |
+| **L1 · Evidence assistance** | Find and organize literature, code, logs, and prior decisions for a researcher-directed task. | Traceable sources and a clear account of what is known or missing. |
+| **L2 · Experiment advice** | Compare routes and propose a scoped, falsifiable experiment with a fair control and a budget. | A design that distinguishes competing explanations and states the next step for either result. |
+| **L3 · Bounded execution loop** | Within an authorized contract, admit plans, execute, collect artifacts, assess results, and recover interrupted work. | Engine-produced execution records, protocol-enforced budget and data-use constraints, and reproducible recovery. |
+| **L4 · Tested policy improvement** | Use failures and counterexamples to revise scoped decision rules and test whether the revised research policy improves subsequent work. | Prospective comparisons of whole research trajectories at equal total budgets, including independent cases and negative results. |
+
+RDS currently provides **L2 research guidance and building blocks for L3 through its scalar reference kernel**. Its rules, branching, and repair tools are experimental foundations for L4. It has not established an end-to-end GPU research loop or measured a research-policy improvement across independent trajectories. At every level, goals, budgets, authorization, and scientific interpretation remain under the researcher's control.
+
+## Implemented capabilities
+
+| Capability | Implementation | What it contributes |
+| --- | --- | --- |
+| **Experiments that change a decision** | Skill protocol | Compare causally distinct routes, name competing explanations, and state what positive and negative results would change. |
+| **Checks on the actual intervention** | Protocol + scalar gates | Inspect the executed equations and code; explicit scalar threshold claims can use a conditional symbolic probe. |
+| **Separate evidence axes** | Reference kernel | Record task gain, mechanism assessment, and run status independently, so a completed run or a better score does not silently become mechanism support. |
+| **Budget and data-use gates** | Reference kernel | Reserve reference-run allocations in SQLite transactions, track data exposure, and bind plans, code, data, and verifier versions to execution receipts. |
+| **Reuse of existing work** | Scalar cache + history bridge | Cache scalar controls by control AST and dataset SHA-256; retrieve relevant research history through the installed Obelisk CLI. |
+| **Feedback for the next proposal** | Advisor + judgment rules | Advisor supplies gate-error hints, loss and log diagnostics; scoped judgment rules help review subsequent proposals. |
 
 ## Workflow
 
@@ -69,7 +88,7 @@ You can also place it in your research project's `.agents/skills/research-direct
 
 Then describe your research problem:
 
-> Use RDS to choose our next experiment. We want to beat the current baseline at the same training budget, with 48 hours remaining. Read the completed experiments and code first. Recommend a comparison that can decide the next route, and tell us which result would make us stop or change direction.
+> Use RDS to choose our next experiment. We want to beat the current baseline at the same training budget, with limited resources remaining. Read the completed experiments and code first. Recommend a comparison that can decide the next route, and tell us which result would make us stop or change direction.
 
 RDS extracts goals and constraints from the current files and conversation, then returns one recommended direction and at most one serious alternative. The model constructs the experiment forms internally; the researcher can adjust goals, priorities, and resources in ordinary language.
 
@@ -137,23 +156,23 @@ These diagnostics use fixed thresholds, string classification, and suggestion te
 When a missing prior decision, rejected route, or experiment setting could change the next step, RDS retrieves relevant history through the installed Obelisk public CLI. Source identities and pagination are retained; current files and instructions take priority.
 
 ```powershell
-python -B scripts/rds_cli.py history prepare --project-path 'C:\research\my-project' --terms 'C7' --output 'C:\queries\obq-c7-unique-token.mjs'
-python -B scripts/rds_cli.py history query --query 'C:\queries\obq-c7-unique-token.mjs'
+python -B scripts/rds_cli.py history prepare --project-path 'C:\research\my-project' --terms 'baseline' --output 'C:\queries\obq-baseline-unique-token.mjs'
+python -B scripts/rds_cli.py history query --query 'C:\queries\obq-baseline-unique-token.mjs'
 ```
 
 Replace the placeholder paths with real absolute paths and use a new query filename each time. The bridge locates sessions by exact `project_path` and searches within them in one query. Retrieved history grants no new authority and does not automatically write memories. See the [Obelisk bridge](references/obelisk.md).
 
-## Historical cases & verification
+## Regression scenarios & verification
 
-Five retrospective decision packets turn recurring research problems into inspectable cases:
+Five regression scenarios cover recurring research decisions:
 
 | Case | Decision under review |
 | --- | --- |
-| July 8 · Baseline | Establish a feasible and fair comparison anchor under a limited budget. |
-| Aug 2 · Compiler ablation | Isolate dictionary and routing factors without treating a small development-set gain as confirmation. |
-| Aug 30 · GoPro pivot | Follow an explicit research pivot and audit the official recipe and comparison cost. |
-| Sep 13 · C7 boundary | Distinguish tightening a safety margin from actually crossing the mechanism boundary. |
-| Sep 14 · 48h budget | Cancel or defer allocations, account for evaluation cost, and track test-set reuse. |
+| Fair baseline | Establish a feasible comparison anchor under a limited budget. |
+| Confound isolation | Change one factor at a time and keep small development-set gains exploratory. |
+| Task pivot | Follow an explicit change of task and audit the reference recipe and comparison cost. |
+| Intervention validity | Verify that the executed intervention actually changes the property under test. |
+| Budget and confirmation data | Cancel or defer allocations, account for evaluation cost, and track test-set reuse. |
 
 After installing the optional dependencies, run from the repository root:
 
@@ -221,3 +240,7 @@ Start with a documentation fix, translation improvement, or minimal reproducible
 - [Academic Research Skills](https://github.com/Imbad0202/academic-research-skills) covers research, writing, review, and revision. Its language navigation and contribution structure informed this repository's presentation. The projects can support experiment decisions and manuscript work separately; no automatic handoff adapter is included.
 
 RDS branding and copy are original. These links identify a dependency and design references, and do not imply endorsement.
+
+## Search terms
+
+Research direction selection · AI-assisted research · experiment design · hypothesis testing · reproducible research · agent skills · Codex · CLI · Obelisk.
