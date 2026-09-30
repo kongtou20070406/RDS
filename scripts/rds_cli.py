@@ -711,6 +711,23 @@ def cmd_meta(args, rds):
             if getattr(args, "output", None):
                 Path(args.output).write_text(json.dumps(proposals, indent=2, ensure_ascii=False), encoding="utf-8")
             return {"proposed_rules_count": len(proposals), "proposals": proposals}
+    elif args.action == "fuzz":
+        from rds_adversary import AdversarialMutator
+        plan = load_spec(args.plan)
+        m_type = getattr(args, "type", "all")
+        mutants = AdversarialMutator.mutate_plan(plan, mutation_type=m_type)
+        return {"original_plan_id": plan.get("id"), "mutants_count": len(mutants), "mutants": mutants}
+    elif args.action == "evaluate-alignment":
+        from rds_adversary import AlignmentEvaluator
+        rule = load_spec(args.rule)
+        evaluator = AlignmentEvaluator(Path(args.root))
+        return evaluator.evaluate_rule(rule)
+    elif args.action == "auto-repair":
+        from rds_adversary import AutoRepairEngine
+        graph_path = Path(getattr(args, "graph", None) or (Path(__file__).resolve().parents[1] / "references/judgment-graph.yaml"))
+        engine = AutoRepairEngine(Path(args.root), graph_path)
+        dry = getattr(args, "dry_run", False)
+        return engine.run_self_repair(dry_run=dry)
     else:
         raise ValueError(f"Unknown meta action: {args.action}")
 
@@ -760,10 +777,17 @@ def parser():
     m_app.add_argument("--rule", required=True)
     m_app.add_argument("--graph", default=None)
     m_app.add_argument("--force", action="store_true")
-    m_app.add_argument("--dry-run", action="store_true")
     m_ref = m_actions.add_parser("reflect")
     m_ref.add_argument("--terms", default=None)
     m_ref.add_argument("--output", default=None)
+    m_fuzz = m_actions.add_parser("fuzz")
+    m_fuzz.add_argument("--plan", required=True)
+    m_fuzz.add_argument("--type", choices=["all", "self_sign", "split_escalate", "budget_stretch", "control_perturb"], default="all")
+    m_eval = m_actions.add_parser("evaluate-alignment")
+    m_eval.add_argument("--rule", required=True)
+    m_rep = m_actions.add_parser("auto-repair")
+    m_rep.add_argument("--graph", default=None)
+    m_rep.add_argument("--dry-run", action="store_true")
 
     history = commands.add_parser("history", help="Read history through the installed Obelisk CLI")
     actions = history.add_subparsers(dest="subcommand", required=True)

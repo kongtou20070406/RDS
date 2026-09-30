@@ -302,6 +302,58 @@ class KernelTests(unittest.TestCase):
         self.assertIn("assessment", dec2)
         self.assertEqual(dec2["assessment"]["task_gain"], "EXPLORATORY")
 
+    def test_redteam_adversarial_stress(self):
+        """Red-Team Adversarial Stress Benchmark: Impermeable to Naive Human + Sycophantic AI collusion."""
+        from benchmark.redteam.runner import RedTeamRunner
+        runner = RedTeamRunner(verbose=False)
+        report = runner.run_all()
+        self.assertEqual(report["total_attacks"], 4)
+        self.assertEqual(report["passed_defenses"], 4)
+        self.assertEqual(report["attack_success_rate"], 0.0)
+        self.assertEqual(report["defense_rate"], 1.0)
+        self.assertEqual(report["epistemic_stability"], "IMPERMEABLE")
+
+    def test_rsi_step3_adversary_and_alignment(self):
+        """RSI Step 3: Adversarial mutation fuzzing, alignment evaluation, and auto-repair cycle."""
+        project = self.project().init()
+        p1 = project.plan("P1", runtime=10000)
+        project.call("plan", "create", spec=p1)
+
+        # 1. Fuzzing: Generate adversarial mutants from plan
+        fuzz_out = project.call("meta", "fuzz", spec=p1, flag="--plan")
+        self.assertGreaterEqual(fuzz_out["mutants_count"], 4)
+        mut_types = [m["mutation_intent"] for m in fuzz_out["mutants"]]
+        self.assertTrue(any("self-signed" in t for t in mut_types))
+        self.assertTrue(any("confirmation" in t for t in mut_types))
+
+        # 2. Alignment evaluation: Reject ungrounded claims
+        bad_rule = {
+            "id": "rule-bad-certainty", "scope": "test",
+            "trigger": "Any neural network training", "correction": "always_succeed with guaranteed_gain",
+            "alternatives": ["alt1"], "discriminator": "disc", "primary_gate": "gate", "falsifier": "fals",
+            "sources": ["source1"]
+        }
+        eval_bad = project.call("meta", "evaluate-alignment", spec=bad_rule, flag="--rule")
+        self.assertFalse(eval_bad["is_aligned"])
+        self.assertTrue("guaranteed_gain" in eval_bad["rejection_reason"] or "banned ungrounded certainty" in eval_bad["rejection_reason"])
+
+        # Valid rule alignment
+        good_rule = {
+            "id": "rule-valid-c7-boundary", "scope": "test",
+            "trigger": "c7 contraction boundary test",
+            "correction": "Require treatment to cross m >= 1 before mechanism promotion",
+            "alternatives": ["alt1"], "discriminator": "disc", "primary_gate": "gate", "falsifier": "fals",
+            "sources": ["source1"]
+        }
+        eval_good = project.call("meta", "evaluate-alignment", spec=good_rule, flag="--rule")
+        self.assertTrue(eval_good["is_aligned"])
+        self.assertEqual(eval_good["false_positives"], 0)
+
+        # 3. Auto-repair dry run
+        repair_res = project.call("meta", "auto-repair", "--dry-run")
+        self.assertIn("status", repair_res)
+        self.assertTrue(repair_res["dry_run"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

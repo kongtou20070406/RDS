@@ -2,8 +2,8 @@
 name: research-direction-selector
 description: Select and audit metric-driven research directions using scoped hypotheses, falsifiable interventions, budgets and human instructions. Use for choosing the next experiment or evaluating research proposals; includes a bounded L3 reference runner and Obelisk history retrieval, not a general GPU experiment service.
 metadata:
-  version: v5.2.0
-  engine: rds-cli-v5.2
+  version: v5.3.0
+  engine: rds-cli-v5.3
 ---
 
 # Research Direction Selector — RDS-L3
@@ -176,6 +176,14 @@ python -B scripts/rds_cli.py branch status
 python -B scripts/rds_cli.py branch fork --spec branch.json
 python -B scripts/rds_cli.py branch switch --id branch_id
 python -B scripts/rds_cli.py branch list
+
+# 9. RSI Step 3: Adversarial Mutation, Alignment Evaluation & Auto-Repair
+python -B scripts/rds_cli.py meta fuzz --plan plan.json
+python -B scripts/rds_cli.py meta evaluate-alignment --rule rule.json
+python -B scripts/rds_cli.py meta auto-repair [--dry-run]
+
+# 10. Deep Learning Token Compressor (<50 tokens per run, 90%+ reduction)
+python -c "from rds_compress import compress_training_log; print(compress_training_log(open('train.log').read()))"
 ```
 
 ## Conditional formal verification
