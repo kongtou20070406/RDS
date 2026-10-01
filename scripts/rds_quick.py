@@ -256,7 +256,7 @@ def execute(args, review=None):
         state = ProjectStore(workspace).snapshot(check_bindings=True)
         require(not state['binding_check']['errors'], 'Frozen job bindings changed')
         receipt = next((r for r in state['receipts'] if r['run_id'] == args.name), None)
-        return {'status': 'EXISTING_JOB', 'job_root': str(workspace), 'receipt': receipt,
+        return {'status': 'EXISTING_JOB', 'job_root': str(workspace), 'ledger_root': str(Path(args.ledger).resolve()) if review is not None else str(workspace), 'receipt': receipt,
                 'execution_started': False, 'scientific_support': 'UNKNOWN'}
     if review is not None:
         _charge_ledger(args.ledger, workspace, request, timeout)
@@ -309,6 +309,7 @@ def execute(args, review=None):
                     'pending_evidence': ['Assess the original output; completion alone does not reject or prove a hypothesis']}
         save_checkpoint(args.ledger, _checkpoint_name('after', args.name), ProjectStore(args.ledger).snapshot(), kind='project', decision=decision)
     return {'status': receipt.get('run_status', 'UNKNOWN'), 'job_root': str(workspace),
+            'ledger_root': str(Path(args.ledger).resolve()) if review is not None else str(workspace),
             'receipt': receipt, 'execution_started': True, 'scientific_support': 'UNKNOWN'}
 
 
@@ -334,10 +335,12 @@ def brief(root, value, version, formal=False):
     if formal:
         summary['formal_assurance'] = assurance or 'NONE'
         summary['application_status'] = value.get('application_status', 'UNKNOWN')
-    ledger = Path(root).resolve() / '.rds' / 'project.sqlite3'
+    ledger_root = Path(value.get('ledger_root', root)).resolve()
+    ledger = ledger_root / '.rds' / 'project.sqlite3'
     if ledger.is_file():
-        store = ProjectStore(root)
+        store = ProjectStore(ledger_root)
         with store._db(True) as db:
+            summary['ledger_checkpoints'] = 0
             if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='checkpoints'").fetchone():
                 summary['ledger_checkpoints'] = db.execute('SELECT COUNT(*) FROM checkpoints').fetchone()[0]
     summary['badge'] = f'[RDS {version} | State: {summary["status"]} | Ledger: {summary.get("ledger_checkpoints", "UNKNOWN")} | Formal: {formal_status} | Record: {ref["sha256"][:8]}]'

@@ -62,6 +62,7 @@ class QuickTests(unittest.TestCase):
         result = json.loads(self.job().stdout)
         self.assertEqual(result['run_status'], 'SUCCEEDED')
         self.assertIn('Formal: UNKNOWN', result['badge'])
+        self.assertEqual(result['ledger_checkpoints'], 0)
         self.assertLess(len(json.dumps(result)), 1300)
         record = Path(result['record']).read_bytes()
         self.assertEqual(hashlib.sha256(record).hexdigest(), result['sha256'])
@@ -140,7 +141,8 @@ class QuickTests(unittest.TestCase):
         candidate = next(r for r in output['recommendations'] if r.get('type') == 'EXECUTABLE_DIRECTION_SEARCH')['search']['candidates'][0]
         self.script('print("actual bounded probe")\n')
         options = ['--context', str(self.context_path), '--graph', str(self.graph_path), '--choose', candidate['id'], '--ledger', str(self.ledger)]
-        self.job('first', True, *options)
+        first = json.loads(self.job('first', True, *options).stdout)
+        self.assertEqual(first['ledger_checkpoints'], 2)
         with closing(sqlite3.connect(self.ledger / '.rds/project.sqlite3')) as db:
             rows = db.execute('SELECT id,body FROM checkpoints ORDER BY rowid').fetchall()
         self.assertEqual([r[0] for r in rows], ['exec-before-first', 'exec-after-first'])
