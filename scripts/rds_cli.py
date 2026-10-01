@@ -846,6 +846,8 @@ def cmd_meta(args, rds):
 def cmd_advise(args, rds):
     from rds_advisor import RDSAdvisor
     from rds_meta import load_judgment_graph
+    require(not getattr(args, "research_note", None),
+            "--research-note is retired; use checkpoint save --decision and a scoped --research-context")
     has_train = getattr(args, "train_loss", None) is not None
     has_val = getattr(args, "val_loss", None) is not None
     require(has_train == has_val, "Provide both --train-loss and --val-loss for fit diagnosis")
@@ -855,20 +857,11 @@ def cmd_advise(args, rds):
     require(sum(modes) + int(has_train) <= 1, "Choose one Advisor mode per call")
     has_search_context = bool(getattr(args, "research_context", None) or getattr(args, "artifacts", None))
     has_context = bool(has_search_context or getattr(args, "frontier", None) or getattr(args, "frontier_proposals", None))
-    has_note = bool(getattr(args, "research_note", None))
     require(not getattr(args, "templates", None) or has_search_context,
             "--templates requires --research-context or --artifacts with a decision")
-    require(not (any(modes) or has_train) or not (has_context or has_note or getattr(args, "templates", None) or getattr(args, "graph", None)),
+    require(not (any(modes) or has_train) or not (has_context or getattr(args, "templates", None) or getattr(args, "graph", None)),
             "Research context, artifacts, templates, frontier and graph require the direction-search mode")
     require(not getattr(args, "topic", None) or getattr(args, "doc", None), "--topic requires --doc")
-    note_review = None
-    if has_note:
-        from rds_research_note import load_research_note, review_research_note
-        note_review = review_research_note(load_research_note(args.research_note))
-        if not has_context and not getattr(args, "graph", None) and not getattr(args, "templates", None):
-            return {"advisor_type": "STRATEGIC_RESEARCH_ADVICE", "recommendations_count": 1,
-                    "recommendations": [{"type": "RESEARCH_LOOP_REVIEW", "assurance": "INPUT_REPORTED",
-                                         "review": note_review}]}
     advisor = RDSAdvisor(Path(args.root))
 
     if getattr(args, "literature", None):
@@ -908,7 +901,7 @@ def cmd_advise(args, rds):
         with rds.snapshot() as (_, snapshot):
             state = snapshot
     else:
-        require(has_context or has_note, "RDS is not initialized")
+        require(has_context, "RDS is not initialized")
         state = {}
     if getattr(args, "research_context", None):
         state["advisor_context"] = load_spec(args.research_context)
@@ -995,9 +988,6 @@ def cmd_advise(args, rds):
         state["advisor_templates"] = load_spec(args.templates)
     _, graph = load_judgment_graph(getattr(args, "graph", None))
     recommendations = advisor.recommend_next_directions(state, graph)
-    if note_review is not None:
-        recommendations.insert(0, {"type": "RESEARCH_LOOP_REVIEW", "assurance": "INPUT_REPORTED",
-                                   "review": note_review})
     result = {
         "advisor_type": "STRATEGIC_RESEARCH_ADVICE",
         "active_branch": state.get("active_branch", "main"),
@@ -1233,7 +1223,7 @@ def parser():
     adv.add_argument("--research-context", default=None, help="Sourced facts and the decision for bounded graph search")
     adv.add_argument("--frontier", help="Versioned research graph and evidence for bounded graph-outside exploration questions")
     adv.add_argument("--frontier-proposals", help="AI proposed nodes/relations and discriminating tests; definition checks only")
-    adv.add_argument("--research-note", help="Read a compact RESEARCH.md decision summary; no history mirror, writes or authorization")
+    adv.add_argument("--research-note", help="Retired: use checkpoint save --decision with a scoped --research-context")
     adv.add_argument("--artifacts", help="Hash-bound artifact manifest; reread originals at advice time")
     adv.add_argument("--templates", help="Versioned finite experiment template pack")
     adv.add_argument("--graph", default=None)
