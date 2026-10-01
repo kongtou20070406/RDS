@@ -40,11 +40,11 @@ def log_path():
 def _database():
     path = log_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    new = not path.exists()
-    connection = sqlite3.connect(path, timeout=0.25)
+    # Brief contention must not drop invocations. SQLite bounds this wait;
+    # persistent storage failure still leaves the original command unaffected.
+    connection = sqlite3.connect(path, timeout=2)
     try:
-        if new:
-            connection.execute("PRAGMA journal_mode=WAL")
+        # Keep existing journal modes; no first-use existence/PRAGMA race.
         connection.execute("CREATE TABLE IF NOT EXISTS tracking (id INTEGER PRIMARY KEY CHECK(id=1), started REAL NOT NULL, day TEXT NOT NULL)")
         connection.execute("CREATE TABLE IF NOT EXISTS calls (id INTEGER PRIMARY KEY, started REAL NOT NULL, day TEXT NOT NULL, command TEXT NOT NULL, mode TEXT NOT NULL, version TEXT NOT NULL, exit_code INTEGER, elapsed_ms REAL)")
         connection.execute("CREATE INDEX IF NOT EXISTS calls_day ON calls(day)")

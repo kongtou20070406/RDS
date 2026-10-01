@@ -9,6 +9,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -76,6 +77,31 @@ class UsageTests(unittest.TestCase):
         self.assertEqual(result["total_calls"], 13)
         self.assertEqual(result["modes"], {"version": 13})
         self.assertEqual(result["daily"][0]["successful"], 13)
+
+    def test_first_concurrent_invocations_retain_all_calls(self):
+        self.assertFalse(self.path.exists())
+        with ThreadPoolExecutor(max_workers=8) as workers:
+            results = list(workers.map(lambda _: self.cli("--version"), range(12)))
+        self.assertTrue(all(r.returncode == 0 for r in results), [r.stderr for r in results])
+        report = usage.summarize(days=1)
+        self.assertEqual(report['total_calls'], 12)
+        self.assertEqual(report['daily'][0]['successful'], 12)
+
+    def test_brief_lock_wait_preserves_call_and_existing_wal_mode(self):
+        usage.run_logged(lambda: 0, ['status'], 'test')
+        with closing(sqlite3.connect(self.path)) as blocker:
+            self.assertEqual(blocker.execute('PRAGMA journal_mode=WAL').fetchone()[0], 'wal')
+            blocker.execute('BEGIN IMMEDIATE')
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(usage.run_logged, lambda: 7, ['status'], 'test')
+                time.sleep(0.6)  # Exceeds the old 250 ms limit, within the bounded wait.
+                blocker.commit()
+                self.assertEqual(future.result(timeout=4), 7)
+            self.assertEqual(blocker.execute('PRAGMA journal_mode').fetchone()[0], 'wal')
+        report = usage.summarize(days=1)
+        self.assertEqual(report['total_calls'], 2)
+        self.assertEqual(report['daily'][0]['failed'], 1)
+        self.assertIsNone(usage._last_error)
 
     def test_actual_cli_queries_are_counted_and_do_not_create_project_state(self):
         first = self.cli("usage", "--days", "2", "--json")

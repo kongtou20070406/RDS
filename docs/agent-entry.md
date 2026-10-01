@@ -29,6 +29,56 @@ If exactly one `READY` candidate remains, its identity is completed automaticall
 
 Prospective child jobs consume a conservative wall allowance in that same parent ledger before launch; unspent allowance is not refunded. Changing a job name or creating a fresh child directory cannot replenish it. Quick execution requires a wall-only parent budget; multi-resource work needs an explicit project manifest. The original human deadline and authorization still apply.
 
+## Theory and experiments
+
+Use the same prospective choice, bounded runner, receipts and checkpoint ledger for either mode. No external mathematics Skill is required. Each mode has its own acceptance contract:
+
+Set `research_mode` to `theory`, `empirical` or `mixed` in the existing decision context when using a declared domain workflow. Advisor then returns the configured frontier/actions, ledger review and optional resource plan without unrelated legacy ML branch hints or reference catalogs. Contexts without this field preserve their previous behavior. Mode names do not grant execution authority or change evidence standards.
+
+| Work | Next decision | Necessary evidence |
+|---|---|---|
+| Pure theory | Close an obligation, validate a counterexample, or identify what remains open | Original objective, domain/quantifiers/premises, exact certificate and applicable checker |
+| Pure experiments | Distinguish explanations or decide whether the task metric improves | Measured observables, comparable controls, valid uncertainty and declared scope |
+| Mixed | Use a conditional theorem to justify a test, then check its application | Mathematical premises and their correspondence to the executed code/data; retain both verdicts |
+
+For a single theoretical obligation, an executable graph action may use:
+
+```json
+{"id":"check-L1","kind":"OBLIGATION_CHECK","target":"L1",
+ "claim":"For every x in the stated domain D, P(x) holds under premises H.",
+ "description":"Produce and independently check the exact certificate for L1",
+ "methods":{"purpose":"proof","arithmetic":"exact"},
+ "required_observables":["certificate","checker result","unclosed premises"],
+ "outcomes":[
+   {"observation":"verified","next_decision":"review dependent obligation"},
+   {"observation":"counterexample","next_decision":"revise the scoped claim"},
+   {"observation":"unresolved","next_decision":"inspect remaining obligation"}]}
+```
+
+Attach this to an ordinary `executable` node with the actual decision ID and explicit `preconditions`, which may be empty. Preconditions such as an exhaustive domain reduction or sound pruning need source-backed evidence. Missing premises produce evidence requests before execution. Theory and experiment actions may coexist; obligation checks need no competing explanations and are not ranked against empirical probes by invented discrimination scores. Existing experiment actions keep their rival/outcome requirements.
+
+`verified` requires checking the stated claim and premises at the reported strength; `counterexample` needs a checked witness in the same domain. A rejected proof, software error, timeout or unfinished enumeration belongs to `unresolved` and does not falsify the claim. Outcome declarations remain `INPUT_REPORTED`; Advisor readiness is not proof. The runner does not infer a scientific outcome from exit code 0. Retain the actual result and checker evidence in declared outputs:
+
+```powershell
+python -B scripts/rds_cli.py exec --timeout 60 --context context.json --graph graph.json --ledger <existing-ledger> --output outputs/certificate.json --output outputs/summary.json -- python -B prove_and_check.py
+```
+
+The program implements the domain-specific producer/checker; RDS supplies bindings and execution records. A cover check can prove a particular upper bound while leaving the universal matching lower bound open. Finite branch-and-bound proves a universal statement only with a justified complete search domain, sound exclusions and no unresolved branch.
+
+Before a material computation, identify its mathematical structure, intended result and smallest sufficient implementation. Check only the selected backend's actual capability, estimate runtime/memory/expression growth and keep existing resource limits. Missing capabilities need an available fallback or concrete blocker. Distinguish numerical evidence, bounded checking, exact calculation, proof certificates and native formal verification. Arbitrary precision or CAS success alone does not raise evidence strength; another implementation is useful when it addresses a discrepancy or the required verification strength. Deliver the actual requested result when feasible, keeping large artifacts on disk with a compact summary.
+
+Native selected-capability checks need no external Skill:
+
+```powershell
+python -B scripts/rds_cli.py exec --timeout 10 -- python -B scripts/rds_capabilities.py --capability sympy_exact
+```
+
+The helper checks one of `python_exact`, `sympy_exact`, `mpmath_iv` or `torch_cpu` in the running interpreter, recording its real module path/version and a small operation. A failed check remains a failure, with no silent fallback, package installation or scan of every backend. The frozen runner supplies the cap, source binding and original logs. Availability is a narrow live smoke check: it does not prove rigorous interval rounding, the requested algorithm, CUDA readiness or resource fit. Native Lean readiness already belongs to the formal entry. Short jobs need no additional probe when their actual primary check establishes the same capability. Do not introduce a persistent capability cache as mathematical evidence.
+
+Switch from lengthy manual expansion based on the actual unresolved work, not an arbitrary polynomial degree or branch count. A direct proof may be shorter than a computational pipeline. If a bounded computational attempt cannot close the claim, preserve its remaining branches and actual blocker; do not repeat the same text or restart the same completed job merely to appear active.
+
+The [native research](native-research.md) objective lock and exact assets supply continuity: retain the original statement and quantifiers, reopen affected downstream obligations when a premise changes, and preserve failed outputs with separate corrections. No external archive is initialized and self-review remains self-review. In mixed work, the existing theory-probe entry also checks `application_status`; a conditional theorem alone does not admit an empirical run.
+
 ## Clarify method limits
 
 Treat candidate construction, verification of a fixed candidate, and proof of a universal claim as separate purposes. An algorithm name alone does not identify its purpose: branch and bound can search heuristically or exhaustively exclude a rigorously bounded domain. Floating point with proved enclosures can support a certificate; exact arithmetic can still be used for forbidden heuristic search. A coverage certificate proves a construction upper bound, not a matching unrestricted lower bound or global optimum.

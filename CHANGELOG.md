@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Support scoped `OBLIGATION_CHECK` actions with verified/counterexample/unresolved branches, alongside existing empirical comparisons. Bind direction-search source changes in execution identity; readiness and process success remain separate from proof.
+- Make authorized certificate-producing computation an active route for lengthy theoretical work. Bring selected backend readiness, feasibility, evidence-strength and research-continuity rules into native RDS guidance without depending on external mathematics Skills or forcing theory and experiments through the same acceptance gate.
+- Preserve CLI invocation counts during brief SQLite contention with a bounded wait; remove the fresh-log journal initialization race and retain existing journal modes.
+- Add a bounded-runner-compatible live check for one selected local exact/interval/CPU tensor capability, retaining actual interpreter/module identity and failures without an external Skill, broad environment scan or evidence cache.
+
 - Add optional sourced method constraints to Advisor, composed experiments and prospective quick execution. Preserve original wording and actual clarification in existing checkpoints; distinguish candidate search, verification and proof, block only affected conflicts/unknown scopes before launch or budget charge, and ask for material ambiguity without suspending compatible work. Declarations remain input-reported and grant no new permission or scientific verdict.
 - Include bounded certificate-producing computation in mathematical route selection, with explicit exhaustive domains, justified pruning, unresolved branches and independent replay. Keep construction coverage separate from unrestricted global lower bounds.
 - Align Codex host instructions with compact factual progress and scoped method clarification; retain complete control-compatibility checks and remove unsupported display/performance guarantees. Focus 5.8 delivery on observed integration defects and engineering regressions; benchmark access and research-policy measurement are outside this release's active work.

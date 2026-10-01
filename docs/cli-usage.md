@@ -3,6 +3,11 @@
 Every `rds_cli.py` invocation records its start and exit in a local SQLite log,
 automatically. All updated checkouts share one log for the current user. Calls
 include help, version, invalid arguments, failed commands and statistics queries.
+
+SQLite waits up to two seconds per logging transaction for temporary contention;
+persistent failures leave the command's original result unchanged. Existing journal
+modes are retained, and fresh logs use SQLite's default mode without a first-use
+existence/PRAGMA race. Log errors remain visible through the usage report.
 Counts describe actual CLI invocations; API imports and loading Skill instructions
 have their own evidence. No prompt, full argv, input path or credential is stored.
 

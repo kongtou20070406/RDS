@@ -48,9 +48,10 @@ class MethodTests(unittest.TestCase):
         before = engine_id()
         def changed(path):
             raw = original(path)
-            return raw + b'\n# changed method gate\n' if path.name == 'rds_methods.py' else raw
-        with patch.object(Path, 'read_bytes', changed):
-            self.assertNotEqual(engine_id(), before)
+            return raw + b'\n# changed admission gate\n' if path.name == gate else raw
+        for gate in ('rds_methods.py', 'rds_advisor_search.py', 'rds_advisor.py'):
+            with patch.object(Path, 'read_bytes', changed):
+                self.assertNotEqual(engine_id(), before)
 
     def test_verification_and_certifying_proof_are_not_candidate_search(self):
         for profile in (method('verification', 'exact_replay'), method(),

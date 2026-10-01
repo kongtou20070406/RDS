@@ -57,6 +57,44 @@ class QuickTests(unittest.TestCase):
     def advise(self, *tail, ok=True):
         return self.call('advise', '--context', str(self.context_path), '--graph', str(self.graph_path), *tail, root=self.ledger, ok=ok)
 
+    def test_prospective_theory_choice_preserves_outputs_without_claiming_proof(self):
+        self.initialize_ledger()
+        self.context['research_mode'] = 'theory'
+        self.context_path.write_text(json.dumps(self.context), encoding='utf-8')
+        action = self.graph['nodes'][0]['executable']['action']
+        action.update(kind='OBLIGATION_CHECK', claim='Every rational square is nonnegative.',
+            outcomes=[{'observation': label, 'next_decision': 'review ' + label}
+                      for label in ('verified', 'counterexample', 'unresolved')])
+        action.pop('competing_explanations')
+        self.graph_path.write_text(json.dumps(self.graph), encoding='utf-8')
+        self.script('from pathlib import Path\nPath("outputs/result.json").write_text(\'{"claim_status":"unresolved"}\')\n')
+        result = json.loads(self.job('theory', True, '--context', str(self.context_path),
+            '--graph', str(self.graph_path), '--ledger', str(self.ledger), '--output', 'outputs/result.json').stdout)
+        self.assertEqual(result['run_status'], 'SUCCEEDED')
+        self.assertEqual(result['ledger_checkpoints'], 2)
+        report = json.loads(Path(result['record']).read_text(encoding='utf-8'))
+        self.assertIn('UNKNOWN', report['scientific_support'])
+        self.assertEqual(json.loads((Path(report['job_root']) / 'outputs/result.json').read_text()),
+                         {'claim_status': 'unresolved'})
+
+    def test_theory_with_missing_domain_premise_stops_before_budget_charge(self):
+        self.initialize_ledger()
+        self.context['research_mode'] = 'theory'
+        self.context_path.write_text(json.dumps(self.context), encoding='utf-8')
+        config = self.graph['nodes'][0]['executable']
+        config['preconditions'] = [{'fact': 'domain-exhaustive', 'value': True}]
+        config['action'].update(kind='OBLIGATION_CHECK', claim='Every case is covered.',
+            outcomes=[{'observation': label, 'next_decision': 'review ' + label}
+                      for label in ('verified', 'counterexample', 'unresolved')])
+        config['action'].pop('competing_explanations')
+        self.graph_path.write_text(json.dumps(self.graph), encoding='utf-8')
+        before = ProjectStore(self.ledger).snapshot()['budget']
+        failed = self.job('missing-proof-premise', False, '--context', str(self.context_path),
+            '--graph', str(self.graph_path), '--ledger', str(self.ledger))
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertEqual(ProjectStore(self.ledger).snapshot()['budget'], before)
+        self.assertFalse((self.root / '.rds/exec/missing-proof-premise').exists())
+
     def test_one_call_completes_identity_preserves_output_and_never_claims_scientific_pass(self):
         self.script()
         result = json.loads(self.job().stdout)

@@ -90,7 +90,15 @@ def _action_valid(action, current_choice):
     if len(decisions) < 2 and not (action.get("kind") == "INTERPRETATION_UPDATE" and current_choice
                                  and decisions and current_choice not in decisions):
         return False, "no outcome can distinguish next decisions"
-    if not action.get("description") or not isinstance(action.get("competing_explanations"), list) or len(action["competing_explanations"]) < 2:
+    if action.get("kind") == "OBLIGATION_CHECK":
+        if not all(isinstance(action.get(k), str) and action[k].strip() for k in ("description", "target", "claim")):
+            return False, "obligation checks need an explicit target and scoped claim"
+        labels = [o["observation"] for o in outcomes]
+        if len(labels) != 3 or set(labels) != {"verified", "counterexample", "unresolved"}:
+            return False, "obligation outcomes must distinguish verified, counterexample and unresolved"
+        if "discrimination" in action:
+            return False, "obligation checks cannot claim empirical rival discrimination"
+    elif not action.get("description") or not isinstance(action.get("competing_explanations"), list) or len(action["competing_explanations"]) < 2:
         return False, "missing competing explanations or action"
     if not isinstance(action.get("required_observables"), list) or not action["required_observables"]:
         return False, "missing required observables"
@@ -270,7 +278,7 @@ def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nod
             if _cost_identity(budget) == _cost_identity(cost):
                 budget_status = "WITHIN_REPORTED_BUDGET" if cost["value"] <= budget["value"] else "OVER_REPORTED_BUDGET"
         candidate = {"id": candidate_id, "rule_id": rule_id, "status": status, "action": deepcopy(action),
-                     "competing_explanations": deepcopy(action["competing_explanations"]),
+                     "competing_explanations": deepcopy(action.get("competing_explanations", [])),
                      "required_observables": deepcopy(action["required_observables"]), "outcomes": deepcopy(action["outcomes"]),
                      "decision_coverage": sorted({o["next_decision"] for o in action["outcomes"]}),
                      "steps": steps, "derivation": deepcopy(derivation) + [{"step": "action", "rule_id": rule_id,

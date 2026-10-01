@@ -111,6 +111,8 @@ def engine_id():
     return digest({"cli": digest((here / "rds_cli.py").read_bytes()),
                    "quick": digest((here / "rds_quick.py").read_bytes()),
                    "methods": digest((here / "rds_methods.py").read_bytes()),
+                   "direction_search": digest((here / "rds_advisor_search.py").read_bytes()),
+                   "direction_advisor": digest((here / "rds_advisor.py").read_bytes()),
                    "usage": digest((here / "rds_usage.py").read_bytes()),
                    "guard": digest((here / "rds_guard.py").read_bytes()),
                    "probe": digest((here / "rds_probe.py").read_bytes()),

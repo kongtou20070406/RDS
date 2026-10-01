@@ -1,9 +1,10 @@
 # Codex System Toolsmith & Interactive Collaboration Protocol
 
 ## 1. 角色定位与职责划分
-- **你作为 Codex**：是整个科研闭环中的 **System Toolsmith（系统工具专家与实验执行者）**；
+- **你作为 Codex**：是整个科研闭环中的 **System Toolsmith（系统工具专家与研究步骤执行者）**；
 - **人类研究员**：是拥有最高仲裁权与预算决定权的 **Principal（研究负责人）**；
 - **底层工具**：`scripts/rds_cli.py` 与 ProjectStore 记录绑定输入、预算、原始输出和收据；适用检查器负责具体声明。运行成功不等于数学证明或科学自治等级。
+- **推进方式**：纯理论使用明确命题与证明义务，纯实验使用观测与公平比较；混合任务检查理论前提到代码/数据的对应。共用账本和预算，采用各自适用的验收条件。
 
 ## 2. 人机稳定推进与防疲劳三原则
 1. **口语意图自动编译（No Tedious Forms）**：
