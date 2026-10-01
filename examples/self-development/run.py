@@ -9,7 +9,10 @@ import sys
 
 REPO = Path(__file__).resolve().parents[2]
 PATTERNS = ["test_rds_artifacts.py", "test_rds_costs.py", "test_rds_experiments.py",
-            "test_rds_rsi.py", "test_rds_project.py", "test_rds_checkpoints.py", "test_rds_development_cli.py"]
+            "test_rds_rsi.py", "test_rds_project.py", "test_rds_checkpoints.py", "test_rds_development_cli.py",
+            "test_rds_frontier.py", "test_rds_frontier_cli.py", "test_rds_frontier_proposals.py",
+            "test_rds_frontier_history.py", "test_rds_advancement.py", "test_rds_advancement_cli.py",
+            "test_rds_research_note.py", "test_rds_research_note_cli.py", "test_rds_history_preflight.py"]
 
 
 def write(path, value):
@@ -27,8 +30,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workspace", required=True, help="New empty development workspace; original source is read-only")
     parser.add_argument("--all-tests", action="store_true", help="Run every public test module, including benchmark-backed checks")
+    parser.add_argument("--test-pattern", action="append", help="Run a named public test module; repeat for a bounded repair iteration")
     args = parser.parse_args()
-    patterns = sorted(p.name for p in (REPO / "tests").glob("test_*.py")) if args.all_tests else PATTERNS
+    if args.all_tests and args.test_pattern:
+        parser.error("Choose --all-tests or --test-pattern")
+    patterns = (args.test_pattern or (sorted(p.name for p in (REPO / "tests").glob("test_*.py"))
+                                     if args.all_tests else PATTERNS))
+    if any(Path(name).name != name or not name.startswith("test_") or not name.endswith(".py")
+           or not (REPO / "tests" / name).is_file() for name in patterns):
+        parser.error("Each --test-pattern must name an existing public test_*.py module")
+    patterns = list(dict.fromkeys(patterns))
     root = Path(args.workspace).resolve()
     if root == REPO or root.is_relative_to(REPO):
         parser.error("Choose a workspace outside this checkout to avoid recursive source copying")
@@ -47,6 +58,17 @@ def main():
     fixture_paths = ["examples/experiment-templates/templates.json", "examples/rsi/base-graph.json",
                      "examples/rsi/candidate-rule.json", "examples/rsi/cases.json"]
     data.extend({"path": path, "sha256": file_sha(root / path), "role": "data"} for path in fixture_paths)
+    if "test_rds_advancement_cli.py" in patterns:
+        path = "examples/advancement-loop/run.py"
+        bindings.append({"path": path, "sha256": file_sha(root / path), "role": "code"})
+    if "test_rds_research_note_cli.py" in patterns:
+        path = "examples/lightweight/RESEARCH.md"
+        data.append({"path": path, "sha256": file_sha(root / path), "role": "data"})
+    # The historical evaluator consumes these inputs/targets after exploration;
+    # bind their original bytes once at execution admission, like other fixtures.
+    data.extend({"path": p.relative_to(root).as_posix(), "sha256": file_sha(p), "role": "data"}
+                for p in sorted((root / "benchmark/advisor-frontier").rglob("*.json"))
+                if "results" not in p.relative_to(root / "benchmark/advisor-frontier").parts)
     if args.all_tests:
         bindings.extend({"path": p.relative_to(root).as_posix(), "sha256": file_sha(p), "role": "code"}
                         for p in sorted((root / "benchmark").rglob("*.py")))

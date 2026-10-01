@@ -82,6 +82,88 @@ class AdvisorCLITests(unittest.TestCase):
             self.assertEqual(search['candidates'][0]['evidence_status'], 'INPUT_REPORTED')
             self.assertFalse((Path(raw) / '.rds').exists())
 
+    def test_explanation_coverage_reaches_cli_without_overclaiming_imported_evidence(self):
+        example = json.loads((ROOT / 'examples/advisor-search/discrimination-example.json').read_text(encoding='utf-8'))
+        with tempfile.TemporaryDirectory() as raw:
+            project = Path(raw)
+            graph, context, manifest = (project / name for name in ('graph.json', 'context.json', 'manifest.json'))
+            graph.write_text(json.dumps(example['graph']), encoding='utf-8')
+            manifest.write_text(json.dumps({'schema': 'rds-artifact-manifest-v1', 'sources': []}), encoding='utf-8')
+            for matched in (True, False):
+                example['context']['facts']['protocol_matched']['value'] = matched
+                context.write_text(json.dumps(example['context']), encoding='utf-8')
+                for extra in ([], ['--artifacts', str(manifest)]):
+                    with self.subTest(protocol_matched=matched, artifacts=bool(extra)):
+                        answer = self.call(project, '--research-context', str(context), '--graph', str(graph), *extra)
+                        search = next(row['search'] for row in answer['recommendations']
+                                      if row.get('type') == 'EXECUTABLE_DIRECTION_SEARCH')
+                        self.assertEqual(len(search['ranking']['pareto_front']), 2)
+                        self.assertEqual(search['ranking']['dominance'], [])
+                        for candidate in search['candidates']:
+                            report = candidate['discrimination']
+                            self.assertEqual(report['valid_prediction_support'], matched)
+                            self.assertEqual(report['evidence_status'], 'INPUT_REPORTED')
+                            self.assertEqual(len(report['conditional_distinguishing_pairs']), 2 if matched else 0)
+                            self.assertEqual(len(report['unresolved_pairs']), 1 if matched else 3)
+            self.assertFalse((project / '.rds').exists())
+
+    def test_malformed_prediction_operator_preserves_other_cli_candidates(self):
+        example = json.loads((ROOT / 'examples/advisor-search/discrimination-example.json').read_text(encoding='utf-8'))
+        with tempfile.TemporaryDirectory() as raw:
+            project = Path(raw)
+            graph, context = (project / name for name in ('graph.json', 'context.json'))
+            context.write_text(json.dumps(example['context']), encoding='utf-8')
+            for operator in ([], {}, None):
+                with self.subTest(operator=operator):
+                    example['graph']['nodes'][0]['executable']['action']['discrimination']['conditions'][0]['op'] = operator
+                    graph.write_text(json.dumps(example['graph']), encoding='utf-8')
+                    answer = self.call(project, '--research-context', str(context), '--graph', str(graph))
+                    search = next(row['search'] for row in answer['recommendations']
+                                  if row.get('type') == 'EXECUTABLE_DIRECTION_SEARCH')
+                    self.assertEqual(len(search['candidates']), 2)
+                    reports = [candidate['discrimination'] for candidate in search['candidates']]
+                    self.assertEqual(sum(report['valid_prediction_support'] for report in reports), 1)
+                    unknown = next(report for report in reports if not report['valid_prediction_support'])
+                    self.assertEqual(unknown['applicability'], 'UNKNOWN')
+                    self.assertEqual(len(unknown['unresolved_pairs']), 3)
+            self.assertFalse((project / '.rds').exists())
+
+    def test_manual_search_limit_reaches_search_with_and_without_artifacts(self):
+        with tempfile.TemporaryDirectory() as raw:
+            project = Path(raw)
+            action = {'description': 'Inspect a bounded comparison', 'competing_explanations': ['A', 'B'],
+                      'required_observables': ['matched result'], 'outcomes': [
+                          {'observation': 'improved', 'next_decision': 'continue'},
+                          {'observation': 'unchanged', 'next_decision': 'revise'}]}
+            graph = {'nodes': [{'id': name, 'executable': {'decisions': ['choose'], 'preconditions': [],
+                         'action': {**action, 'id': name + '-check'}}} for name in ('first', 'second')]}
+            graph_path, context, manifest = (project / name for name in ('graph.json', 'context.json', 'manifest.json'))
+            graph_path.write_text(json.dumps(graph), encoding='utf-8')
+            context.write_text(json.dumps({'decision': 'choose', 'max_candidates': 1}), encoding='utf-8')
+            manifest.write_text(json.dumps({'schema': 'rds-artifact-manifest-v1', 'sources': []}), encoding='utf-8')
+            for extra in ([], ['--artifacts', str(manifest)]):
+                with self.subTest(artifacts=bool(extra)):
+                    answer = self.call(project, '--research-context', str(context), '--graph', str(graph_path), *extra)
+                    search = next(row['search'] for row in answer['recommendations']
+                                  if row.get('type') == 'EXECUTABLE_DIRECTION_SEARCH')
+                    self.assertEqual(len(search['candidates']), 1)
+                    self.assertEqual(search['truncation']['limits']['max_candidates'], 1)
+                    self.assertIn('candidate limit', search['truncation']['reasons'])
+            graph['nodes'][0]['executable']['satisfied_when'] = [{'fact': 'first-checked', 'value': True}]
+            graph['edges'] = [{'from': 'first', 'to': 'second', 'relation': 'prerequisite_for'}]
+            graph_path.write_text(json.dumps(graph), encoding='utf-8')
+            context.write_text(json.dumps({'decision': {'id': 'choose', 'target_rules': ['second']},
+                'max_depth': 1, 'facts': {'first-checked': {'value': True, 'source': 'matched check'}}}), encoding='utf-8')
+            for extra in ([], ['--artifacts', str(manifest)]):
+                with self.subTest(depth=True, artifacts=bool(extra)):
+                    answer = self.call(project, '--research-context', str(context), '--graph', str(graph_path), *extra)
+                    search = next(row['search'] for row in answer['recommendations']
+                                  if row.get('type') == 'EXECUTABLE_DIRECTION_SEARCH')
+                    self.assertEqual(search['truncation']['limits']['max_depth'], 1)
+                    self.assertIn('depth limit', search['truncation']['reasons'])
+                    self.assertFalse(any(candidate['status'] == 'READY' for candidate in search['candidates']))
+            self.assertFalse((project / '.rds').exists())
+
     def test_receipt_cost_identity_conflict_reaches_advisor_without_selected_facts(self):
         with tempfile.TemporaryDirectory() as raw:
             project = Path(raw)

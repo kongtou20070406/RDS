@@ -187,11 +187,11 @@ python -B scripts/rds_cli.py --root ./my-project advise
 
 ## Obelisk 履歴との連携
 
-RDS は [Obelisk](https://github.com/tommy0103/obelisk) と連携し、ベクトルストアを重複して作らずに過去のセッション履歴を取得します。
+推奨する任意の記憶拡張：[Obelisk](https://github.com/tommy0103/obelisk)。軽量な決定グラフは研究の堂々巡りを防ぎ、過去のセッションの正確な情報が必要なときは Obelisk を使います。履歴ストアを重複して構築する必要はありません。
 
 ```powershell
-python -B scripts/rds_cli.py history prepare --project-path 'C:\research\project' --terms 'C7' --output 'query.mjs'
-python -B scripts/rds_cli.py history query --query 'query.mjs'
+python -B scripts/rds_cli.py history prepare --project-path 'C:\research\project' --terms 'C7' --output 'C:\queries\obq-c7-unique-token.mjs'
+python -B scripts/rds_cli.py history query --query 'C:\queries\obq-c7-unique-token.mjs'
 ```
 
 ---

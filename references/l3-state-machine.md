@@ -25,7 +25,9 @@ session should use the user's scheduler (Windows Task Scheduler on this host).
 
 `.rds/state.sqlite3` holds only operational contracts, allocations, data exposure,
 raw execution artifacts and append-only receipts. It is not a conversational
-memory index. History retrieval goes exclusively through Obelisk's public CLI.
+memory index. The local weak decision graph prevents repeated research loops;
+optional exact history retrieval uses Obelisk's public CLI. Neither creates new
+execution authority or a second chat archive.
 
 ## Input and evidence binding
 

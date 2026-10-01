@@ -187,11 +187,11 @@ python -B scripts/rds_cli.py --root ./my-project advise
 
 ## Obelisk History Integration
 
-RDS connects with [Obelisk](https://github.com/tommy0103/obelisk) to retrieve past session history without duplicating vector stores:
+Recommended optional memory enhancement: [Obelisk](https://github.com/tommy0103/obelisk). The lightweight decision graph helps prevent repeated research loops; use Obelisk when you need exact details from past sessions, without duplicating a history store:
 
 ```powershell
-python -B scripts/rds_cli.py history prepare --project-path 'C:\research\project' --terms 'C7' --output 'query.mjs'
-python -B scripts/rds_cli.py history query --query 'query.mjs'
+python -B scripts/rds_cli.py history prepare --project-path 'C:\research\project' --terms 'C7' --output 'C:\queries\obq-c7-unique-token.mjs'
+python -B scripts/rds_cli.py history query --query 'C:\queries\obq-c7-unique-token.mjs'
 ```
 
 ---

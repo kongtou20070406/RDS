@@ -4,6 +4,7 @@ No text eval, causal discovery, probability estimates or run execution. Imported
 artifacts retain their provenance labels; caller dictionaries remain INPUT_REPORTED.
 """
 from copy import deepcopy
+from itertools import combinations
 import math
 
 TRUE, FALSE, UNKNOWN = "TRUE", "FALSE", "UNKNOWN"
@@ -53,6 +54,9 @@ def evaluate_condition(condition, facts):
         return report
     value, expected, op = record["value"], report["expected"], report["operator"]
     report.update(actual=deepcopy(value), source=deepcopy(record["source"]))
+    if not isinstance(op, str):
+        report["reason"] = "unsupported operator or incompatible value type"
+        return report
     if op in {"eq", "ne"}:
         equal = value == expected and (not isinstance(value, bool) and not isinstance(expected, bool)
                                       or type(value) is type(expected))
@@ -119,6 +123,56 @@ def _cost(ids, costs):
             **({"resource": resource} if resource is not None else {}),
             "sources": [deepcopy(r["source"]) for r in records], "components": list(ids),
             "evidence_statuses": [_evidence_status(r) for r in records]}
+
+
+def _discrimination(action, facts):
+    """Describe conditional rival-pair coverage from supplied prediction sets."""
+    spec = action.get("discrimination")
+    spec = spec if isinstance(spec, dict) else {}
+    explanations = action["competing_explanations"]
+    issues = []
+    if not (2 <= len(explanations) <= 32 and all(isinstance(e, str) and e.strip() for e in explanations)
+            and len(set(explanations)) == len(explanations)):
+        issues.append("competing_explanations must be 2 to 32 unique explanation IDs")
+        explanations = []
+    explanations = sorted(explanations)
+    scope = spec.get("scope_id")
+    if not isinstance(scope, str) or not scope.strip():
+        issues.append("missing explicit scope_id")
+    if not _reported(spec):
+        issues.append("missing sourced or reliable prediction support")
+    allowed = {outcome["observation"] for outcome in action["outcomes"]}
+    predictions = spec.get("predictions")
+    if not (isinstance(predictions, dict) and set(predictions) == set(explanations) and explanations
+            and all(isinstance(labels, list) and 1 <= len(labels) <= 32
+                    and all(isinstance(label, str) and label in allowed for label in labels)
+                    for labels in predictions.values())):
+        issues.append("predictions must give 1 to 32 declared outcome labels for every explanation ID")
+    conditions = spec.get("conditions", [])
+    reports = []
+    if not (isinstance(conditions, list) and len(conditions) <= 32
+            and all(isinstance(c, dict) and isinstance(c.get("fact"), str) and c["fact"].strip() for c in conditions)):
+        issues.append("conditions must be up to 32 explicit fact predicates")
+        applicability = UNKNOWN
+    else:
+        reports = [evaluate_condition(condition, facts) for condition in conditions]
+        applicability = _all(reports)
+    supported = not issues and applicability == TRUE
+    distinguishing, unresolved = [], []
+    for pair in combinations(explanations, 2):
+        if not supported:
+            reason = "; ".join(issues) if issues else "prediction applicability is " + applicability
+        elif set(predictions[pair[0]]).isdisjoint(predictions[pair[1]]):
+            distinguishing.append(list(pair))
+            continue
+        else:
+            reason = "allowed predictions overlap"
+        unresolved.append({"pair": list(pair), "reason": reason})
+    return {"scope_id": deepcopy(scope), "source": deepcopy(spec.get("source")),
+            "evidence_status": _evidence_status(spec), "conditions": reports,
+            "applicability": applicability, "valid_prediction_support": supported,
+            "conditional_distinguishing_pairs": distinguishing, "unresolved_pairs": unresolved,
+            "issues": issues}
 
 
 def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nodes=128,
@@ -222,6 +276,8 @@ def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nod
                          "action_id": action["id"], "reason": "outcomes distinguish declared next decisions"}],
                      "incremental_cost": cost, "budget_status": budget_status, "dominated_by": [],
                      "evidence_status": "INPUT_REPORTED"}
+        if "discrimination" in action:
+            candidate["discrimination"] = _discrimination(action, facts)
         if budget_status == "OVER_REPORTED_BUDGET":
             candidate["status"] = "BLOCKED_BUDGET"
             result["blocked_candidates"].append(candidate)
@@ -319,9 +375,22 @@ def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nod
             if _cost_identity(bcost) != _cost_identity(wcost):
                 continue
             bcov, wcov = set(better["decision_coverage"]), set(worse["decision_coverage"])
-            if bcov >= wcov and bcost["value"] <= wcost["value"] and (bcov != wcov or bcost["value"] < wcost["value"]):
+            bdisc, wdisc = better.get("discrimination"), worse.get("discrimination")
+            pair_gain = False
+            if bdisc is not None or wdisc is not None:
+                if (bdisc is None or wdisc is None or not bdisc["valid_prediction_support"]
+                        or not wdisc["valid_prediction_support"] or bdisc["scope_id"] != wdisc["scope_id"]
+                        or set(better["competing_explanations"]) != set(worse["competing_explanations"])):
+                    continue
+                bpairs = {tuple(pair) for pair in bdisc["conditional_distinguishing_pairs"]}
+                wpairs = {tuple(pair) for pair in wdisc["conditional_distinguishing_pairs"]}
+                if not bpairs or not wpairs or not bpairs >= wpairs:
+                    continue
+                pair_gain = bpairs != wpairs
+            if bcov >= wcov and bcost["value"] <= wcost["value"] and (bcov != wcov or pair_gain or bcost["value"] < wcost["value"]):
                 worse["dominated_by"].append(better["id"])
                 result["ranking"]["dominance"].append({"better": better["id"], "worse": worse["id"],
-                    "basis": "decision coverage superset and no higher comparable observed incremental cost"})
+                    "basis": "decision coverage superset and no higher comparable observed incremental cost" +
+                    ("; supplied same-scope conditional distinguishing pairs are a superset" if bdisc is not None else "")})
     result["ranking"]["pareto_front"] = [c["id"] for c in result["candidates"] if not c["dominated_by"]]
     return finish()

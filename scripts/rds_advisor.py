@@ -411,9 +411,22 @@ class RDSAdvisor:
     def recommend_next_directions(self, state: Dict[str, Any], judgment_graph: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Read real state and supplied graph; recommend a review, never a causal ranking."""
         recommendations = []
-        if state.get("advisor_context"):
+        context = state.get("advisor_context", {})
+        if isinstance(context, dict) and "frontier" in context:
+            from rds_frontier import discover_frontier
+            frontier = discover_frontier(context["frontier"])
+            if "frontier_proposals" in context:
+                from rds_frontier_proposals import review_proposals
+                frontier["proposal_review"] = review_proposals(frontier, context["frontier"], context["frontier_proposals"])
+            recommendations.append(_advice("STRATEGIC_RESEARCH_ADVICE", type="RESEARCH_FRONTIER", urgency="REVIEW",
+                reason="Use sourced graph gaps, residuals and integer dimensional constraints to ask for new relations.",
+                frontier=frontier, observations=frontier["gaps"], limitations=frontier["limitations"]))
+        if context and (not isinstance(context, dict) or "decision" in context or "frontier" not in context):
             from rds_advisor_search import search_directions
             options = {"templates": state["advisor_templates"]} if state.get("advisor_templates") else {}
+            if isinstance(state["advisor_context"], dict):
+                options.update({key: state["advisor_context"][key] for key in ("max_depth", "max_candidates")
+                                if key in state["advisor_context"]})
             search = search_directions(judgment_graph, state["advisor_context"], **options)
             recommendations.append(_advice("STRATEGIC_RESEARCH_ADVICE", type="EXECUTABLE_DIRECTION_SEARCH", urgency="REVIEW",
                 reason="按明确的下一决策、带来源事实和图中结构化前置条件组合有界候选。",
