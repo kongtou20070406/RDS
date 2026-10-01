@@ -55,7 +55,15 @@ manipulation check requires inspecting that correspondence; a flat trajectory
 cannot by itself establish an optimizer or data-distribution cause. `UNKNOWN`
 blocks this probe without refuting the mathematics. Theory-check wall time is
 reported separately from the empirical process cost. This scalar acceptance case
-does not measure autonomous research quality.
+does not measure autonomous research quality. The hard project budget covers
+empirical subprocesses, not the complete controller/theory workflow; total observed
+controller time is reported without claiming an enforced end-to-end budget.
+
+Blocked checks also save structured verification-request decisions in the existing
+checkpoint ledger. The next selection pass suppresses an unchanged repeat before
+invoking the checker; a changed declaration reopens review. Rejecting this redundant
+request does not refute an `UNKNOWN` mathematical claim, and reopened review does
+not grant CPU execution authority.
 
 ## Check identity at meaningful boundaries
 

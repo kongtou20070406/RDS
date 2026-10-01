@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -176,7 +177,57 @@ def retain_probe(root, store, protocol, mode, formal):
     return result, observation, record
 
 
+def retain_blocked_request(root, store, advisor, name, formal):
+    """Reject a redundant verification request, never infer falsity from UNKNOWN."""
+    declared = root / "out" / (name + "-declaration.json")
+    write(declared, formal)
+    context = {"decision": {"id": "choose", "goal_revision": "quadratic-v1", "scope": {"gate_request": name}},
+               "facts": {"declaration": {"value": formal, "source": {
+                   "path": declared.relative_to(root).as_posix(), "sha256": file_sha(declared), "locator": "/"}}}}
+    action = {"id": "check-theory", "kind": "CHECK_FORMAL_OBLIGATION", "description": "Check this declaration before any CPU request",
+              "target": {"name": "theory-check-request"}, "operation": "verify-current-declaration",
+              "competing_explanations": ["declared property holds", "property fails or remains unproved"],
+              "required_observables": ["declaration"],
+              "outcomes": [{"observation": "checked applicable PASS", "next_decision": "consider CPU admission"},
+                           {"observation": "FAIL or UNKNOWN", "next_decision": "revise premises or collect missing evidence"}]}
+    graph = {"nodes": [{"id": "theory", "sources": [declared.relative_to(root).as_posix()],
+              "executable": {"decisions": ["choose"], "preconditions": [], "action": action}}], "edges": []}
+    candidate = search(advisor, store, context, graph)["candidates"][0]
+    before = store.snapshot()
+    result = advisor.execute_theory_probe(manifest(root, "normal"), formal)
+    if result["receipt"] is not None or store.snapshot() != before:
+        raise AssertionError("Unproved candidate consumed empirical budget")
+    write(root / "out" / (name + "-check.json"), result)
+    decision = {"question_id": "choose", "goal_revision": "quadratic-v1", "scope": {"gate_request": name},
+                "candidate": candidate, "outcome": "rejected", "evidence": context["facts"],
+                "formal": formal, "result": result, "theory_wall_seconds": result["theory_wall_seconds"],
+                "claim_status": "UNPROVED" if result["formal_gate"]["status"] == "UNKNOWN" else "CHECKED_DECLARATION_FAIL",
+                "outcome_reason": "Reject repeating this check without changed premises; UNKNOWN is not a refutation",
+                "next_action": "review-declaration-or-missing-premises-before-rechecking"}
+    checkpoint = save_checkpoint(root, "blocked-" + name, before, kind="project", decision=decision)
+    unchanged = search(advisor, store, context, graph)
+    # This is the next selection pass, reading the same SQLite checkpoint. Only
+    # selected verification requests can invoke the costly checker again.
+    repeated_checks = [advisor.execute_theory_probe(manifest(root, "normal"), formal)
+                       for _ in unchanged["candidates"]]
+    if repeated_checks or store.snapshot() != before:
+        raise AssertionError("Unchanged rejected verification request was repeated")
+    revised = root / "out" / (name + "-revised-declaration.json")
+    write(revised, obligation())
+    changed = copy.deepcopy(context)
+    changed["facts"]["declaration"] = {"value": obligation(), "source": {
+        "path": revised.relative_to(root).as_posix(), "sha256": file_sha(revised), "locator": "/"}}
+    reopened = search(advisor, store, changed, graph)
+    record = {"result": result, "checkpoint": checkpoint, "decision": decision,
+              "unchanged_advice": unchanged, "recheck_count": len(repeated_checks),
+              "changed_premise_advice": reopened,
+              "restoration": restore_checkpoint(root, "blocked-" + name, store.snapshot(), kind="project")}
+    write(root / "out" / (name + "-gate-history.json"), record)
+    return record
+
+
 def run_cpu_case(root):
+    started = time.monotonic()
     root = Path(root).resolve()
     if root.exists() and any(root.iterdir()):
         raise ValueError("Use a new empty workspace")
@@ -185,20 +236,16 @@ def run_cpu_case(root):
     blocked = []
     for name, formal in (("fail", obligation(slope="-1")),
                          ("unknown", {"kind": "declarative", "statement": {"schema": 1, "kind": "unsupported"}})):
-        before = store.snapshot()
-        result = advisor.execute_theory_probe(manifest(root, "normal"), formal)
-        if result["receipt"] is not None or store.snapshot() != before:
-            raise AssertionError("Unproved candidate consumed empirical budget")
-        checkpoint = save_checkpoint(root, "blocked-" + name, before, kind="project",
-                                     decision={"formal": formal, "result": result, "next_action": "review-this-obligation"})
-        blocked.append({"result": result, "checkpoint": checkpoint})
+        blocked.append(retain_blocked_request(root, store, advisor, name, formal))
     formal = obligation(native=True)
     write(root / "out/declared-model.json", formal)
     from rds_lean_verify import render_source
     (root / "out/native-bound.lean").write_text(render_source(formal["statement"]["theorems"][2]["statement"]), encoding="utf-8")
     probes = [retain_probe(root, store, protocol, mode, formal) for mode in ("normal", "optimal", "mismatch")]
     summary = {"blocked": [{"status": b["result"]["formal_gate"]["status"], "receipt": None,
-                            "checkpoint": b["checkpoint"], "theory_wall_seconds": b["result"]["theory_wall_seconds"]} for b in blocked],
+                            "checkpoint": b["checkpoint"], "theory_wall_seconds": b["result"]["theory_wall_seconds"],
+                            "recheck_count": b["recheck_count"],
+                            "changed_premise_review": b["changed_premise_advice"]["candidates"][0]["loop_review"]["kind"]} for b in blocked],
                "probes": [{"run_id": result["receipt"]["run_id"], "run_status": result["receipt"]["run_status"],
                            "formal_status": result["formal_gate"]["status"], "steps": len(obs["rows"]),
                            "initial_loss": obs["initial_loss"], "last_loss": obs["last_loss"],
@@ -207,7 +254,10 @@ def run_cpu_case(root):
                           for result, obs, reflection in probes],
                "theory_wall_seconds": sum(b["result"]["theory_wall_seconds"] for b in blocked) +
                                       sum(result["theory_wall_seconds"] for result, _, _ in probes),
-               "snapshot": store.snapshot(), "scientific_policy_gain": "UNMEASURED"}
+               "snapshot": store.snapshot(), "scientific_policy_gain": "UNMEASURED",
+               "hard_budget_scope": "empirical_subprocess_only",
+               "observed_controller_wall_seconds": time.monotonic() - started,
+               "controller_hard_budget_enforced": False}
     write(root / "out/summary.json", summary)
     return summary
 
@@ -240,6 +290,19 @@ class TwoStepTests(unittest.TestCase):
             result = self.advisor.execute_theory_probe(manifest(self.root, "normal"), obligation())
         self.assertIsNone(result["receipt"])
         self.assertEqual(before, self.store.snapshot())
+
+    def test_failed_and_unknown_checkpoints_are_consumed_before_rechecking(self):
+        for name, formal in (("fail", obligation(slope="-1")),
+                             ("unknown", {"kind": "declarative", "statement": {"schema": 1, "kind": "unsupported"}})):
+            with self.subTest(name=name), patch.object(self.advisor, "execute_theory_probe",
+                                                      wraps=self.advisor.execute_theory_probe) as checked:
+                record = retain_blocked_request(self.root, self.store, self.advisor, name, formal)
+                self.assertEqual(checked.call_count, 1)
+                self.assertEqual(record["unchanged_advice"]["candidates"], [])
+                self.assertEqual(record["changed_premise_advice"]["candidates"][0]["loop_review"]["kind"], "REOPEN_REVIEW")
+                self.assertEqual(record["restoration"]["status"], "RESUMABLE_HANDOFF")
+                if name == "unknown":
+                    self.assertEqual(record["decision"]["claim_status"], "UNPROVED")
 
     def test_real_twenty_updates_receipt_and_no_duplicate_execution(self):
         result, obs, reflection = retain_probe(self.root, self.store, self.protocol, "normal", obligation())
