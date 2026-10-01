@@ -8,6 +8,27 @@ def _text(value):
     return isinstance(value, str) and bool(value.strip()) and len(value) <= 2000
 
 
+def formal_gate(statement, certificate=None, *, generate=False):
+    """Replay a declared side condition; never infer it from graph relatedness."""
+    if not isinstance(statement, dict):
+        return {"status": "UNKNOWN", "assurance": "NONE", "admitted": False,
+                "reason": "No explicit formal obligation"}
+    from rds_verify import checked_result, verify
+    if certificate is None and not generate:
+        result = {"status": "UNKNOWN", "assurance": "NONE",
+                  "reason": "A bound certificate is required"}
+    else:
+        result = verify(statement) if certificate is None else checked_result(statement, certificate)
+    # A conditional probability law is a theorem fact, not evidence that an
+    # experiment supplies independent draws or a nonnegative supermartingale.
+    admitted = (result.get("status") == "PASS"
+                and result.get("assurance") == "LEAN_KERNEL_CHECKED"
+                and isinstance(result.get("certificate"), dict)
+                and result.get("application_status", "PASS") == "PASS")
+    return {**result, "admitted": admitted,
+            "claim_relation": "declared_side_condition_only"}
+
+
 def review_proposals(frontier, spec, pack):
     """Check a reply against the current gap and return a proposed subgraph.
 
@@ -38,12 +59,14 @@ def review_proposals(frontier, spec, pack):
             raise ValueError("Proposal IDs must be distinct nonempty strings")
         seen.add(pid)
         gap = gaps.get(proposal.get("gap_id")) if isinstance(proposal.get("gap_id"), str) else None
+        formal_gap = gap is not None and gap.get("kind") == "FORMAL_OBLIGATION"
         errors = []
         if gap is None:
             errors.append("gap_id is not an open gap in this frontier result")
         nodes, relations = proposal.get("new_nodes", []), proposal.get("relations", [])
-        if not isinstance(nodes, list) or len(nodes) > 16 or not isinstance(relations, list) or not 1 <= len(relations) <= 32:
-            errors.append("Require at most 16 new nodes and 1..32 proposed relations")
+        if (not isinstance(nodes, list) or len(nodes) > 16 or not isinstance(relations, list)
+                or not (0 if formal_gap else 1) <= len(relations) <= 32):
+            errors.append("Require at most 16 new nodes and bounded proposed relations")
             nodes, relations = [], []
         defined = set(existing)
         for node in nodes:
@@ -65,7 +88,10 @@ def review_proposals(frontier, spec, pack):
                 errors.append("Relations require defined endpoints and a named relation")
             elif gap is None or not gap.get("relations") or relation["relation"] in gap["relations"]:
                 adjacency[relation["from"]].add((relation["to"], True))
-        if gap is not None:
+        if formal_gap:
+            if proposal.get("formal_obligation") != gap.get("formal_obligation"):
+                errors.append("Formal proposal must preserve the gap's exact obligation")
+        elif gap is not None:
             starts = [anchor for anchor in gap["anchors"] if anchor != gap["target"]]
             visited = {(anchor, False) for anchor in starts}
             pending = list(visited)
@@ -109,8 +135,19 @@ def review_proposals(frontier, spec, pack):
                           test={key: test[key] for key in ("protocol", "measurement", "stop_condition")},
                           next_if_positive=positive, next_if_negative=negative,
                           evidence_refs=deepcopy(gap["evidence_refs"]), original_decision=gap.get("decision"))
+            gate = formal_gate(proposal.get("formal_obligation"),
+                               proposal.get("formal_certificate"), generate=True)
+            report["formal_gate"] = gate
+            if isinstance(proposal.get("formal_obligation"), dict):
+                report["formal_obligation"] = deepcopy(proposal["formal_obligation"])
+            report["candidate_eligible"] = gate["admitted"]
+        else:
+            report["candidate_eligible"] = False
         results.append(report)
     return {"schema_version": 1, "advisor_type": "FRONTIER_PROPOSAL_REVIEW", "proposals": results,
+            "candidate_pool": [row["id"] for row in results if row["candidate_eligible"]],
             "adopted_relations": 0, "executed_tests": 0,
             "limitations": ["Distinct prediction text does not establish experimental discriminability.",
+                            "Native proof admission covers only the declared mathematical side condition.",
+                            "Conditional statistical laws require separately closed application premises.",
                             "This definition check does not validate causal claims, cost, code or scientific gains."]}

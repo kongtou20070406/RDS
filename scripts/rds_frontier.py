@@ -16,7 +16,7 @@ DEFAULT_LIMITS = {"max_gaps": 12, "max_nodes": 128, "max_edges": 512,
                   "max_combinations": 256, "max_power": 2, "max_terms": 3}
 LIMIT_CAPS = {"max_gaps": 64, "max_nodes": 512, "max_edges": 4096,
               "max_combinations": 4096, "max_power": 6, "max_terms": 6}
-FAMILIES = ("MISSING_BRIDGE", "MODEL_FAILURE", "DIMENSIONAL_BRIDGE", "TRANSFER_GAP")
+FAMILIES = ("MISSING_BRIDGE", "MODEL_FAILURE", "DIMENSIONAL_BRIDGE", "TRANSFER_GAP", "FORMAL_OBLIGATION")
 PROPOSAL_FIELDS = ["assumptions", "relations", "prediction", "test",
                    "next_if_positive", "next_if_negative"]
 MAX_METADATA_BYTES = 1024
@@ -112,7 +112,9 @@ def _gap(kind, record, anchors, target, refs, why, question, **extra):
             "anchors": list(anchors), "target": target, "status": "OPEN",
             "uncertainty": "UNKNOWN_SCIENTIFIC_SUPPORT", "evidence_status": "INPUT_REPORTED",
             "evidence_refs": refs, "why": why, "question": question,
-            "required_proposal_fields": list(PROPOSAL_FIELDS), "cost": {"status": "UNKNOWN"}, **extra}
+            "required_proposal_fields": list(PROPOSAL_FIELDS) +
+                (["formal_obligation"] if kind == "FORMAL_OBLIGATION" else []),
+            "cost": {"status": "UNKNOWN"}, **extra}
 
 
 def _vectors(count, max_power, max_terms):
@@ -147,7 +149,8 @@ def discover_frontier(spec):
     cutoff = _date(spec["as_of"], "as_of") if spec.get("as_of") is not None else None
     records = {}
     raw_caps = {"nodes": 4096, "edges": 16384, "goals": 512,
-                "observations": 512, "dimension_requests": 128, "transfers": 512}
+                "observations": 512, "dimension_requests": 128, "transfers": 512,
+                "formal_records": 16}
     for name, cap in raw_caps.items():
         rows = spec.get(name, [])
         _require(isinstance(rows, list) and len(rows) <= cap, f"{name} must be a list of at most {cap} records")
@@ -168,6 +171,10 @@ def discover_frontier(spec):
         _require(_text(node.get("kind")), f"Node {node['id']} requires kind")
         if "dimensions" in node:
             _dimensions(node["dimensions"], f"Node {node['id']}.dimensions")
+    for record in records["formal_records"]:
+        _require(_text(record.get("node")) and record["node"] in all_nodes
+                 and isinstance(record.get("statement"), dict),
+                 "Formal records require a defined node and explicit statement")
     for edge in records["edges"]:
         _require(_text(edge.get("from")) and _text(edge.get("to"))
                  and edge["from"] in all_nodes and edge["to"] in all_nodes,
@@ -226,7 +233,7 @@ def discover_frontier(spec):
               "evidence_status": "INPUT_REPORTED", "scientific_support": "UNKNOWN",
               "reachability_only": True,
               "gaps": [], "program_proposals": [], "unknown": [], "excluded": [],
-              "residual_checks": [], "transfer_checks": [], "statistics": {},
+              "residual_checks": [], "transfer_checks": [], "formal_checks": [], "statistics": {},
               "truncation": {"truncated": False, "reasons": [], "limits": dict(limits)},
               "limitations": ["Paths use supplied SUPPORTED labels, not independently verified relations.",
                               "Residuals require the supplied numeric protocol; no causal conclusion follows.",
@@ -270,6 +277,21 @@ def discover_frontier(spec):
         truncated("edge limit")
     edges = edges[:limits["max_edges"]]
     family_gaps = {kind: [] for kind in FAMILIES}
+    for record in eligible["formal_records"]:
+        if not usable("formal_records", record, [record["node"]]):
+            continue
+        from rds_frontier_proposals import formal_gate
+        gate = formal_gate(record["statement"], record.get("certificate"))
+        result["formal_checks"].append({"record_id": record["id"], "node": record["node"],
+                                       **gate})
+        if not gate["admitted"]:
+            family_gaps["FORMAL_OBLIGATION"].append(_gap("FORMAL_OBLIGATION", record,
+                [record["node"]], record["node"], [_ref("formal_record", record)],
+                "Native proof or its application premises are unclosed; reported flags cannot close them.",
+                f"Which explicit premises and supported Lean obligation would close the side condition for {_describe(nodes[record['node']])}?",
+                formal_obligation=deepcopy(record["statement"]),
+                formal_status=gate["status"], formal_assurance=gate["assurance"],
+                application_status=gate.get("application_status", "UNKNOWN")))
     paths, goal_ranges = {}, []
     for goal in eligible["goals"]:
         if not usable("goals", goal, [goal["target"], *goal["anchors"]]):

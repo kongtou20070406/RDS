@@ -58,6 +58,7 @@ class RuleRegistry:
 REGISTRY = RuleRegistry((
     ProofRule("scalar.threshold_separation", ("scalar_threshold",), "rds_scalar_verify"),
     ProofRule("lean.rational_relation", ("lean_obligation",), "rds_lean_verify"),
+    ProofRule("lean.statistical_obligation", ("statistical_obligation",), "rds_statistical_verify"),
     ProofRule("matrix.infinity_contraction", ("affine_contraction",), "rds_dynamics_verify"),
     ProofRule("matrix.fixed_point", ("affine_fixed_point",), "rds_dynamics_verify"),
     ProofRule("dynamics.affine", ("affine_dynamics",), "rds_dynamics_verify"),
@@ -209,7 +210,9 @@ def _atomic(statement, requested=None):
     result = rule.generate(statement)
     verdict, evidence = result.get("status"), result.get("certificate")
     if verdict not in {"PASS", "FAIL"} or not isinstance(evidence, dict):
-        return _unknown(result.get("reason", "Proof search was inconclusive"))
+        return dict(_unknown(result.get("reason", "Proof search was inconclusive")),
+                    **{key: result[key] for key in ("conditional_statement", "application_status", "assumptions_required")
+                       if key in result})
     require(evidence.get("verdict") == verdict, "Proof rule has inconsistent candidate evidence")
     # Final checked_result replays every leaf and composition exactly once.
     # Checking here as well would duplicate native Lean compilation.
@@ -242,13 +245,20 @@ def verify(spec):
                     except (ValueError, TypeError, KeyError, ImportError) as exc:
                         answer = _unknown(exc)
                 outcomes[name] = {"status": answer["status"]}
-                if "reason" in answer:
-                    outcomes[name]["reason"] = answer["reason"]
+                for key in ("reason", "conditional_statement", "application_status", "assumptions_required"):
+                    if key in answer:
+                        outcomes[name][key] = answer[key]
                 if "proof" in answer:
                     proofs[name] = answer["proof"]
             statuses = [outcome["status"] for outcome in outcomes.values()]
             if "UNKNOWN" in statuses:
-                return dict(_unknown("Some theorem obligations remain unproved"), theorems=outcomes)
+                result = dict(_unknown("Some theorem obligations remain unproved"), theorems=outcomes)
+                conditional = [item for item in outcomes.values() if item.get("conditional_statement") is True]
+                if conditional:
+                    result.update(conditional_statement=True, application_status="UNKNOWN",
+                                  assumptions_required=sorted({assumption for item in conditional
+                                                               for assumption in item["assumptions_required"]}))
+                return result
             verdict = "FAIL" if "FAIL" in statuses else "PASS"
             certificate = _wrap(spec, verdict, {"rule": "module", "theorems": proofs})
         return checked_result(spec, certificate)
@@ -316,15 +326,24 @@ def check_certificate(spec, certificate):
 def checked_result(spec, certificate):
     try:
         verdict, outcomes = _replay(spec, certificate)
-        native = outcomes is None and certificate["proof"]["rule"] == "lean.rational_relation"
+        proof = certificate["proof"]
+        leaves = ([proof["certificate"]] if outcomes is None else
+                  [item["certificate"] for item in proof["theorems"].values() if "certificate" in item])
+        native = bool(leaves) and all(leaf.get("assurance") == "LEAN_KERNEL_CHECKED" for leaf in leaves)
+        atomic_native = native and outcomes is None
         result = {"status": verdict, "assurance": "LEAN_KERNEL_CHECKED" if native else "CERTIFICATE_CHECKED",
-                  "backend": "lean4_closed_rational" if native else "rds_declarative",
+                  "backend": leaves[0]["backend"] if atomic_native else "rds_declarative",
                   "semantics": SEMANTICS, "spec_sha256": certificate["spec_sha256"],
                   "verifier_sha256": certificate["verifier_sha256"], "certificate": certificate}
         if outcomes is not None:
             result["theorems"] = outcomes
-        elif native:
-            result["semantics"] = "closed_Lean_Rat_relation"
+        elif atomic_native:
+            result["semantics"] = leaves[0]["semantics"]
+        conditional = [leaf for leaf in leaves if leaf.get("conditional_statement") is True]
+        if conditional:
+            result.update(conditional_statement=True, application_status="UNKNOWN",
+                          assumptions_required=sorted({assumption for leaf in conditional
+                                                       for assumption in leaf["assumptions_required"]}))
         return result
     except (ValueError, TypeError, KeyError, AttributeError, ImportError, OSError,
             ZeroDivisionError, OverflowError, RecursionError) as exc:
@@ -351,7 +370,7 @@ class LeanFormalEngine:
             attempts = []
             tried = False
             compatible = {"interval": {"network_bounds", "network_margin"},
-                          "lean4": {"lean_obligation"},
+                          "lean4": {"lean_obligation", "statistical_obligation"},
                           "gershgorin": {"matrix_spectral_bound"},
                           "spectral_radius": {"matrix_spectral_exact"},
                           "scale_invariance": {"scale_equivariance"}}

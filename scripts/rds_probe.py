@@ -72,7 +72,10 @@ def admission_probe(hypothesis, source):
         return {"status": "PASS", "assurance": "AST_ONLY", "backend": "ast",
                 "reason": "Syntax checked; no formal property was declared"}
     if formal["kind"] == "declarative":
-        return declarative_probe(formal)
+        result = declarative_probe(formal)
+        if result.get("application_status", "PASS") != "PASS":
+            return dict(result, status="UNKNOWN", reason="Formal application assumptions remain UNKNOWN")
+        return result
     if formal["kind"] == "dynamics":
         return {"status": "UNKNOWN", "assurance": "NONE",
                 "reason": "Use formal.kind=declarative and an explicit affine dynamics statement"}
@@ -314,6 +317,13 @@ def execute(payload):
     if formal and formal["kind"] == "dynamics":
         return {"probe": {"status": "UNKNOWN", "assurance": "NONE",
                           "reason": "Use a declarative affine dynamics statement"}}
+    declarative = None
+    if formal and formal["kind"] == "declarative":
+        declarative = declarative_probe(formal, payload.get("admission_probe"))
+        if declarative.get("status") != "PASS":
+            return {"probe": declarative}
+        if declarative.get("application_status", "PASS") != "PASS":
+            return {"probe": dict(declarative, status="UNKNOWN", reason="Formal application assumptions remain UNKNOWN")}
     functions = parse_source(payload["source"])
     rows = read_rows(payload["data"])
     cached_control = payload.get("cached_control")
@@ -340,7 +350,7 @@ def execute(payload):
         return bounded(total / len(rows))
     probe = {"status": "NOT_APPLICABLE", "assurance": "NONE"}
     if formal and formal["kind"] == "declarative":
-        probe = declarative_probe(formal, payload.get("admission_probe"))
+        probe = declarative
         probe["execution_assurance"] = "EXACT_OBSERVATION_CHECKED"
     elif formal:
         try:
