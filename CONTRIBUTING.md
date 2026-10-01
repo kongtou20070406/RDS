@@ -4,7 +4,7 @@
 
 An RDS change can pass its own tests while the advertised CLI option is unreachable, a missing measurement becomes a fact, or recovery repeats an expensive run. This guide starts with those failures. A contribution should make a concrete research decision or executable behavior easier to use and inspect.
 
-These guidelines target **5.6.0-rc.1**. The five components are **Skill, execution and acceptance kernel, research state and memory, Advisor, and RSI**. M01–M06 are work items within those components: bounded artifact import, experiment composition, cost/control checks, project execution, rule acceptance and recovery. See the [roadmap](docs/roadmap.md) and [commands and scope](docs/development-loop.md). Program checks do not establish end-to-end scientific ability.
+Release numbering and publication follow the [versioning rules](docs/versioning.md). The five components are **Skill, execution and acceptance kernel, research state and memory, Advisor, and RSI**. M01–M06 are work items within those components: bounded artifact import, experiment composition, cost/control checks, project execution, rule acceptance and recovery. See the [roadmap](docs/roadmap.md) and [commands and scope](docs/development-loop.md). Program checks do not establish end-to-end scientific ability.
 
 ## Start with the problem
 

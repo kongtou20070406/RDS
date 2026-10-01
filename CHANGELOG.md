@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 5.7.0 — 2026-10-01
+
+Publish the compatible feature additions merged since 5.6.0-rc.2, including explicit theory budgets, native Lean verification and advisory resource planning. Preserve the existing rc.2 tag and readable ledgers; changed execution-engine bindings still require a new contract.
+
+- Account for bounded formal/theory work before empirical execution, retain failed and unknown checkpoints, and consume scoped rejections in subsequent Advisor rounds. Conditional statistical theorems do not close an experiment's application premises.
+- Add fixed Lean/Mathlib 4.33.1 proofs and replay for contraction, Gershgorin bounds, scale invariance, Ville, Hoeffding and data processing. Require actual native builds and replay in CI; permitted library axioms are audited.
+- Make explicit `--tactics lean4` require native Lean, with missing dependencies returning UNKNOWN. Keep exact Python rational verification available as `--tactics rational`, with distinct backend and assurance provenance throughout CLI and replay.
+- Suggest capacity-aware batches from supported resource estimates, priorities, dependencies and protected budgets. This planner does not allocate devices or launch work; its four-GPU examples are CPU planning fixtures.
+- Add the Lean ecosystem survey and dated integration evidence, preserving the limits of conditional theorem verification and scientific-policy claims.
+
+Validation before the version update: all 10 checks passed for candidate `4eb15bf0c38909de52105b8955bdbd30e8a8bb74`, and all five checks passed for merged main `3c4fbca8d6ed62e756a5b54326a6335b61989017`. The RDS self-development loop executed 521 of 526 checks successfully, with five documented environment skips and zero failures; native CI executed 42 backend/statistical checks with no skips. The 5.7.0 release update also passed all 14 existing concurrency/compatibility checks through a new RDS self-development iteration, with no failures or skips, retaining rc.2 ledger reading and the stale-engine admission guard. These are engineering checks. Original ExplorationBench access and scientific-policy evaluation remain pending.
+
 - Add a small, local weak decision graph to Advisor through `--research-note`: detect repeated rejected interventions, A/B/A oscillation, explicit goal drift and experiments whose outcomes do not change a decision. New evidence, scope or intervention opens review; a memory label does not become a scientific result or execution authorization. Obelisk remains an optional enhancement for exact history.
 - Move detailed discipline, runner and formal guidance behind a shorter Skill entry point. Keep one recommendation and a necessary alternative, continue authorized work and never treat silence as acceptance. Add the optional Obelisk recommendation to the existing three README integration paragraphs.
 - Add `advancement score` for fixed-cohort paired predictions, independent numeric confirmations and matched resource budgets. Missing observations/costs stay unmeasured, failed costs are retained, and protocol/model/unit conflicts or confirmation leakage invalidate the score. Supplied identities and independence remain input-reported; scientific efficacy and mechanism recovery are not inferred.

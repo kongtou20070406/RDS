@@ -2,8 +2,8 @@
 name: research-direction-selector
 description: Choose and audit metric-driven research experiments with scoped evidence, budgets and authorized execution. Current implementations focus on ML, with optional bounded mathematical checks; not general GPU scheduling or a promise of autonomous discovery.
 metadata:
-  version: v5.6.0-rc.2
-  engine: rds-cli-v5.6
+  version: v5.7.0
+  engine: rds-cli-v5.7
 ---
 
 # Research Direction Selector
