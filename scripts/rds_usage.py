@@ -9,6 +9,10 @@ import time
 COMMANDS = {"init", "hypothesis", "gate", "plan", "run", "data", "decide", "status",
             "project", "checkpoint", "artifacts", "formal", "meta", "history", "advise",
             "advancement", "branch", "usage", "exec", "reject"}
+COMMAND_ALIASES = {"exec": {"execute", "执行"}, "advise": {"advisor", "review", "审查"},
+                   "reject": {"deny", "否决"}, "checkpoint": {"cp", "检查点"},
+                   "project": {"proj", "项目"}, "usage": {"calls", "调用"}, "status": {"状态"},
+                   "execute": {"exec", "执行"}, "save": {"record", "保存"}, "restore": {"resume", "恢复"}}
 _last_error = None
 
 
@@ -40,6 +44,7 @@ def _database():
 
 
 def _label(argv):
+    argv = argv[:argv.index('--')] if '--' in argv else argv
     command = "other"
     skip = False
     for token in argv:
@@ -47,9 +52,15 @@ def _label(argv):
             skip = False
         elif token in {"--root", "--workspace", "--project-root"}:
             skip = True
-        elif token in COMMANDS:
-            command = token
+        elif token == "--":
             break
+        elif not token.startswith('-'):
+            exact = next((c for c in COMMANDS if c.casefold() == token.casefold()), None)
+            aliases = [c for c in COMMANDS if token.casefold() in COMMAND_ALIASES.get(c, set())]
+            prefixes = [c for c in COMMANDS if c.startswith(token.casefold())]
+            matches = [exact] if exact else aliases or prefixes
+            command = matches[0] if len(matches) == 1 else 'other'
+            break  # Never label a wrapped command or argument as an RDS invocation.
     mode = "help" if "--help" in argv or "-h" in argv else "version" if "--version" in argv else "command"
     return command if command != "other" else mode if mode != "command" else command, mode
 

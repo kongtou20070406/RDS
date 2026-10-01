@@ -1160,10 +1160,7 @@ class FriendlyParser(argparse.ArgumentParser):
                     i += count
             i += 1
         current, result, i = self, [], 0
-        aliases = {"exec": {"execute", "执行"}, "advise": {"advisor", "review", "审查"},
-                   "reject": {"deny", "否决"}, "checkpoint": {"cp", "检查点"},
-                   "project": {"proj", "项目"}, "usage": {"calls", "调用"}, "status": {"状态"},
-                   "execute": {"exec", "执行"}, "save": {"record", "保存"}, "restore": {"resume", "恢复"}}
+        from rds_usage import COMMAND_ALIASES as aliases
         while i < len(remaining):
             token = remaining[i]
             if token.startswith("-"):

@@ -101,6 +101,11 @@ class QuickTests(unittest.TestCase):
 
     def test_aliases_and_unique_prefixes_preserve_command_tail_and_values(self):
         from rds_cli import parser
+        from rds_usage import _label
+        self.assertEqual(_label(['--workspace', 'project', 'advisor', '--brief']), ('advise', 'command'))
+        self.assertEqual(_label(['execute', '--name', 'x', '--', 'python', 'usage']), ('exec', 'command'))
+        self.assertEqual(_label(['execute', '--name', 'x', '--', 'python', '--help']), ('exec', 'command'))
+        self.assertEqual(_label(['misspelled', '--', 'usage']), ('other', 'command'))
         args = parser().parse_args(['proj', 'stat', '--workspace', str(self.root), '--digest'])
         self.assertEqual((args.command, args.action, args.root), ('project', 'status', str(self.root)))
         args = parser().parse_args(['deny', '--route', 'r', '--reason=--root', '--evidence', 'f'])
