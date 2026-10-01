@@ -2,6 +2,7 @@
 
 ## 5.8.0 — Unreleased
 
+- Include the complete receipt error count and first bounded error in brief project status, exposing artifact-validation failures even when the command exits 0 and stderr is empty; retain all original errors in the full CAS record.
 - Expose current run-state counts and the last finished native receipt in brief project status, with an absolute locator for nonempty `stderr.bin`; preserve full CAS records, live-state semantics and UNKNOWN scientific assessments without reading raw logs.
 - Turn selection and scoped-loop gaps into a compact `next_move` prompt for evidence repair, discrimination or reformulation. Ask for a changed assumption/representation/method and its deciding check; retain original goals and authorization without fixed-round bans, permanent mechanism blacklists or automatic architecture jumps.
 - Add explicit sourced theory-reformulation requests and compact bridges beyond the current graph. Relation labels are optional; reuse the current model, original goal and declared premises instead of duplicating fields. Preserve mappings and dates, and distinguish verified, counterexample and unresolved proof-check results without inferring containment, applicability, scientific gains or execution authority.

@@ -468,6 +468,10 @@ def brief(root, value, version, formal=False):
                      key=lambda receipt: receipt['ended_at'], default=None)
         if latest is not None:
             summary['latest_receipt'] = {key: latest.get(key) for key in ('run_id', 'run_status', 'exit_code')}
+            if latest.get('errors'):
+                error = latest['errors'][0]
+                summary['latest_receipt']['error_count'] = len(latest['errors'])
+                summary['latest_receipt']['errors'] = [error[:197] + '...' if len(error) > 200 else error]
             stderr = next((artifact for artifact in latest.get('artifacts', [])
                            if artifact.get('kind') == 'stderr.bin' and artifact.get('size', 0) > 0), None)
             if stderr is not None:

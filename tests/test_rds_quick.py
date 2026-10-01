@@ -154,6 +154,44 @@ class QuickTests(unittest.TestCase):
         self.assertEqual(full['receipts'][0]['assessment'], {'task_gain': 'UNKNOWN', 'mechanism': 'UNKNOWN'})
         self.assertNotIn('preserved failure', status.stdout)
 
+    def test_exit_zero_with_missing_output_exposes_receipt_errors_in_status(self):
+        self.script('print("PASS")\n')
+        result = self.job('missing-output', False, '--output', 'outputs/required.json')
+        self.assertEqual(result.returncode, 1)
+        report = json.loads(Path(json.loads(result.stdout)['record']).read_text(encoding='utf-8'))
+        receipt = report['receipt']
+        self.assertEqual((receipt['exit_code'], receipt['run_status']), (0, 'FAILED'))
+        self.assertTrue(any('Missing output:' in error for error in receipt['errors']))
+        self.assertEqual(receipt['assessment'], {'task_gain': 'UNKNOWN', 'mechanism': 'UNKNOWN'})
+        self.assertTrue(any(artifact['kind'] == 'stderr.bin' and artifact['size'] == 0
+                            for artifact in receipt['artifacts']))
+        stdout = next(artifact for artifact in receipt['artifacts'] if artifact['kind'] == 'stdout.bin')
+        self.assertEqual((Path(receipt['cwd']) / stdout['path']).read_text(encoding='utf-8').strip(), 'PASS')
+        status = self.call('project', 'status', '--brief', root=report['job_root'])
+        summary = json.loads(status.stdout)
+        latest = summary['latest_receipt']
+        self.assertIn('errors', latest, 'Actual project status --brief: ' + status.stdout)
+        self.assertEqual(latest['error_count'], len(receipt['errors']))
+        self.assertEqual(latest['errors'], receipt['errors'][:1])
+        self.assertEqual((latest['run_status'], latest['exit_code']), ('FAILED', 0))
+        self.assertNotIn('stderr_path', latest)
+        self.assertEqual(summary['status'], 'RECORDED')
+        self.assertEqual(summary['run_states'], {'FAILED': 1})
+
+    def test_project_brief_bounds_errors_and_preserves_full_cas(self):
+        from rds_quick import brief
+        errors = ['Missing output: ' + 'a' * 300, 'second error: ' + 'b' * 300]
+        value = {'runs': [{'status': 'FAILED'}], 'receipts': [
+            {'run_id': 'missing-output', 'run_status': 'FAILED', 'exit_code': 0,
+             'ended_at': 10.0, 'cwd': str(self.root), 'errors': errors}]}
+        summary = brief(self.root, value, 'test')
+        latest = summary['latest_receipt']
+        self.assertEqual(latest['error_count'], 2)
+        self.assertEqual(latest['errors'], [errors[0][:197] + '...'])
+        self.assertLessEqual(len(latest['errors'][0]), 200)
+        self.assertEqual(json.loads(Path(summary['record']).read_text(encoding='utf-8')), value)
+        self.assertEqual(value['receipts'][0]['errors'], errors)
+
     def test_project_brief_distinguishes_live_states_and_latest_finished_receipt(self):
         from rds_quick import brief
         runs = [{'status': 'RUNNING', 'run_status': 'RUNNING'},
@@ -167,7 +205,8 @@ class QuickTests(unittest.TestCase):
         # Snapshot receipt ordering is by run ID, not finishing time.
         value['receipts'] = [
             {'run_id': 'a-new', 'run_status': 'FAILED', 'exit_code': 7, 'ended_at': 20.0,
-             'cwd': str(self.root), 'artifacts': [{'kind': 'stderr.bin', 'path': 'error.bin', 'size': 0}]},
+             'cwd': str(self.root), 'errors': [],
+             'artifacts': [{'kind': 'stderr.bin', 'path': 'error.bin', 'size': 0}]},
             {'run_id': 'z-old', 'run_status': 'SUCCEEDED', 'exit_code': 0, 'ended_at': 10.0,
              'cwd': str(self.root), 'artifacts': []},
             {'run_id': 'missing-time', 'cwd': str(self.root)},
