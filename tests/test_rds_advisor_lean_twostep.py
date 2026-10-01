@@ -3,10 +3,12 @@
 Run with --workspace NEW_EMPTY_DIRECTORY to retain the original evidence.
 """
 import copy
+import base64
 import json
 import os
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import time
 import unittest
@@ -18,7 +20,9 @@ from rds_artifacts import ingest_manifest
 from rds_checkpoints import restore_checkpoint, save_checkpoint
 from rds_meta import reflect_from_state
 from rds_probe import declarative_probe
-from rds_project import ProjectStore, digest, file_sha
+from rds_project import ProjectStore, _alive, digest, file_sha
+
+THEORY_ALLOWANCE = {"wall_seconds": 10, "cpu_seconds": 3, "gpu_seconds": 0}
 
 
 CPU_SOURCE = '''import json, pathlib, sys
@@ -75,7 +79,7 @@ def obligation(native=False, slope="1/2"):
     return {"kind": "declarative", "statement": statement}
 
 
-def prepare(root):
+def prepare(root, budget=None):
     root.mkdir(parents=True, exist_ok=True)
     (root / "cpu.py").write_text(CPU_SOURCE, encoding="utf-8")
     write(root / "config.json", {"alpha": 0.25, "steps": 20})
@@ -96,7 +100,7 @@ def prepare(root):
     contract = {"schema": 1, "bindings": bindings, "output_roots": ["out"],
                 "allowed_commands": [[sys.executable, "-B", "cpu.py", mode, "out/" + mode + ".json"]
                                      for mode in ("normal", "optimal", "mismatch")],
-                "budget": {"wall_seconds": 30, "cpu_seconds": 5, "gpu_seconds": 0}}
+                "budget": budget or {"wall_seconds": 100, "cpu_seconds": 100, "gpu_seconds": 0}}
     write(root / "contract.json", contract)
     store = ProjectStore(root)
     store.initialize(contract)
@@ -120,7 +124,7 @@ def search(advisor, store, context, graph):
 
 def retain_probe(root, store, protocol, mode, formal):
     advisor = RDSAdvisor(root)
-    result = advisor.execute_theory_probe(manifest(root, mode), formal)
+    result = advisor.execute_theory_probe(manifest(root, mode), formal, theory_allowance=THEORY_ALLOWANCE)
     write(root / "out" / (mode + "-gate.json"), result)
     receipt = result["receipt"]
     if receipt is None:
@@ -177,7 +181,7 @@ def retain_probe(root, store, protocol, mode, formal):
     return result, observation, record
 
 
-def retain_blocked_request(root, store, advisor, name, formal):
+def retain_blocked_request(root, store, advisor, name, formal, *, theory_allowance=THEORY_ALLOWANCE):
     """Reject a redundant verification request, never infer falsity from UNKNOWN."""
     declared = root / "out" / (name + "-declaration.json")
     write(declared, formal)
@@ -194,21 +198,24 @@ def retain_blocked_request(root, store, advisor, name, formal):
               "executable": {"decisions": ["choose"], "preconditions": [], "action": action}}], "edges": []}
     candidate = search(advisor, store, context, graph)["candidates"][0]
     before = store.snapshot()
-    result = advisor.execute_theory_probe(manifest(root, "normal"), formal)
-    if result["receipt"] is not None or store.snapshot() != before:
+    result = advisor.execute_theory_probe(manifest(root, "normal"), formal, theory_allowance=theory_allowance)
+    after = store.snapshot()
+    if (result["receipt"] is not None or after["runs"] != before["runs"] or
+            after["receipts"] != before["receipts"] or any(row["reserved"] for row in after["budget"].values())):
         raise AssertionError("Unproved candidate consumed empirical budget")
     write(root / "out" / (name + "-check.json"), result)
     decision = {"question_id": "choose", "goal_revision": "quadratic-v1", "scope": {"gate_request": name},
                 "candidate": candidate, "outcome": "rejected", "evidence": context["facts"],
                 "formal": formal, "result": result, "theory_wall_seconds": result["theory_wall_seconds"],
-                "claim_status": "UNPROVED" if result["formal_gate"]["status"] == "UNKNOWN" else "CHECKED_DECLARATION_FAIL",
+                "claim_status": "CHECKED_DECLARATION_FAIL" if result["formal_gate"]["status"] == "FAIL" else "UNPROVED",
                 "outcome_reason": "Reject repeating this check without changed premises; UNKNOWN is not a refutation",
                 "next_action": "review-declaration-or-missing-premises-before-rechecking"}
-    checkpoint = save_checkpoint(root, "blocked-" + name, before, kind="project", decision=decision)
+    checkpoint = save_checkpoint(root, "blocked-" + name, after, kind="project", decision=decision)
+    before = after
     unchanged = search(advisor, store, context, graph)
     # This is the next selection pass, reading the same SQLite checkpoint. Only
     # selected verification requests can invoke the costly checker again.
-    repeated_checks = [advisor.execute_theory_probe(manifest(root, "normal"), formal)
+    repeated_checks = [advisor.execute_theory_probe(manifest(root, "normal"), formal, theory_allowance=theory_allowance)
                        for _ in unchanged["candidates"]]
     if repeated_checks or store.snapshot() != before:
         raise AssertionError("Unchanged rejected verification request was repeated")
@@ -255,7 +262,7 @@ def run_cpu_case(root):
                "theory_wall_seconds": sum(b["result"]["theory_wall_seconds"] for b in blocked) +
                                       sum(result["theory_wall_seconds"] for result, _, _ in probes),
                "snapshot": store.snapshot(), "scientific_policy_gain": "UNMEASURED",
-               "hard_budget_scope": "empirical_subprocess_only",
+               "hard_budget_scope": "shared_theory_allowances_and_empirical_reservations",
                "observed_controller_wall_seconds": time.monotonic() - started,
                "controller_hard_budget_enforced": False}
     write(root / "out/summary.json", summary)
@@ -278,18 +285,129 @@ class TwoStepTests(unittest.TestCase):
                                   (obligation(), failed)):
             with self.subTest(formal=formal, committed=committed):
                 before = self.store.snapshot()
-                result = self.advisor.execute_theory_probe(manifest(self.root, "normal"), formal, committed=committed)
+                result = self.advisor.execute_theory_probe(manifest(self.root, "normal"), formal,
+                                                         theory_allowance=THEORY_ALLOWANCE, committed=committed)
                 self.assertNotEqual(result["formal_gate"]["status"], "PASS")
                 self.assertIsNone(result["receipt"])
-                self.assertEqual(before, self.store.snapshot())
+                after = self.store.snapshot()
+                self.assertEqual(before["runs"], after["runs"])
+                self.assertEqual(before["receipts"], after["receipts"])
+                self.assertGreaterEqual(after["budget"]["wall_seconds"]["charged_estimate"] -
+                                        before["budget"]["wall_seconds"]["charged_estimate"], THEORY_ALLOWANCE["wall_seconds"])
+                self.assertTrue(all(row["reserved"] == 0 for row in after["budget"].values()))
 
     def test_conditional_library_pass_is_not_application_pass(self):
         # Integration stub for the coordinated backend contract, not proof evidence.
-        with patch("rds_probe.declarative_probe", return_value={"status": "PASS", "application_status": "UNKNOWN"}):
+        with patch("rds_advisor._bounded_theory_gate", return_value=({"status": "PASS", "application_status": "UNKNOWN"}, {})):
             before = self.store.snapshot()
-            result = self.advisor.execute_theory_probe(manifest(self.root, "normal"), obligation())
+            result = self.advisor.execute_theory_probe(manifest(self.root, "normal"), obligation(), theory_allowance=THEORY_ALLOWANCE)
         self.assertIsNone(result["receipt"])
-        self.assertEqual(before, self.store.snapshot())
+        self.assertEqual(before["runs"], self.store.snapshot()["runs"])
+        self.assertTrue(all(row["reserved"] == 0 for row in self.store.snapshot()["budget"].values()))
+
+    def test_insufficient_or_incomplete_allowance_never_launches_checker(self):
+        for allowance in ({"wall_seconds": 101, "cpu_seconds": 3, "gpu_seconds": 0},
+                          {"wall_seconds": 1}, {"wall_seconds": 0, "cpu_seconds": 3, "gpu_seconds": 0}):
+            with self.subTest(allowance=allowance), patch("rds_advisor._bounded_theory_gate") as checker:
+                before = self.store.snapshot()
+                with self.assertRaises(ValueError):
+                    self.advisor.execute_theory_probe(manifest(self.root, "normal"), obligation(), theory_allowance=allowance)
+                checker.assert_not_called()
+                self.assertEqual(before, self.store.snapshot())
+
+    def test_pass_cannot_reserve_empirical_work_over_shared_budget(self):
+        root = self.root / "tight"
+        store, _ = prepare(root, {"wall_seconds": 3, "cpu_seconds": 10, "gpu_seconds": 0})
+        allowance = {"wall_seconds": 2, "cpu_seconds": 3, "gpu_seconds": 0}
+        with self.assertRaisesRegex(ValueError, "Insufficient wall_seconds budget"):
+            RDSAdvisor(root).execute_theory_probe(manifest(root, "normal"), obligation(), theory_allowance=allowance)
+        state = store.snapshot()
+        self.assertEqual(state["runs"], [])
+        self.assertEqual(state["budget"]["wall_seconds"]["charged_estimate"], 2)
+        self.assertTrue(all(row["reserved"] == 0 for row in state["budget"].values()))
+        with store._db(True) as db:
+            event = json.loads(db.execute("SELECT body FROM events ORDER BY id DESC LIMIT 1").fetchone()["body"])
+        durable = store.theory_record(event["attempt_id"])
+        self.assertEqual(durable["result"]["status"], "PASS")
+        self.assertEqual(durable["result_sha256"], digest(durable["result"]))
+        raw = base64.b64decode(durable["worker_output"]["stdout"]["base64"])
+        self.assertEqual(json.loads(raw)["status"], "PASS")
+
+    def test_same_request_is_exclusive_but_independent_run_can_check(self):
+        allowance = {"wall_seconds": 10, "cpu_seconds": 3, "gpu_seconds": 0}
+        spec = manifest(self.root, "normal")
+        request = {"formal": obligation(), "allowance": allowance}
+        with self.store.theory_allowance(spec, request, allowance) as first:
+            with self.assertRaisesRegex(ValueError, "already attempted"):
+                with ProjectStore(self.root).theory_allowance(spec, request, allowance):
+                    self.fail("Duplicate same-identity check admitted")
+            with ProjectStore(self.root).theory_allowance(manifest(self.root, "optimal"), request, allowance):
+                self.assertEqual(self.store.snapshot()["budget"]["wall_seconds"]["charged_estimate"], 20)
+        with self.assertRaisesRegex(ValueError, "already attempted"):
+            with self.store.theory_allowance(spec, request, allowance):
+                self.fail("Completed unchanged request repeated")
+        self.assertEqual(self.store.theory_record(first["attempt_id"])["status"], "INTERRUPTED")
+        revised = {**request, "formal": obligation(slope="-1")}
+        with self.store.theory_allowance(spec, revised, allowance):
+            self.assertEqual(self.store.snapshot()["budget"]["wall_seconds"]["charged_estimate"], 30)
+
+    def test_active_allowance_excludes_another_and_interruption_keeps_charge(self):
+        allowance = {"wall_seconds": 60, "cpu_seconds": 3, "gpu_seconds": 0}
+        spec = manifest(self.root, "normal")
+        with self.assertRaisesRegex(RuntimeError, "interrupted"):
+            with self.store.theory_allowance(spec, {"formal": obligation()}, allowance):
+                # A second connection can read/admit: no writer lock is held
+                # during the verifier, and the first charge is already durable.
+                with self.assertRaisesRegex(ValueError, "Insufficient wall_seconds budget"):
+                    with ProjectStore(self.root).theory_allowance(manifest(self.root, "optimal"), {"formal": obligation()}, allowance):
+                        self.fail("Oversubscribed the active check allowance")
+                raise RuntimeError("interrupted")
+        state = self.store.snapshot()
+        self.assertEqual(state["budget"]["wall_seconds"]["charged_estimate"], 60)
+        self.assertEqual(state["runs"], [])
+        with self.store._db(True) as db:
+            events = [json.loads(row["body"]) for row in db.execute("SELECT body FROM events")]
+        self.assertEqual([row["kind"] for row in events], ["THEORY_ALLOWANCE", "THEORY_OUTCOME"])
+        self.assertEqual(events[0]["attempt_id"], events[1]["attempt_id"])
+        self.assertEqual(events[1]["status"], "INTERRUPTED")
+        self.assertGreater(events[1]["observed_wall_seconds"], 0)
+
+    def test_aggregate_deadline_stops_worker_tree_and_retains_failed_cost(self):
+        # Real slow worker/child negative control; no mocked mathematical proof.
+        pid_file = self.root / "pids.json"
+        sleeper = ("import json,os,pathlib,subprocess,sys,time; "
+                   "json.load(sys.stdin); "
+                   "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)']); "
+                   "pathlib.Path(sys.argv[1]).write_text(json.dumps([os.getpid(),child.pid])); "
+                   "print('worker ready',flush=True); time.sleep(30)")
+        launch = subprocess.Popen
+        launched = []
+        def slow_worker(*args, **kwargs):
+            worker = launch([sys.executable, "-c", sleeper, str(pid_file)], **kwargs)
+            launched.append(worker)
+            return worker
+        allowance = {"wall_seconds": 2, "cpu_seconds": 3, "gpu_seconds": 0}
+        started = time.monotonic()
+        with patch("rds_advisor.subprocess.Popen", side_effect=slow_worker):
+            result = self.advisor.execute_theory_probe(manifest(self.root, "normal"), obligation(), theory_allowance=allowance)
+        self.assertLess(time.monotonic() - started, 10)
+        self.assertEqual(result["formal_gate"]["status"], "UNKNOWN")
+        self.assertIsNone(result["receipt"])
+        self.assertIsNotNone(launched[0].returncode)
+        pids = json.loads(pid_file.read_text())
+        for pid in pids:
+            if os.name == "nt":
+                self.assertFalse(_alive(pid))
+            else:
+                proc = Path("/proc") / str(pid) / "stat"
+                self.assertTrue(not proc.exists() or proc.read_text().split(")", 1)[1].split()[0] == "Z")
+        state = self.store.snapshot()
+        self.assertEqual(state["runs"], [])
+        self.assertGreaterEqual(state["budget"]["wall_seconds"]["charged_estimate"], 2)
+        self.assertTrue(all(row["reserved"] == 0 for row in state["budget"].values()))
+        durable = self.store.theory_record(result["theory_charge"]["attempt_id"])
+        self.assertEqual(durable["result"], result["formal_gate"])
+        self.assertIn(b"worker ready", base64.b64decode(durable["worker_output"]["stdout"]["base64"]))
 
     def test_failed_and_unknown_checkpoints_are_consumed_before_rechecking(self):
         for name, formal in (("fail", obligation(slope="-1")),
@@ -318,7 +436,7 @@ class TwoStepTests(unittest.TestCase):
         self.assertEqual(receipt["assessment"], {"task_gain": "UNKNOWN", "mechanism": "UNKNOWN"})
         before = self.store.snapshot()
         with self.assertRaises(ValueError):
-            self.advisor.execute_theory_probe(manifest(self.root, "normal"), obligation())
+            self.advisor.execute_theory_probe(manifest(self.root, "normal"), obligation(), theory_allowance=THEORY_ALLOWANCE)
         self.assertEqual(before, self.store.snapshot())
         self.assertEqual(reflection["restoration"]["status"], "RESUMABLE_HANDOFF")
 
@@ -345,7 +463,7 @@ class TwoStepTests(unittest.TestCase):
         budget = self.store.snapshot()["budget"]
         self.assertEqual(budget["wall_seconds"]["reserved"], 0)
         self.assertGreater(budget["wall_seconds"]["spent_measured"], 0)
-        self.assertEqual(budget["cpu_seconds"]["charged_estimate"], 1)
+        self.assertEqual(budget["cpu_seconds"]["charged_estimate"], THEORY_ALLOWANCE["cpu_seconds"] + 1)
 
     @unittest.skipUnless(os.environ.get("RDS_LEAN_EXECUTABLE"), "Native Lean executable not configured")
     def test_native_leaf_and_python_domain_certificate_share_real_cpu_case(self):
