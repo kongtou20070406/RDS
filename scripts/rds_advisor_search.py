@@ -279,8 +279,12 @@ def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nod
                      "evidence_status": "INPUT_REPORTED"}
         if "discrimination" in action:
             candidate["discrimination"] = _discrimination(action, facts)
+        from rds_methods import review_candidate
+        review_candidate(context, candidate)
         if budget_status == "OVER_REPORTED_BUDGET":
             candidate["status"] = "BLOCKED_BUDGET"
+            result["blocked_candidates"].append(candidate)
+        elif candidate["status"] == "BLOCKED_METHOD":
             result["blocked_candidates"].append(candidate)
         else:
             candidates[candidate_id] = candidate

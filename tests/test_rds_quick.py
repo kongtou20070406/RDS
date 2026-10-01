@@ -168,6 +168,35 @@ class QuickTests(unittest.TestCase):
         self.assertNotEqual(bad.returncode, 0)
         self.assertIn('No decision context', bad.stderr)
 
+    def test_unresolved_method_scope_never_launches_or_charges_and_confirmation_is_recorded(self):
+        self.initialize_ledger()
+        self.context['method_constraints'] = [{'id': 'search-scope', 'quote': 'No numerical search',
+            'source': 'user:fixture', 'status': 'UNRESOLVED', 'when': {'purpose': 'proof'},
+            'question': 'May a certified exact proof use branch and bound?'}]
+        self.graph['nodes'][0]['executable']['action']['methods'] = {
+            'purpose': 'proof', 'technique': 'certifying_branch_bound', 'device': 'cpu'}
+        self.context_path.write_text(json.dumps(self.context), encoding='utf-8')
+        self.graph_path.write_text(json.dumps(self.graph), encoding='utf-8')
+        options = ['--context', str(self.context_path), '--graph', str(self.graph_path),
+                   '--choose', 'route:inspect-x', '--ledger', str(self.ledger)]
+        before = ProjectStore(self.ledger).snapshot()['budget']
+        for tail in (options, [x for x in options if x not in ('--choose', 'route:inspect-x')]):
+            bad = self.job('unclear', False, *tail)
+            self.assertNotEqual(bad.returncode, 0)
+            self.assertIn('Method scope', bad.stderr)
+            self.assertFalse((self.root / '.rds/exec/unclear').exists())
+        self.assertEqual(ProjectStore(self.ledger).snapshot()['budget'], before)
+        self.context['method_constraints'][0].update(status='CONFIRMED', when={}, require={'device': 'cpu'},
+            confirmation={'quote': 'Strict assisted proof is allowed on CPU', 'source': 'user-confirmation:fixture'})
+        self.context_path.write_text(json.dumps(self.context), encoding='utf-8')
+        good = json.loads(self.job('confirmed', True, *options).stdout)
+        self.assertEqual(good['run_status'], 'SUCCEEDED')
+        from rds_quick import latest_decision
+        decision, _ = latest_decision(self.ledger)
+        self.assertEqual(decision['method_constraints'], self.context['method_constraints'])
+        self.assertEqual(decision['candidate']['method_review']['status'], 'COMPATIBLE')
+        self.assertEqual(decision['scientific_support'], 'UNKNOWN')
+
     def test_timeout_keeps_failure_logs_and_budget(self):
         self.script('import time\nprint("before timeout", flush=True)\ntime.sleep(20)\n')
         bad = self.call('exec', '--name', 'timed', '--timeout', '0.15', '--', sys.executable, '-B', 'probe.py', ok=False)

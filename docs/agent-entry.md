@@ -29,6 +29,41 @@ If exactly one `READY` candidate remains, its identity is completed automaticall
 
 Prospective child jobs consume a conservative wall allowance in that same parent ledger before launch; unspent allowance is not refunded. Changing a job name or creating a fresh child directory cannot replenish it. Quick execution requires a wall-only parent budget; multi-resource work needs an explicit project manifest. The original human deadline and authorization still apply.
 
+## Clarify method limits
+
+Treat candidate construction, verification of a fixed candidate, and proof of a universal claim as separate purposes. An algorithm name alone does not identify its purpose: branch and bound can search heuristically or exhaustively exclude a rigorously bounded domain. Floating point with proved enclosures can support a certificate; exact arithmetic can still be used for forbidden heuristic search. A coverage certificate proves a construction upper bound, not a matching unrestricted lower bound or global optimum.
+
+Consider certifying computation during direction selection when it can close the next mathematical obligation within the authorized budget. Use the existing graph/Advisor fields: state the exact obligation and quantified domain; expose domain completeness and each pruning lemma as prerequisite facts with real evidence; require the bound certificate, remaining unresolved branches and independent replay as observables; let verified completion versus a counterexample or unresolved branch change the next decision. Missing prerequisites should produce a concrete bridge lemma or smaller valid sub-obligation. Record the prospective choice before execution and consume its actual result in the next selection, instead of wrapping a finished proof only for archival. A reusable domain adapter must provide these mathematical obligations and a real checker; the generic scope checker supplies no universal branch-and-bound solver.
+
+When a user's instruction has materially different plausible scopes, ask one short question before the affected step. Keep that question pending and continue work that does not depend on the answer. Neither silence nor a quoted proposal resolves it. External contest rules can describe admissible evidence but do not override the user's method, CPU/GPU, budget or deadline restrictions. Do not extrapolate a small-case runtime into an unmeasured promise for larger cases.
+
+Opt in through the **existing** Advisor context, without another database or command. Retain the original wording and its locator; after actual clarification, retain that wording and source as well. For example, after a human confirms that strict assisted proof is allowed and heuristic candidate search is forbidden:
+
+```json
+{
+  "method_constraints": [{
+    "id": "candidate-search",
+    "quote": "不要数值搜索",
+    "source": "user:original-message",
+    "status": "CONFIRMED",
+    "confirmation": {
+      "quote": "允许严格辅助证明，禁止启发式数值找候选",
+      "source": "user:clarification-message"
+    },
+    "when": {"purpose": "candidate_search"},
+    "forbid": {"technique": "heuristic"}
+  }]
+}
+```
+
+This is a schema example, not an authorization. Each clause needs a unique `id`, original `quote`, `source` and `status` (`CONFIRMED` or `UNRESOLVED`). A confirmed clause has exactly one nonempty `forbid` or `require` predicate. `when` limits its scope; an omitted/empty `when` applies to all described steps. An unresolved clause may supply a short `question`. Unknown scope must remain unknown rather than being guessed from keywords. A clarification's `confirmation` records actual `quote` and `source`; use the latest genuine instruction while retaining the earlier wording.
+
+Actions and templates declare `methods` as one flat string dictionary or a list of steps, for example `{"purpose":"proof","technique":"certifying_branch_bound","arithmetic":"certified","device":"cpu"}`. Include each stage in a mixed search/verification/proof workflow. Names are exact caller-defined values, not fuzzy aliases. Predicates are bounded to eight string fields; contexts contain at most 32 clauses and workflows at most 32 distinct method steps. If these fields are missing, describe the actual operation from its code/protocol; do not ask the human to fill a form.
+
+Advisor reports compatible, conflicting or unknown scopes. Conflicts block that candidate; unresolved wording produces clarification questions; missing descriptions remain unknown. Other compatible candidates remain available. Constraint-aware experiment composition retains every declared stage and keeps distinct method descriptions separate even for otherwise identical intervention aliases. Quick prospective execution rechecks the supplied context before launch or parent-budget charge, then retains the clauses and review in its ordinary checkpoint; the frozen request binds the entire research context. A supplied `READY` or compatibility label cannot bypass that check. Old contexts without `method_constraints` retain their behavior.
+
+This checks caller-reported declarations, not natural-language meaning, the authenticity of a source locator, or whether code implements its declared method. `INPUT_REPORTED` compatibility grants no execution authority, validates no theorem and replenishes no budget. At continuation boundaries, carry forward the recorded clauses and clarification; dropping them from a new context is not permission to lift a restriction. Read the actual program, authorization, receipt and appropriate proof evidence separately.
+
 ## Record a scoped rejection
 
 ```powershell

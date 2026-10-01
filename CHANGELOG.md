@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add optional sourced method constraints to Advisor, composed experiments and prospective quick execution. Preserve original wording and actual clarification in existing checkpoints; distinguish candidate search, verification and proof, block only affected conflicts/unknown scopes before launch or budget charge, and ask for material ambiguity without suspending compatible work. Declarations remain input-reported and grant no new permission or scientific verdict.
+- Include bounded certificate-producing computation in mathematical route selection, with explicit exhaustive domains, justified pruning, unresolved branches and independent replay. Keep construction coverage separate from unrestricted global lower bounds.
+
 - Add native immutable mathematical objectives and exact research-asset records in the existing project SQLite/CAS, with declared dependency review and optional objective binding at quick execution and Advisor boundaries. MRS remains optional; storage never upgrades a mathematical verdict.
 - Add explicit `rsi extract`, native case validation, local registration and verified module export/reuse. Preserve failed receipts, reject changed source/evaluator/results and keep finite local cases distinct from mathematical proof, fresh confirmation and research-policy improvement.
 

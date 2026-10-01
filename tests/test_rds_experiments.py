@@ -32,6 +32,28 @@ def fixture():
 
 
 class ExperimentTests(unittest.TestCase):
+    def test_constraint_aware_composition_keeps_all_steps_and_distinct_alias_methods(self):
+        graph, context, templates = fixture()
+        context['method_constraints'] = [{'id': 'search', 'quote': 'No heuristic candidate search',
+            'source': 'user:fixture', 'status': 'CONFIRMED', 'when': {'purpose': 'candidate_search'},
+            'forbid': {'technique': 'heuristic'}}]
+        for node in graph['nodes']:
+            node['executable']['action']['methods'] = {'purpose': 'verification'}
+        first = deepcopy(templates[0])
+        first['methods'] = {'purpose': 'proof'}
+        alias = deepcopy(first)
+        alias['id'] = 'heuristic-alias'
+        alias['methods'] = [{'purpose': 'proof'}, {'purpose': 'candidate_search', 'technique': 'heuristic'}]
+        report = compose_experiments(graph, context, [first, alias])
+        self.assertEqual(len(report['candidates']), 2)
+        compatible = [c for c in report['candidates'] if c['method_review']['status'] == 'COMPATIBLE']
+        blocked = [c for c in report['candidates'] if c['status'] == 'BLOCKED_METHOD']
+        self.assertEqual(len(compatible), 1)
+        self.assertEqual(compatible[0]['template_ids'], [first['id']])
+        self.assertEqual(len(blocked), 1)
+        self.assertIn(alias['id'], blocked[0]['template_ids'])
+        self.assertNotEqual(compatible[0]['id'], blocked[0]['id'])
+
     def test_distinct_interventions_and_unknown_future_measurements(self):
         graph, context, templates = fixture()
         before = deepcopy((graph, context, templates))

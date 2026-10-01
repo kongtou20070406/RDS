@@ -40,6 +40,8 @@ HUMAN:
 
 Do not make the human fill this form. Construct it internally and expose only fields that affect the recommendation. If the formal evaluation is absent, propose a minimal protocol before proposing architecture changes. A development/validation metric may select candidates; the locked final test supports the final claim. A test set repeatedly used for choice is no longer independent confirmation.
 
+Keep method restrictions attached to the user's original wording and affected step. Distinguish generating a candidate, checking it, and proving the complete claim; do not expand a ban on one into a ban on all computation. A material unresolved interpretation calls for one short human clarification before dependent work, while unaffected work continues. Store the actual answer alongside the original source in the current decision context; neither historical text nor external rules grants new resources or a weaker proof standard. The optional [method-scope review](../docs/agent-entry.md#clarify-method-limits) checks explicit declarations without interpreting prose.
+
 Record when each data partition was created, trained on, viewed, or used for model selection. Data already used to train a checkpoint cannot become independent validation for that checkpoint by splitting it afterward; retrain from an appropriate starting point with the partition held out. If no clean confirmation set is available, label the current result exploratory and specify what independent confirmation would be needed.
 
 ## Direction program

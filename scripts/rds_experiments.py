@@ -5,6 +5,7 @@ from itertools import combinations
 import json
 
 from rds_advisor_search import TRUE, FALSE, UNKNOWN, evaluate_condition, search_directions, _finite, _cost, _cost_identity, _reported
+from rds_methods import declared_methods, review_candidate
 
 
 def _token(value):
@@ -190,8 +191,14 @@ def compose_experiments(graph, context, templates, *, max_candidates=12,
                 result["excluded_combinations"].append({"template_ids": [p["template"]["id"] for p in parts], "reason": conflict})
                 continue
             interventions = sorted({_token(p["intervention"]): p["intervention"] for p in parts}.values(), key=_token)
-            fingerprint = hashlib.sha256(_token({"interventions": interventions,
-                                 "controls": sorted({_token(p["control"].get("actual")) for p in parts})}).encode("utf-8")).hexdigest()
+            identity = {"interventions": interventions,
+                        "controls": sorted({_token(p["control"].get("actual")) for p in parts})}
+            if 'method_constraints' in context:
+                methods = [m for p in parts for m in declared_methods(p['template'])]
+                methods += [m for p in parts for rid in p['template']['rules']
+                            for m in declared_methods((ready.get(rid) or {}).get('action', {}))]
+                identity['methods'] = sorted({_token(m): m for m in methods}.values(), key=_token)
+            fingerprint = hashlib.sha256(_token(identity).encode("utf-8")).hexdigest()
             if fingerprint in fingerprints:
                 prior = fingerprints[fingerprint]
                 prior["template_ids"] = sorted(set(prior["template_ids"]) | {p["template"]["id"] for p in parts})
@@ -233,6 +240,9 @@ def compose_experiments(graph, context, templates, *, max_candidates=12,
                          "cost_record_ids": sorted({p["template"]["cost"]["record_id"] for p in parts}),
                          "incremental_cost": cost, "stop_conditions": [p["template"]["stop"] for p in parts]}
             candidate["budget_status"] = UNKNOWN
+            if 'methods' in identity:
+                candidate['methods'] = deepcopy(identity['methods'])
+                review_candidate(context, candidate)
             budget = context.get("budget", {})
             if cost["status"] != UNKNOWN and _reported(budget) and _finite(budget.get("value")) and budget["value"] >= 0:
                 if _cost_identity(budget) == _cost_identity(cost):

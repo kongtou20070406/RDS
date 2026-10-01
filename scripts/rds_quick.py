@@ -67,16 +67,26 @@ def choice(advice, context, candidate_id=None):
                  for c in r['search']['candidates']]
     matches = ([c for c in available if c.get('status') == 'READY'] if candidate_id is None else
                [c for c in available if c.get('id') == candidate_id or c.get('action', {}).get('id') == candidate_id])
+    if not matches and candidate_id is None:
+        unresolved = [c for c in available if c.get('method_review', {}).get('status') == 'UNKNOWN']
+        require(not unresolved, 'Method scope is unresolved; inspect method_review questions and clarify only the affected work')
     require(len(matches) == 1, 'Choose one returned candidate ID; missing, pruned or ambiguous candidate')
-    candidate = matches[0]
+    candidate = deepcopy(matches[0])
+    from rds_methods import review_candidate
+    method_review = review_candidate(context, candidate)
+    require(method_review is None or method_review['status'] in {'COMPATIBLE', 'UNCONSTRAINED'},
+            'Method scope is unresolved or conflicting; describe missing steps or ask the user to clarify the affected restriction')
     require(candidate.get('status') == 'READY', 'Candidate still needs evidence; inspect its pending prerequisites')
     require(not any(f.get('kind') == 'LOOP_HISTORY_REVIEW_ERROR' for r in advice.get('recommendations', [])
                     for f in r.get('review', {}).get('flags', [])), 'Repair checkpoint integrity before executing a candidate')
     require(_loop_route(candidate) is not None, 'Candidate has no structured route identity')
-    return {'question_id': decision['id'], 'goal_revision': decision['goal_revision'],
+    record = {'question_id': decision['id'], 'goal_revision': decision['goal_revision'],
               'scope': deepcopy(decision['scope']), 'candidate': deepcopy(candidate),
               'outcome': 'plan_locked', 'evidence': deepcopy(context.get('facts', {})),
               'scientific_support': 'UNKNOWN'}
+    if 'method_constraints' in context:
+        record['method_constraints'] = deepcopy(context['method_constraints'])
+    return record
 
 
 def record_choice(root, advice, context, candidate_id, checkpoint_id):
