@@ -77,10 +77,25 @@ class DiscriminationTests(unittest.TestCase):
     def test_same_pair_coverage_and_lower_cost_allows_dominance(self):
         graph, context = fixture()
         graph["nodes"][1] = probe("target", UPDATE)
+        for outcome in graph["nodes"][1]["executable"]["action"]["outcomes"]:
+            outcome["next_decision"] = "alternative wording: " + outcome["next_decision"]
         report = search_directions(graph, context)
         self.assertEqual(report["ranking"]["pareto_front"], ["update:update-check"])
         self.assertEqual(candidates(report)["target"]["dominated_by"], ["update:update-check"])
         self.assertIn("conditional distinguishing pairs", report["ranking"]["dominance"][0]["basis"])
+        self.assertNotIn("observed", report["ranking"]["dominance"][0]["basis"])
+
+    def test_extra_decision_labels_do_not_improve_equal_scientific_coverage(self):
+        graph, context = fixture()
+        graph["nodes"][1] = probe("target", UPDATE)
+        graph["nodes"][0]["executable"]["action"]["outcomes"].append(
+            {"observation": "other observation", "next_decision": "a third decision label"})
+        context["costs"]["target-check"]["value"] = 1
+        report = search_directions(graph, context)
+        self.assertGreater(len(candidates(report)["update"]["decision_coverage"]),
+                           len(candidates(report)["target"]["decision_coverage"]))
+        self.assertEqual(report["ranking"]["dominance"], [])
+        self.assertEqual(len(report["ranking"]["pareto_front"]), 2)
 
     def test_strict_pair_superset_is_an_improvement_at_equal_cost(self):
         graph, context = fixture()
@@ -89,6 +104,26 @@ class DiscriminationTests(unittest.TestCase):
         report = search_directions(graph, context)
         self.assertEqual(report["ranking"]["pareto_front"], ["update:update-check"])
         self.assertEqual(candidates(report)["target"]["dominated_by"], ["update:update-check"])
+
+    def test_more_scientific_coverage_at_higher_cost_preserves_the_tradeoff(self):
+        graph, context = fixture()
+        graph["nodes"][0] = probe("update", {fault: [fault] for fault in FAULTS})
+        context["costs"]["update-check"]["value"] = 3
+        report = search_directions(graph, context)
+        self.assertEqual(report["ranking"]["dominance"], [])
+        self.assertEqual(len(report["ranking"]["pareto_front"]), 2)
+
+    def test_unknown_cost_is_not_zero_for_comparable_scientific_coverage(self):
+        graph, context = fixture()
+        graph["nodes"][1] = probe("target", UPDATE)
+        context["costs"].pop("update-check")
+        report = search_directions(graph, context)
+        cost = candidates(report)["update"]["incremental_cost"]
+        self.assertEqual(cost["status"], "UNKNOWN")
+        self.assertNotIn("value", cost)
+        self.assertEqual(report["ranking"]["cost_unknown"], ["update:update-check"])
+        self.assertEqual(report["ranking"]["dominance"], [])
+        self.assertEqual(len(report["ranking"]["pareto_front"]), 2)
 
     def test_all_overlapping_predictions_are_unresolved_and_do_not_support_dominance(self):
         graph, context = fixture()
@@ -177,12 +212,13 @@ class DiscriminationTests(unittest.TestCase):
                 self.assertEqual(report["ranking"]["dominance"], [])
                 self.assertEqual(len(report["ranking"]["pareto_front"]), 2)
 
-    def test_both_legacy_actions_keep_the_existing_partial_order(self):
+    def test_both_legacy_actions_stay_incomparable_without_scientific_support(self):
         graph, context = fixture()
         for node in graph["nodes"]:
             node["executable"]["action"].pop("discrimination")
         report = search_directions(graph, context)
-        self.assertEqual(report["ranking"]["pareto_front"], ["update:update-check"])
+        self.assertEqual(report["ranking"]["dominance"], [])
+        self.assertEqual(set(report["ranking"]["pareto_front"]), {"update:update-check", "target:target-check"})
         self.assertTrue(all("discrimination" not in candidate for candidate in report["candidates"]))
 
     def test_malformed_operator_does_not_suppress_other_candidates(self):

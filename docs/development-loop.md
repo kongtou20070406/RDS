@@ -2,6 +2,8 @@
 
 RDS development uses its own executable tools: record a concrete problem, run an actual check, read the original output, choose the next change, and repeat with the changed tool. This is the first development feedback loop for the RSI component. It remains a human-directed software development process; regression acceptance does not establish improved end-to-end scientific discovery.
 
+Use the latest available development checkout for each new iteration rather than an older installed Skill copy. Freeze that iteration's source tree and test workload before execution, and retain its commit or file hashes, original logs, receipt, artifact import and Advisor next-step record. Upgrade the snapshot at the next meaningful boundary when new code is ready; never relabel a previous passing receipt as evidence for a changed tree. Independent checks may run in parallel when resources and budgets allow it. The goal is earlier reliable progress, not the smallest amount of computation; see [resource-aware planning](resource-planning.md).
+
 ## Reproduce a development iteration
 
 From the repository, choose a **new empty workspace**:

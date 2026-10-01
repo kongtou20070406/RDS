@@ -466,6 +466,12 @@ class RDSAdvisor:
                 recommendations.append(_advice("STRATEGIC_RESEARCH_ADVICE", type="RESEARCH_LOOP_REVIEW", urgency="REVIEW",
                     reason="Review scoped choices recorded in the existing transaction ledger.", review=loop_review,
                     observations=loop_review["flags"], limitations=loop_review["limitations"]))
+            if "resources" in context:
+                from rds_resources import plan_resource_batch
+                resource_plan = plan_resource_batch(search, context["resources"])
+                recommendations.append(_advice("STRATEGIC_RESEARCH_ADVICE", type="RESOURCE_BATCH_PLAN", urgency="REVIEW",
+                    reason="Use explicit research priority, current capacity and full-duration estimates to propose one concurrent batch.",
+                    resource_plan=resource_plan, observations=resource_plan["batch"], limitations=resource_plan["limitations"]))
         active = state.get("active_branch", "main")
         branches = state.get("branches", {})
         branch, count = branches.get(active, {}), branches.get(active, {}).get("stagnation_count", 0)

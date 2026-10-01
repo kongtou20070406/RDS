@@ -113,7 +113,7 @@ def _cost(ids, costs):
     records = [costs.get(i) for i in ids]
     if not records or any(not _reported(r) or not _finite(r.get("value")) or r["value"] < 0
                           or _cost_identity(r) is None for r in records):
-        return {"status": UNKNOWN, "reason": "missing sourced, comparable observed incremental cost"}
+        return {"status": UNKNOWN, "reason": "missing sourced, comparable incremental cost"}
     groups = {_cost_identity(r) for r in records}
     total = sum(r["value"] for r in records)
     if len(groups) != 1 or not _finite(total):
@@ -202,7 +202,8 @@ def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nod
                   "max_candidates": max_candidates, "max_depth": max_depth, "max_nodes": max_nodes}},
               "ranking": {"method": "PARETO_PARTIAL_ORDER", "dominance": [], "cost_unknown": []},
               "limitations": ["Derivations are reasoning dependencies, not causal proof. Imported source labels do not certify causal claims.",
-                               "Only explicit executable configuration is searched; text triggers and unconfigured rules are not evaluated."]}
+                               "Only explicit executable configuration is searched; text triggers and unconfigured rules are not evaluated.",
+                               "Dominance requires valid same-scope rival predictions; decision labels alone do not establish scientific value."]}
     def finish():
         chosen_templates = templates if templates is not None else context.get("templates")
         if chosen_templates is not None:
@@ -374,23 +375,18 @@ def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nod
                 continue
             if _cost_identity(bcost) != _cost_identity(wcost):
                 continue
-            bcov, wcov = set(better["decision_coverage"]), set(worse["decision_coverage"])
             bdisc, wdisc = better.get("discrimination"), worse.get("discrimination")
-            pair_gain = False
-            if bdisc is not None or wdisc is not None:
-                if (bdisc is None or wdisc is None or not bdisc["valid_prediction_support"]
-                        or not wdisc["valid_prediction_support"] or bdisc["scope_id"] != wdisc["scope_id"]
-                        or set(better["competing_explanations"]) != set(worse["competing_explanations"])):
-                    continue
-                bpairs = {tuple(pair) for pair in bdisc["conditional_distinguishing_pairs"]}
-                wpairs = {tuple(pair) for pair in wdisc["conditional_distinguishing_pairs"]}
-                if not bpairs or not wpairs or not bpairs >= wpairs:
-                    continue
-                pair_gain = bpairs != wpairs
-            if bcov >= wcov and bcost["value"] <= wcost["value"] and (bcov != wcov or pair_gain or bcost["value"] < wcost["value"]):
+            if (bdisc is None or wdisc is None or not bdisc["valid_prediction_support"]
+                    or not wdisc["valid_prediction_support"] or bdisc["scope_id"] != wdisc["scope_id"]
+                    or set(better["competing_explanations"]) != set(worse["competing_explanations"])):
+                continue
+            bpairs = {tuple(pair) for pair in bdisc["conditional_distinguishing_pairs"]}
+            wpairs = {tuple(pair) for pair in wdisc["conditional_distinguishing_pairs"]}
+            if not bpairs or not wpairs or not bpairs >= wpairs:
+                continue
+            if bcost["value"] <= wcost["value"] and (bpairs != wpairs or bcost["value"] < wcost["value"]):
                 worse["dominated_by"].append(better["id"])
                 result["ranking"]["dominance"].append({"better": better["id"], "worse": worse["id"],
-                    "basis": "decision coverage superset and no higher comparable observed incremental cost" +
-                    ("; supplied same-scope conditional distinguishing pairs are a superset" if bdisc is not None else "")})
+                    "basis": "supplied same-scope conditional distinguishing pairs are a superset and no higher comparable sourced incremental cost"})
     result["ranking"]["pareto_front"] = [c["id"] for c in result["candidates"] if not c["dominated_by"]]
     return finish()
