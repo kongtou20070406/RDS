@@ -31,7 +31,7 @@ Prospective child jobs consume a conservative wall allowance in that same parent
 
 ## Theory and experiments
 
-Use the same prospective choice, bounded runner, receipts and checkpoint ledger for either mode. No external mathematics Skill is required. Each mode has its own acceptance contract:
+Use the same prospective choice, bounded runner, receipts and checkpoint ledger across theory, empirical, or mixed workflows. No external mathematics Skill is required. All modes share the unified budget ledger, but each enforces its own acceptance contract:
 
 Set `research_mode` to `theory`, `empirical` or `mixed` in the existing decision context when using a declared domain workflow. Advisor then returns the configured frontier/actions, ledger review and optional resource plan without unrelated legacy ML branch hints or reference catalogs. Contexts without this field preserve their previous behavior. Mode names do not grant execution authority or change evidence standards.
 
@@ -63,7 +63,7 @@ Attach this to an ordinary `executable` node with the actual decision ID and exp
 python -B scripts/rds_cli.py exec --timeout 60 --context context.json --graph graph.json --ledger <existing-ledger> --output outputs/certificate.json --output outputs/summary.json -- python -B prove_and_check.py
 ```
 
-The program implements the domain-specific producer/checker; RDS supplies bindings and execution records. A cover check can prove a particular upper bound while leaving the universal matching lower bound open. Finite branch-and-bound proves a universal statement only with a justified complete search domain, sound exclusions and no unresolved branch.
+The program implements the domain-specific producer/checker; RDS supplies bindings and execution records. A cover check can prove a particular upper bound while leaving the universal matching lower bound open. Finite branch-and-bound proves a universal statement only with a justified complete search domain, sound exclusions and no unresolved branch. Avoid rigid manual prohibitions based on fixed branch counts or polynomial degrees; tool transitions depend on actual computational burden. Persist large proof trees, enumerations and configuration databases to disk (under declared outputs), loading only lightweight summary bounds, unresolved branches and certificate hashes into context to minimize token overhead.
 
 Before a material computation, identify its mathematical structure, intended result and smallest sufficient implementation. Check only the selected backend's actual capability, estimate runtime/memory/expression growth and keep existing resource limits. Missing capabilities need an available fallback or concrete blocker. Distinguish numerical evidence, bounded checking, exact calculation, proof certificates and native formal verification. Arbitrary precision or CAS success alone does not raise evidence strength; another implementation is useful when it addresses a discrepancy or the required verification strength. Deliver the actual requested result when feasible, keeping large artifacts on disk with a compact summary.
 
