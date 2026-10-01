@@ -24,6 +24,67 @@ Each CLI invocation is retained under `out/`. The raw execution logs are under `
 
 For the complete public regression suite, add `--all-tests`. This includes benchmark-backed test modules and copies their support package into the isolated workspace.
 
+## Theory before a CPU probe
+
+The programmatic `RDSAdvisor.execute_theory_probe(run_spec, formal, theory_allowance=..., committed=...)`
+checks an explicit declarative obligation with the existing independent certificate
+checker before calling `ProjectStore.register`. `FAIL` and `UNKNOWN` return without
+creating a run or reserving empirical budget. A supplied result is replayed; its
+handwritten status has no admission authority. This path is opt-in: ordinary
+project commands still use the existing project API. Backends that expose an
+`application_status` must also return `PASS`; a proved conditional theorem with
+unknown application premises does not admit an empirical run.
+
+With `RDS_LEAN_EXECUTABLE` configured to a native Lean binary, reproduce the bounded
+case in a new empty workspace:
+
+```text
+python -B tests/test_rds_advisor_lean_twostep.py --workspace <new-empty-workspace>
+```
+
+The case uses `L(w) = (w - 1)^2`, with twenty CPU updates. Its declared affine
+contraction and fixed point have independently checked Python certificates; the
+module also includes a native Lean proof of the closed rational bound. The combined
+module is `CERTIFICATE_CHECKED`, not a native proof of arbitrary gradient descent.
+Original loss/update trajectories, project receipts and checkpoints distinguish a
+successful process from scientific gain and from an observed manipulation.
+
+A proven side condition does not prove that executable code implements the model,
+or guarantee improvement from an already optimal starting point. A failed
+manipulation check requires inspecting that correspondence; a flat trajectory
+cannot by itself establish an optimizer or data-distribution cause. `UNKNOWN`
+blocks this probe without refuting the mathematics. Before checking, the same
+project budget atomically charges a finite `theory_allowance` with every contract
+resource dimension. Generation and independent replay share one owned subprocess
+wall deadline; timeout terminates its process tree and returns `UNKNOWN`. Empirical
+admission then checks the remaining shared budget. For example, an allowance may
+be `{"wall_seconds": 10, "cpu_seconds": 3, "gpu_seconds": 0}` when those are the
+contract dimensions. These are explicitly supplied conservative charges, not
+measured CPU/GPU usage or a suggestion that cheaper research is always better.
+
+Unused theory allowance is not refunded, including after rejection or controller
+crash; this avoids orphan reservations and double settlement. Append-only events
+bind its attempt, request and intended empirical manifest, retain observed check
+wall time and charge any observed wall overrun. The actual CPU/GPU measurement
+remains unknown. The hard deadline covers the complete checker subprocess;
+SQLite admission and evidence collection have overhead, so an exact OS deadline
+for every controller instruction is not claimed. This scalar acceptance case does
+not measure autonomous research quality.
+
+The same unchanged manifest/request has one durable claim, so concurrent callers
+cannot both pay for its check. Independent run identities can still check in
+parallel. The request binds the checker version, selected native executable and
+explicit allowance; a revised request can be reviewed under a new bounded claim.
+`ProjectStore.theory_record(attempt_id)` reads the complete recorded gate and
+bounded original worker stdout/stderr, even if later empirical admission failed.
+It exposes evidence for review and never grants admission from a stored PASS.
+
+Blocked checks also save structured verification-request decisions in the existing
+checkpoint ledger. The next selection pass suppresses an unchanged repeat before
+invoking the checker; a changed declaration reopens review. Rejecting this redundant
+request does not refute an `UNKNOWN` mathematical claim, and reopened review does
+not grant CPU execution authority.
+
 ## Check identity at meaningful boundaries
 
 Hash checks serve artifact identity, execution admission/completion, control reuse, and rule adoption/rollback. Ordinary status, advice display and checkpoint saving read the operational ledger without hashing the whole project. Checkpoint restoration explicitly checks current input bindings because it is a continuation boundary. During artifact import, each unique file is read and hashed once; facts reuse its hash and original location rather than adding an unused hash to every value. Template equality uses ordinary canonical values; only the intervention fingerprint needs a compact hash for deduplication. A hash is not a research score.

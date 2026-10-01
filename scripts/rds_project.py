@@ -315,6 +315,64 @@ class ProjectStore:
                 and Path(found).suffix.lower() not in {".bat", ".cmd", ".ps1"}, "Project commands cannot invoke a shell")
         return str(Path(found).resolve())
 
+    @contextmanager
+    def theory_allowance(self, spec, request, allowance):
+        """Precharge bounded controller work; unused allowances are not refunded."""
+        started = time.monotonic()
+        require(isinstance(spec, dict), "Run manifest must be an object")
+        run_id = spec.get("id", "")
+        require(isinstance(run_id, str) and 1 <= len(run_id) <= 80 and all(c.isalnum() or c in "-_" for c in run_id), "Invalid run ID")
+        event = {"kind": "THEORY_ALLOWANCE", "attempt_id": uuid.uuid4().hex,
+                 "run_id": run_id, "manifest_sha256": digest(spec),
+                 "request_sha256": digest(request), "accounting": "CONSERVATIVE_ALLOWANCE"}
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            contract = self._contract(db)
+            require(db.execute("SELECT 1 FROM runs WHERE id=?", (run_id,)).fetchone() is None, "Run ID already exists")
+            require(db.execute("SELECT 1 FROM events WHERE json_extract(body,'$.kind')='THEORY_ALLOWANCE' "
+                               "AND json_extract(body,'$.run_id')=? AND json_extract(body,'$.manifest_sha256')=? "
+                               "AND json_extract(body,'$.request_sha256')=? LIMIT 1",
+                               (run_id, event["manifest_sha256"], event["request_sha256"])).fetchone() is None,
+                    "Theory request already attempted")
+            self._command(spec.get("argv"))
+            require(spec["argv"] in contract["allowed_commands"], "Command is not authorized")
+            _, errors = self._bindings(contract)
+            require(not errors, "; ".join(errors))
+            require(isinstance(allowance, dict) and set(allowance) == set(contract["budget"]), "Theory allowance must match budget dimensions")
+            amounts = {key: number(value, f"allowance.{key}", key == "wall_seconds")
+                       for key, value in allowance.items()}
+            for resource, amount in amounts.items():
+                row = db.execute("SELECT * FROM budget WHERE resource=?", (resource,)).fetchone()
+                require(row["spent"] + row["charged"] + row["reserved"] + amount <= row["cap"] + 1e-9, f"Insufficient {resource} budget")
+            for resource, amount in amounts.items():
+                db.execute("UPDATE budget SET charged=charged+? WHERE resource=?", (amount, resource))
+            event["allowance"] = amounts
+            db.execute("INSERT INTO events(body) VALUES (?)", (canonical(event),))
+        record = {"attempt_id": event["attempt_id"], "allowance": dict(amounts)}
+        try:
+            yield record
+        finally:
+            wall = time.monotonic() - started
+            overrun = max(wall - amounts["wall_seconds"], 0.0)
+            outcome = {**event, "kind": "THEORY_OUTCOME", "status": record.get("status", "INTERRUPTED"),
+                       "observed_wall_seconds": wall, "wall_overrun_seconds": overrun}
+            for key in ("result_sha256", "result", "worker_output"):
+                if key in record:
+                    outcome[key] = record[key]
+            with self._db() as db:
+                db.execute("BEGIN IMMEDIATE")
+                db.execute("UPDATE budget SET charged=charged+? WHERE resource='wall_seconds'", (overrun,))
+                db.execute("INSERT INTO events(body) VALUES (?)", (canonical(outcome),))
+
+    def theory_record(self, attempt_id):
+        """Read recorded theory evidence; this never admits an empirical run."""
+        with self._db(True) as db:
+            row = db.execute("SELECT body FROM events WHERE json_extract(body,'$.attempt_id')=? "
+                             "AND json_extract(body,'$.kind') IN ('THEORY_ALLOWANCE','THEORY_OUTCOME') "
+                             "ORDER BY id DESC LIMIT 1", (attempt_id,)).fetchone()
+            require(row is not None, "Unknown theory attempt ID")
+            return json.loads(row["body"])
+
     def register(self, spec):
         require(isinstance(spec, dict) and type(spec.get("schema")) is int
                 and spec["schema"] == 1, "Run manifest schema must be 1")

@@ -4,12 +4,17 @@ Reports heuristic signals and candidate diagnostics for human or experimental re
 It does not solve parameter ranges or establish causes from endpoint telemetry.
 """
 import json
+import base64
 import math
+import os
 import re
 from pathlib import Path
 import hashlib
 import sqlite3
 import time
+import signal
+import subprocess
+import sys
 from typing import Any, Dict, List, Optional
 
 from rds_artifacts import strict_json
@@ -83,6 +88,52 @@ def _number(value, name):
     return float(value)
 
 
+def _bounded_theory_gate(request, seconds):
+    """Bound generation and independent replay together, including native children."""
+    from rds_project import _Job
+    bootstrap = ("import json,sys; request=json.loads(sys.stdin.buffer.read()); "
+                 "sys.path.insert(0,sys.argv[1]); from rds_probe import declarative_probe; "
+                 "result=declarative_probe(request['formal'],request['committed']); "
+                 "sys.stdout.buffer.write(json.dumps(result,ensure_ascii=False,allow_nan=False).encode('utf-8'))")
+    deadline = time.monotonic() + seconds
+    process = job = None
+    output = errors = b""
+    try:
+        process = subprocess.Popen([sys.executable, "-I", "-c", bootstrap, str(Path(__file__).resolve().parent)],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   shell=False, start_new_session=os.name != "nt",
+                                   creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+        job = _Job(process)
+        output, errors = process.communicate(_json(request, cap=2 * MAX_DOCUMENT_BYTES).encode("utf-8"),
+                                            timeout=max(0, deadline - time.monotonic()))
+        if process.returncode or time.monotonic() > deadline:
+            raise ValueError(errors.decode("utf-8", errors="replace")[-1000:] or "Theory deadline exceeded")
+        gate = strict_json(output.decode("utf-8"))
+        _json(gate, cap=MAX_DOCUMENT_BYTES)
+        if time.monotonic() > deadline:
+            raise ValueError("Theory deadline exceeded")
+    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        gate = {"status": "UNKNOWN", "assurance": "NONE", "reason": "Bounded theory check: " + str(exc)}
+    finally:
+        if process is not None:
+            if os.name != "nt":
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            elif job is not None:
+                job.stop()
+            else:
+                process.kill()
+            output, errors = process.communicate()
+        if job is not None:
+            job.close()
+    worker = {name: {"base64": base64.b64encode(raw[:cap]).decode("ascii"), "truncated": len(raw) > cap}
+              for name, raw, cap in (("stdout", output, MAX_DOCUMENT_BYTES), ("stderr", errors, 65536))}
+    worker["exit_code"] = process.returncode if process is not None else None
+    return gate, worker
+
+
 
 class RDSAdvisor:
     def __init__(self, root_dir: Path):
@@ -90,6 +141,40 @@ class RDSAdvisor:
         self.knowledge_db = self.root_dir / ".rds" / "advisor.sqlite3"
         self.literature_load_errors = []
         self.literature_principles = self._load_scientific_principles()
+
+    def execute_theory_probe(self, run_spec, formal, *, theory_allowance, committed=None):
+        """Check a declared side condition before reserving a project probe.
+
+        Uses the existing verifier and transactional runner. A proof concerns the
+        declared model; the probe still needs an empirical manipulation check.
+        Ordinary project commands remain available through ProjectStore.
+        """
+        from rds_probe import formal_requirement
+        from rds_project import ProjectStore, digest
+        from rds_verify import verifier_id
+
+        # Freeze the request used for both checking and execution. A committed
+        # result is replayed, never trusted for its caller-supplied PASS label.
+        manifest = strict_json(_json(run_spec))
+        requirement = formal_requirement({"formal": strict_json(_json(formal))})
+        if requirement is None or requirement["kind"] != "declarative":
+            raise ValueError("Theory probes require an explicit declarative formal obligation")
+        request = {"formal": requirement, "committed": strict_json(_json(committed, cap=MAX_DOCUMENT_BYTES)),
+                   "verifier_sha256": verifier_id(), "native_executable": os.environ.get("RDS_LEAN_EXECUTABLE"),
+                   "allowance": strict_json(_json(theory_allowance))}
+        store = ProjectStore(self.root_dir)
+        started = time.monotonic()
+        with store.theory_allowance(manifest, request, theory_allowance) as charge:
+            gate, worker = _bounded_theory_gate(request, charge["allowance"]["wall_seconds"])
+            charge.update(status=gate["status"], result_sha256=digest(gate), result=gate, worker_output=worker)
+        result = {"formal_gate": gate, "theory_wall_seconds": time.monotonic() - started,
+                  "theory_charge": {key: charge[key] for key in ("attempt_id", "allowance", "status", "result_sha256")},
+                  "run_spec": manifest, "receipt": None}
+        if gate["status"] != "PASS" or gate.get("application_status", "PASS") != "PASS":
+            return result
+        store.register(manifest)
+        result["receipt"] = store.execute(manifest["id"])
+        return result
 
     def _load_scientific_principles(self) -> List[Dict[str, Any]]:
         paths = [self.root_dir / "references/scientific_tuning_principles.json",
