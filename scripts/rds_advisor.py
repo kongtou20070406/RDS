@@ -766,6 +766,10 @@ class RDSAdvisor:
                 output["queries"] = [row for row in output["queries"] if row.get("id") in used]
 
         filter_search(search)
+        for flag in review["flags"]:
+            if flag["kind"] == "DECISION_OSCILLATION":
+                flag["candidate_ids"] = [c["id"] for c in search.get("candidates", [])
+                    if c.get("status") == "READY" and _loop_route(c) in flag["route_sha256"]]
         review["status"] = "REVIEW_REQUIRED" if review["flags"] else "RECORDED_HISTORY_REVIEWED"
         search["loop_review"] = review
         return review

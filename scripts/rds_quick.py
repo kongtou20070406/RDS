@@ -443,6 +443,8 @@ def brief(root, value, version, formal=False):
         if selection is not None:
             summary['selection_basis'] = selection['basis']
             flags += [f['kind'] for f in selection['flags']]
+            if 'next_move' in selection:
+                summary['next_move'] = selection['next_move']['kind']
             if 'goal' in selection:
                 summary['goal_input_status'] = selection['goal']['status']
         summary['flags'] = list(dict.fromkeys(flags))[:3]

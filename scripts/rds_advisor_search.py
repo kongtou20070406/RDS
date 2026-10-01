@@ -183,6 +183,71 @@ def _discrimination(action, facts):
             "issues": issues}
 
 
+def _next_move(review, search):
+    """Suggest a bounded reasoning step from input review, without changing a route."""
+    flags = {f["kind"] for f in review["flags"]}
+    ready_ids = {c["id"] for c in review["candidates"]}
+    history_flags = search.get("loop_review", {}).get("flags", [])
+    loop_flags = {f.get("kind") for f in history_flags
+                  if f.get("kind") not in {"REPEAT_REJECTED_ROUTE", "REPEAT_DECLARED_REJECTED_DOMAIN"}
+                  or not ready_ids or f.get("candidate_id") in ready_ids}
+    if "DECISION_OSCILLATION" in loop_flags and ready_ids:
+        if not any(ready_ids.intersection(f.get("candidate_ids", []))
+                   for f in history_flags if f.get("kind") == "DECISION_OSCILLATION"):
+            loop_flags.remove("DECISION_OSCILLATION")
+    # Local warnings remain visible, but do not block an available supported route.
+    supported_route = any(c["basis"] == "SCOPED_OBLIGATION" or
+                          (c["basis"] == "CONDITIONAL_RIVAL_TEST" and not c["unresolved_pairs"])
+                          for c in review["candidates"])
+    goal = review.get("goal", {})
+    pending = any(c.get("status") in {"NEEDS_EVIDENCE", "NEEDS_METHOD_CLARIFICATION", "NEEDS_METHOD_DESCRIPTION"}
+                  for c in search.get("candidates", []))
+    blocked = any(c.get("status") in {"BLOCKED_PREREQUISITE", "BLOCKED_METHOD", "BLOCKED_BUDGET"}
+                  for c in search.get("blocked_candidates", []))
+    if "LOOP_HISTORY_REVIEW_ERROR" in loop_flags:
+        kind, reason = "RESOLVE_PREMISE", "Recorded history integrity is unresolved; inspect the existing loop review."
+    elif goal.get("status") == UNKNOWN or any(c["truth"] == UNKNOWN for c in goal.get("conditions", [])):
+        kind, reason = "RESOLVE_PREMISE", "The original goal has unresolved evidence; no scientific failure is established."
+    elif ("PREDICTION_PREMISES_UNRESOLVED" in flags and not supported_route) or (not ready_ids and (pending or blocked)):
+        kind, reason = "RESOLVE_PREMISE", "Resolve the affected evidence, prediction scope, method or budget conditions first."
+    elif "SEARCH_TRUNCATED" in flags:
+        kind, reason = "RESOLVE_PREMISE", "The bounded search omitted part of the supplied scope."
+    elif loop_flags & {"REPEAT_REJECTED_ROUTE", "REPEAT_DECLARED_REJECTED_DOMAIN", "DECISION_OSCILLATION"}:
+        kind, reason = "REFORMULATE", "Recorded choices repeat a rejected route/domain or oscillate within the reviewed scope."
+    elif goal.get("status") == TRUE or (review["basis"] == "SCOPED_OBLIGATION" and goal.get("status") != FALSE):
+        return None
+    elif "RIVAL_PREDICTIONS_OVERLAP" in flags and not supported_route:
+        kind, reason = "DESIGN_DISCRIMINATOR", "Supported same-scope prediction sets overlap; seek a distinguishing observation."
+    elif goal.get("status") == FALSE:
+        kind, reason = "REFORMULATE", "The reported goal predicate failed; this is a scoped gap, not a capacity lower bound or a causal diagnosis."
+    elif {"SINGLE_CONFIGURED_DIRECTION", "RIVAL_PREDICTIONS_MISSING"} <= flags and not supported_route:
+        kind, reason = "REVIEW_ALTERNATIVE", "One procedure was supplied; review a useful alternative if it could change the decision."
+    elif "RIVAL_PREDICTIONS_MISSING" in flags and not supported_route:
+        kind, reason = "DESIGN_DISCRIMINATOR", "The supplied procedures do not yet bind competing predictions to outcomes."
+    elif not review["ready_graph_directions"]:
+        kind, reason = "RESOLVE_PREMISE", "No ready direction is defined; inspect the existing queries and candidate reviews."
+    else:
+        return None
+    prompt = (
+        "Resolve only the affected evidence or scope using original sources and explicit predicates; keep UNKNOWN where unsupported. "
+        "State the smallest deciding observation or proof check and its stop condition. Continue independent authorized work. "
+        if kind == "RESOLVE_PREMISE" else
+        "Retain the existing rival hypotheses and design one observation or scoped proof check with different predictions. "
+        "Give the counterfactual difference each rival predicts, the check's cost and a stop condition. "
+        if kind == "DESIGN_DISCRIMINATOR" else
+        "Propose one concrete candidate changing an assumption, representation or computational method, and compare it with the smallest repair. "
+        "Give a counterfactual difference: which observation or scoped proof obligation differs if the proposed change is made? "
+        "State a decisive check, its cost and a stop condition; added complexity is not itself progress. "
+        "Renaming alone supplies no new mechanism; route identity here is structured input, not semantic equivalence. "
+    )
+    return {"kind": kind, "reason": reason, "basis": "INPUT_REVIEW_HEURISTIC_NOT_SCIENTIFIC_PROOF",
+            "authorization": "UNCHANGED",
+            "preserve_refs": ["search.decision", "context.budget", "context.resources", "context.method_constraints"],
+            "prompt": prompt + "Preserve the original goal, scope, revision, budget and method constraints in the referenced inputs. "
+                      "Respect an explicitly chosen route; this suggestion does not interrupt it or authorize execution. "
+                      "Unknown evidence or a scoped failure does not establish a capacity lower bound."}
+
+
 def review_selection(search, context):
     """Expose what the supplied directions can decide; never invent utility."""
     ready = [c for c in search.get("candidates", []) if c.get("status") == "READY"]
@@ -211,6 +276,9 @@ def review_selection(search, context):
             else:
                 report.update(basis="CONDITIONAL_RIVAL_TEST", distinguishing_pairs=len(disc["conditional_distinguishing_pairs"]),
                               unresolved_pairs=len(disc["unresolved_pairs"]))
+                if disc["unresolved_pairs"]:
+                    flags.append({"kind": "RIVAL_PREDICTIONS_OVERLAP", "candidate": c["id"],
+                                  "next": "Some rival predictions still overlap; identify which additional observation would distinguish them."})
         candidates.append(report)
     basis = "NO_READY_DIRECTION" if not ready else "SCOPED_OBLIGATION" if obligations else "REVIEW_ONLY"
     # Ranking can also compare conditional routes whose prerequisites remain open.
@@ -233,6 +301,9 @@ def review_selection(search, context):
         review["goal"] = {"status": _all(reports), "conditions": reports, "assurance": "INPUT_REPORTED"}
         if review["goal"]["status"] != TRUE:
             flags.append({"kind": "GOAL_BRIDGE_OPEN", "next": "Keep task acceptance separate from local/procedure success; choose a check or intervention that can close this declared gap."})
+    next_move = _next_move(review, search)
+    if next_move is not None:
+        review["next_move"] = next_move
     return review
 
 

@@ -2,6 +2,7 @@
 
 ## 5.8.0 — Unreleased
 
+- Turn selection and scoped-loop gaps into a compact `next_move` prompt for evidence repair, discrimination or reformulation. Ask for a changed assumption/representation/method and its deciding check; retain original goals and authorization without fixed-round bans, permanent mechanism blacklists or automatic architecture jumps.
 - Add explicit sourced theory-reformulation requests and compact bridges beyond the current graph. Relation labels are optional; reuse the current model, original goal and declared premises instead of duplicating fields. Preserve mappings and dates, and distinguish verified, counterexample and unresolved proof-check results without inferring containment, applicability, scientific gains or execution authority.
 - Preload eight scoped theory-tool cards and expose bounded tag-based shortlists plus single-card lookup. Load relevant details on demand; a match does not close prerequisites or authorize a run, and historical requests retain catalogue-availability checks.
 - Guide stalled proxy/task comparisons toward necessary-constraint review and deciding authorized checks, with elementary dynamical counterexamples. Broader state-space formulations and published sequence-model results are options to audit, not guarantees for an image-restoration task.
