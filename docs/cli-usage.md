@@ -1,0 +1,32 @@
+# Local CLI usage log
+
+Every `rds_cli.py` invocation records its start and exit in a local SQLite log,
+automatically. All updated checkouts share one log for the current user. Calls
+include help, version, invalid arguments, failed commands and statistics queries.
+Counts describe actual CLI invocations; API imports and loading Skill instructions
+have their own evidence. No prompt, full argv, input path or credential is stored.
+
+Show recent daily counts (14 days by default):
+
+```text
+python -B scripts/rds_cli.py usage --days 7
+python -B scripts/rds_cli.py usage --since 2026-09-01 --until 2026-10-01
+python -B scripts/rds_cli.py usage --days 30 --json
+```
+
+Dates are inclusive and use the local calendar date recorded at invocation.
+The output shows total recorded calls, daily counts, command/mode counts and
+the tracking start. Dates before logging started show `-` in the table and
+`calls=null, tracked=false` in JSON; they are not silently reported as zero.
+Existing historical calls are not reconstructed from guesses. A query counts
+itself, and its start is visible before its exit is written. JSON also reports
+successful, failed and unfinished entries; an unfinished entry alone does not
+establish that a process is still running.
+
+On Windows the log is `%LOCALAPPDATA%/ResearchDirectionSelector/cli-usage.sqlite3`.
+Other platforms use `~/.local/state/ResearchDirectionSelector/cli-usage.sqlite3`.
+`RDS_USAGE_DB` can select a different file, including an isolated test log. The
+log is independent of project budget/evidence ledgers and is never uploaded.
+SQLite transactions support concurrent CLI processes. Storage failures preserve
+the original command's return/exception; usage queries expose unavailable or
+degraded logging. Usage reports can run without creating project state.

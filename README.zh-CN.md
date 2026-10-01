@@ -114,6 +114,11 @@ git clone https://github.com/kongtou20070406/research-direction-selector.git "$e
 
 内核（`scripts/rds_cli.py`）仅使用 Python 3.11+ 标准库：
 
+CLI 默认在本机记录调用。用 `python -B scripts/rds_cli.py usage --days 7` 查看每天的次数，
+或用 `usage --since 2026-09-01 --until 2026-10-01` 查看包含起止日期的区间。
+加 `--json` 可取得命令分类和逐日统计。开始记录前的日期显示“未记录”；详见
+[调用日志](docs/cli-usage.md)。
+
 从仓库根目录运行以下 CPU 演示，并使用全新的空目录 `./my-project`。准备步骤会为对照组和实验组创建绑定契约及清单；本演示不构成科学结论的确认。执行与回执细节见[项目执行器示例](examples/project-runner/README.md)。
 
 ```powershell

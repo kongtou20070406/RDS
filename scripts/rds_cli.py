@@ -108,6 +108,7 @@ def engine_id():
     here = Path(__file__).resolve().parent
     from rds_verify import verifier_id
     return digest({"cli": digest((here / "rds_cli.py").read_bytes()),
+                   "usage": digest((here / "rds_usage.py").read_bytes()),
                    "probe": digest((here / "rds_probe.py").read_bytes()),
                    "formal_kernel": digest((here / "rds_formal_kernel.py").read_bytes()),
                    "declarative_verifier": verifier_id(),
@@ -1114,6 +1115,12 @@ def parser():
     p.add_argument("--root", default=".")
     p.add_argument("--version", action="version", version=VERSION)
     commands = p.add_subparsers(dest="command", required=True)
+    usage = commands.add_parser("usage", help="Show locally recorded daily CLI invocation counts")
+    window = usage.add_mutually_exclusive_group()
+    window.add_argument("--days", type=int, default=14)
+    window.add_argument("--since", help="Inclusive start date, YYYY-MM-DD")
+    usage.add_argument("--until", help="Inclusive end date, YYYY-MM-DD; default today")
+    usage.add_argument("--json", action="store_true", help="Emit structured usage statistics")
     commands.add_parser("init").add_argument("--contract", required=True)
     hypo = commands.add_parser("hypothesis").add_subparsers(dest="action", required=True).add_parser("add")
     hypo.add_argument("--spec", required=True)
@@ -1258,8 +1265,17 @@ def parser():
     return p
 
 
-def main():
+def _main():
     args = parser().parse_args()
+    if args.command == "usage":
+        from rds_usage import render, summarize
+        try:
+            result = summarize(days=args.days, since=args.since, until=args.until)
+            print(json.dumps(result, ensure_ascii=False, indent=2) if args.json else render(result))
+            return 0 if result["logging"] == "ENABLED" else 1
+        except (ValueError, OSError, sqlite3.Error) as exc:
+            print("[RDS-USAGE] " + str(exc), file=sys.stderr)
+            return 1
     rds = RDSState(args.root)
     try:
         if args.command == "history":
@@ -1337,6 +1353,11 @@ def main():
         print("[RDS-REJECT] " + str(exc), file=sys.stderr)
         return 1
     return 0
+
+
+def main():
+    from rds_usage import run_logged
+    return run_logged(_main, sys.argv[1:], VERSION)
 
 
 if __name__ == "__main__":

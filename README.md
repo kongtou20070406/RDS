@@ -114,6 +114,12 @@ git clone https://github.com/kongtou20070406/research-direction-selector.git "$e
 
 The kernel (`scripts/rds_cli.py`) runs on pure Python 3.11+ standard library:
 
+CLI invocations are logged locally by default. Show daily use with
+`python -B scripts/rds_cli.py usage --days 7`, or select an inclusive range with
+`usage --since 2026-09-01 --until 2026-10-01`. Add `--json` for command totals and
+structured daily counts. See [CLI usage](docs/cli-usage.md) for tracking coverage
+and the local log location.
+
 Run the following CPU demonstration from the repository root, using a new empty `./my-project` directory. The preparation step creates the bound contract and manifests for both arms; this demonstration does not establish scientific confirmation. See the [project-runner example](examples/project-runner/README.md) for execution and receipt details.
 
 ```powershell

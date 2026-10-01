@@ -1,0 +1,143 @@
+"""Local, process-safe CLI invocation counts; no prompts or argument payloads."""
+from contextlib import contextmanager
+from datetime import date, datetime, timedelta, timezone
+import os
+from pathlib import Path
+import sqlite3
+import time
+
+COMMANDS = {"init", "hypothesis", "gate", "plan", "run", "data", "decide", "status",
+            "project", "checkpoint", "artifacts", "formal", "meta", "history", "advise",
+            "advancement", "branch", "usage"}
+_last_error = None
+
+
+def log_path():
+    override = os.environ.get("RDS_USAGE_DB")
+    if override:
+        return Path(override).expanduser().resolve()
+    local = os.environ.get("LOCALAPPDATA")
+    base = Path(local) if local else Path.home() / ".local" / "state"
+    return base / "ResearchDirectionSelector" / "cli-usage.sqlite3"
+
+
+@contextmanager
+def _database():
+    path = log_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    new = not path.exists()
+    connection = sqlite3.connect(path, timeout=0.25)
+    try:
+        if new:
+            connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("CREATE TABLE IF NOT EXISTS tracking (id INTEGER PRIMARY KEY CHECK(id=1), started REAL NOT NULL, day TEXT NOT NULL)")
+        connection.execute("CREATE TABLE IF NOT EXISTS calls (id INTEGER PRIMARY KEY, started REAL NOT NULL, day TEXT NOT NULL, command TEXT NOT NULL, mode TEXT NOT NULL, version TEXT NOT NULL, exit_code INTEGER, elapsed_ms REAL)")
+        connection.execute("CREATE INDEX IF NOT EXISTS calls_day ON calls(day)")
+        yield connection
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def _label(argv):
+    command = "other"
+    skip = False
+    for token in argv:
+        if skip:
+            skip = False
+        elif token == "--root":
+            skip = True
+        elif token in COMMANDS:
+            command = token
+            break
+    mode = "help" if "--help" in argv or "-h" in argv else "version" if "--version" in argv else "command"
+    return command if command != "other" else mode if mode != "command" else command, mode
+
+
+def _start(argv, version):
+    timestamp = time.time()
+    day = datetime.fromtimestamp(timestamp).astimezone().date().isoformat()
+    command, mode = _label(argv)
+    with _database() as connection:
+        connection.execute("INSERT OR IGNORE INTO tracking VALUES (1,?,?)", (timestamp, day))
+        cursor = connection.execute("INSERT INTO calls (started,day,command,mode,version) VALUES (?,?,?,?,?)",
+                                    (timestamp, day, command, mode, version))
+        return cursor.lastrowid
+
+
+def run_logged(function, argv, version):
+    """Record starts and exits; log failures never change the command's result."""
+    global _last_error
+    token, code, started = None, None, time.perf_counter()
+    _last_error = None
+    try:
+        token = _start(argv, version)
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        _last_error = str(exc)
+    try:
+        result = function()
+        code = result if type(result) is int else 0
+        return result
+    except SystemExit as exc:
+        code = exc.code if type(exc.code) is int else 0 if exc.code is None else 1
+        raise
+    except KeyboardInterrupt:
+        code = 130
+        raise
+    except BaseException:
+        code = 1
+        raise
+    finally:
+        if token is not None:
+            try:
+                with _database() as connection:
+                    connection.execute("UPDATE calls SET exit_code=?,elapsed_ms=? WHERE id=?",
+                                       (code, round((time.perf_counter() - started) * 1000, 3), token))
+            except (OSError, sqlite3.Error, ValueError) as exc:
+                _last_error = str(exc)
+
+
+def summarize(*, days=14, since=None, until=None):
+    end = date.fromisoformat(until) if until is not None else date.today()
+    if since is not None:
+        start = date.fromisoformat(since)
+    else:
+        if type(days) is not int or not 1 <= days <= 3660:
+            raise ValueError("--days must be an integer in 1..3660")
+        start = end - timedelta(days=days - 1)
+    if not 0 <= (end - start).days < 3660:
+        raise ValueError("Date range must be ordered and span at most 3660 days")
+    with _database() as connection:
+        tracking = connection.execute("SELECT started,day FROM tracking WHERE id=1").fetchone()
+        rows = connection.execute("SELECT day,COUNT(*),SUM(exit_code=0),SUM(exit_code!=0),SUM(exit_code IS NULL) FROM calls WHERE day BETWEEN ? AND ? GROUP BY day", (start.isoformat(), end.isoformat())).fetchall()
+        commands = dict(connection.execute("SELECT command,COUNT(*) FROM calls WHERE day BETWEEN ? AND ? GROUP BY command ORDER BY command", (start.isoformat(), end.isoformat())))
+        modes = dict(connection.execute("SELECT mode,COUNT(*) FROM calls WHERE day BETWEEN ? AND ? GROUP BY mode", (start.isoformat(), end.isoformat())))
+    by_day = {row[0]: row[1:] for row in rows}
+    daily = []
+    for offset in range((end - start).days + 1):
+        day = (start + timedelta(days=offset)).isoformat()
+        counts = by_day.get(day, (0, 0, 0, 0))
+        tracked = bool(tracking and day >= tracking[1]) or day in by_day
+        daily.append({"date": day, "calls": counts[0] if tracked else None,
+                      "successful": counts[1] or 0, "failed": counts[2] or 0,
+                      "unfinished": counts[3] or 0, "tracked": tracked})
+    return {"logging": "DEGRADED" if _last_error else "ENABLED", "log_path": str(log_path()),
+            "tracking_since": datetime.fromtimestamp(tracking[0], timezone.utc).astimezone().isoformat() if tracking else None,
+            "day_basis": "local calendar date at invocation", "since": start.isoformat(), "until": end.isoformat(),
+            "total_calls": sum(row[1] for row in rows), "commands": commands, "modes": modes,
+            "daily": daily, "log_error": _last_error, "query_calls_are_counted": True}
+
+
+def render(summary):
+    lines = ["RDS CLI usage", "Logging: " + summary["logging"],
+             f"Period: {summary['since']} .. {summary['until']}",
+             f"Recorded calls: {summary['total_calls']}", "", "Date        Calls"]
+    for row in summary["daily"]:
+        count = str(row["calls"]) if row["tracked"] else "-"
+        lines.append(f"{row['date']}  {count:>5}")
+    lines.extend(["", "Commands: " + ", ".join(f"{name}={count}" for name, count in summary["commands"].items()),
+                  "Tracking since: " + str(summary["tracking_since"]), "Log: " + summary["log_path"],
+                  "- = not tracked yet; usage queries also count."])
+    if summary["log_error"]:
+        lines.append("Log error: " + summary["log_error"])
+    return "\n".join(lines)

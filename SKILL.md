@@ -43,6 +43,7 @@ Apply and persist research preferences only with explicit opt-in. [Optional pref
 | A general rule could change this decision | Relevant [judgment graph](references/judgment-graph.yaml) nodes: date, scope, applicability, counterexample. For RSI comparisons read [RSI evidence](references/rsi-evidence.md). These are scoped corrections, not universal laws; do not load all libraries. |
 | Execute the scalar reference protocol | [L3 contract](references/l3-state-machine.md), then the discipline's CLI section. Its restricted rational AST/MSE receipts do not validate external training. |
 | Execute/resume a project or develop RDS | [Development loop](docs/development-loop.md): authorized argv, bindings, raw artifacts, live checkpoints. Inspect existing runs before another attempt. |
+| Check actual CLI use over time | [CLI usage log](docs/cli-usage.md): automatic local daily counts, command totals and tracking coverage; `usage --days 7` or an inclusive date range. |
 | Allocate available compute to useful work | [Resource-aware planning](docs/resource-planning.md): capacity, elapsed time, marginal cost and compatible batches. Advisory plans retain execution gates and do not reserve devices. |
 | Mathematical obligation / Lean certificate | [Formal framework](references/formal_framework.md) and discipline's formal section: actual checker and declared scope; `UNKNOWN` stays unknown. |
 | Graph gaps / Advisor advancement | [Frontier](docs/advisor-frontier.md) or [advancement protocol](docs/advisor-advancement.md). Proposed nodes/ASTs need independent evidence. |

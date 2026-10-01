@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Record local CLI invocation starts/exits automatically, across projects. Add `usage` with daily counts, inclusive date ranges, command/mode totals and JSON output; distinguish untracked history and preserve command behavior when logging fails. Keep prompts and argument payloads out of the log.
+
 - Let trusted proof rules declare supporting source files for verifier identity binding, and share bounded exact-JSON admission across framework/domain checkers. Bound containers before expansion; retain existing Boolean/null semantics with stricter domain options.
 
 - Add the separate `geometry.unit_disk_rational_voronoi` certificate rule: bounded rational inputs, exact full-disk Voronoi/circle extrema and frozen source-bound replay. Preserve the original core for certificate compatibility; support the rational tactic and retain the existing quadtree rule. Coverage establishes a construction upper bound only.
