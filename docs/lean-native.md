@@ -5,6 +5,28 @@ The optional `formal/` Lake project fixes Lean **4.33.1** and mathlib **v4.33.1*
 run RDS. Runtime verification discovers already installed native binaries and
 never installs a toolchain, resolves Lake dependencies, or downloads a cache.
 
+A deployment offering the complete native formal capability must provision this
+matching Lean/mathlib pair and the built `Formal` library. A Python-only setup is
+a reduced-capability installation. There is currently no `required-native`
+installation mode or `doctor` command: acceptance must inspect
+`assurance: LEAN_KERNEL_CHECKED`, independently replay the certificate, and retain
+`application_status: UNKNOWN` when empirical premises are unresolved. Pin upgrades
+require a fresh build and replay.
+
+Select the checking method explicitly when it matters:
+
+```text
+python -B scripts/rds_cli.py formal verify --spec examples/formal/lean_obligation.json --tactics lean4 --no-cache
+python -B scripts/rds_cli.py formal verify --spec examples/formal/lean_obligation.json --tactics rational --no-cache
+```
+
+`lean4` requires the native compiler and cannot return a Python fallback as PASS.
+`rational` uses the exact Python checker for supported closed rational relations
+without calling Lean; its assurance is `CERTIFICATE_CHECKED`. Default `rule`
+selection can still use either available backend, and the result identifies the
+actual backend and assurance. A generic successful exit is therefore not a native
+environment check. Neither method establishes empirical applicability.
+
 ## Build and replay
 
 Build the library explicitly, with the toolchain declared in `formal/lean-toolchain`:

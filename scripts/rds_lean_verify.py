@@ -178,23 +178,37 @@ def _fallback_certificate(spec):
             "assurance": "CERTIFICATE_CHECKED", "semantics": "closed_exact_rational_relation"}
 
 
-def verify(spec):
-    """Generate and natively check a bounded mathematical proof obligation."""
+def verify_rational(spec):
+    """Check a closed rational relation with exact Python arithmetic only."""
+    try:
+        certificate = _fallback_certificate(spec)
+        return {"status": "PASS", "assurance": "CERTIFICATE_CHECKED",
+                "backend": FALLBACK_BACKEND, "semantics": certificate["semantics"],
+                "certificate": certificate}
+    except (ValueError, TypeError, OSError, ZeroDivisionError, OverflowError, RecursionError, UnicodeError) as exc:
+        return {"status": "UNKNOWN", "assurance": "NONE", "backend": FALLBACK_BACKEND,
+                "semantics": "closed_exact_rational_relation", "certificate": None, "reason": str(exc)}
+
+
+def verify(spec, *, allow_fallback=True):
+    """Check a generated Lean proof, optionally falling back when Lean is absent."""
     try:
         source = render_source(spec)
         try:
             checked = _native_check(source)
         except NoNativeLean as exc:
-            certificate = _fallback_certificate(spec)
-            return {"status": "PASS", "assurance": "CERTIFICATE_CHECKED",
-                    "backend": FALLBACK_BACKEND, "semantics": certificate["semantics"],
-                    "certificate": certificate, "reason": str(exc) + "; exact rational replay only"}
+            if not allow_fallback:
+                raise
+            result = verify_rational(spec)
+            if result["status"] == "PASS":
+                result["reason"] = str(exc) + "; exact rational replay only"
+            return result
         certificate = _certificate(spec, source, checked)
         return {"status": "PASS", "assurance": "LEAN_KERNEL_CHECKED",
                 "backend": BACKEND, "semantics": SEMANTICS, "certificate": certificate,
                 "artifact": {"source": source, **checked},
                 "reason": "Generated closed rational theorem was checked with no axioms"}
-    except (ValueError, TypeError, OSError, OverflowError, RecursionError, UnicodeError) as exc:
+    except (ValueError, TypeError, OSError, ZeroDivisionError, OverflowError, RecursionError, UnicodeError) as exc:
         return {"status": "UNKNOWN", "assurance": "NONE", "backend": BACKEND,
                 "semantics": SEMANTICS, "certificate": None, "reason": str(exc)}
 
@@ -216,5 +230,5 @@ def check_certificate(spec, certificate):
                 certificate.get("spec_sha256") == digest(spec), "Certificate binding mismatch")
         checked = _native_check(source)
         return certificate == _certificate(spec, source, checked)
-    except (ValueError, TypeError, OSError, OverflowError, RecursionError, UnicodeError):
+    except (ValueError, TypeError, OSError, ZeroDivisionError, OverflowError, RecursionError, UnicodeError):
         return False

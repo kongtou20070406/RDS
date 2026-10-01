@@ -29,6 +29,15 @@ def edge(source, target, relation="prerequisite_for"):
     return {"from": source, "to": target, "relation": relation}
 
 
+def comparable_probes():
+    graph = {"nodes": [node("fast"), node("slow")], "edges": []}
+    for rule in graph["nodes"]:
+        rule["executable"]["action"]["discrimination"] = {
+            "scope_id": "same-paired-test", "source": "synthetic paired-outcome fixture",
+            "predictions": {"explanation A": ["A"], "explanation B": ["B"]}}
+    return graph
+
+
 class SearchTests(unittest.TestCase):
     def context(self, **extra):
         return {"decision": {"id": "choose", "target_rules": ["root"]}, "facts": {}, **extra}
@@ -83,8 +92,8 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(len(result["candidates"]), 1)
         self.assertIn("candidate limit", result["truncation"]["reasons"])
 
-    def test_only_observed_comparable_costs_enable_partial_order_and_budget(self):
-        graph = {"nodes": [node("fast"), node("slow")], "edges": []}
+    def test_sourced_costs_compare_supported_same_scope_coverage_and_budget(self):
+        graph = comparable_probes()
         costs = {name + "-test": fact(value, unit="seconds", comparison_group="host-recipe") for name, value in (("fast", 2), ("slow", 5))}
         result = search_directions(graph, {"decision": "choose", "facts": {}, "costs": costs})
         self.assertEqual(result["ranking"]["dominance"][0]["better"], "fast:fast-test")
@@ -98,6 +107,16 @@ class SearchTests(unittest.TestCase):
         unknown = search_directions(graph, {"decision": "choose"})
         self.assertEqual(len(unknown["ranking"]["cost_unknown"]), 2)
         self.assertEqual(unknown["ranking"]["dominance"], [])
+
+    def test_unrelated_actions_with_matching_decision_text_do_not_compete_on_cost(self):
+        graph = {"nodes": [node("cheap"), node("important")], "edges": []}
+        graph["nodes"][1]["executable"]["action"]["competing_explanations"] = ["mechanism C", "mechanism D"]
+        costs = {name + "-test": fact(value, unit="seconds", comparison_group="same-host")
+                 for name, value in (("cheap", 1), ("important", 100))}
+        result = search_directions(graph, {"decision": "choose", "costs": costs})
+        self.assertEqual(result["candidates"][0]["decision_coverage"], result["candidates"][1]["decision_coverage"])
+        self.assertEqual(result["ranking"]["dominance"], [])
+        self.assertEqual(set(result["ranking"]["pareto_front"]), {"cheap:cheap-test", "important:important-test"})
 
     def test_actions_with_no_decision_difference_are_discarded(self):
         root = node("root")
@@ -129,7 +148,7 @@ class SearchTests(unittest.TestCase):
                     self.assertEqual(cpu["budget_status"], "WITHIN_REPORTED_BUDGET")
 
     def test_named_resource_comparison_keeps_legacy_records_separate(self):
-        graph = {"nodes": [node("fast"), node("slow")], "edges": []}
+        graph = comparable_probes()
         costs = {name + "-test": fact(value, resource="cpu", unit="seconds", comparison_group="same-trial")
                  for name, value in (("fast", 2), ("slow", 5))}
         context = {"decision": "choose", "costs": costs}

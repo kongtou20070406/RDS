@@ -83,15 +83,27 @@ MECHANISM_GATE(r): if treatment and comparator stay on the same side of P,
   redesign the intervention. A task-metric comparison can still be useful,
   but it cannot acquire a mechanism interpretation by naming the knob.
 
-CHOOSE one nondominated route by its expected advancement of GOAL.primary
+CHOOSE a nondominated route or compatible parallel batch by its expected advancement of GOAL.primary
   AND the value of knowledge that changes the next scientific decision,
   then by evidence quality and total cost. Cheapest is a tie-breaker,
   not the objective. A decisive diagnostic can win when it prevents
   an expensive wrong branch; a promising structural change can win when
   a small diagnostic would not change the choice.
+
+COMPARE schedules as well as individual runs: available capacity, elapsed
+  time to the next useful result, total resource consumption and marginal
+  charges are different quantities. A lower GPU-hour total does not dominate
+  a faster answer unless the relevant trade-offs are comparable. Use actual
+  scaling evidence; four GPUs do not imply a fourfold speedup for one job.
+  Fill available capacity with independent, decision-relevant work when it
+  fits the authorized window and budget. Do not batch a dependent follow-up
+  before its deciding result, duplicate an equivalent experiment, consume
+  protected confirmation capacity, or ignore CPU/VRAM/I/O interference.
 ```
 
 Before recommending a material run, compare its whole cost with the remaining authorized budget, including the comparator and evaluation. If the cap or throughput is unknown, give a bounded first stage with a measurement and stop rule, or make the larger run explicitly conditional on a feasibility calculation. Do not treat a qualitative statement that time is finite as authorization for a particular long schedule. A clear human command still follows the instruction rule above; state any feasibility conflict and the resulting trade-off.
+
+Available hardware has an opportunity cost when a useful eligible task could have used it before a deadline. Track unused capacity and its reason separately from billed cost; do not turn every idle device-second into a claimed monetary loss. Missing prerequisites, insufficient memory, dependencies, contention, protected confirmation work and no useful candidate can justify waiting. Existing or prepaid hardware can favor parallel work over a cheap serial plan, while on-demand cloud devices can favor releasing an unused allocation. Neither maximal utilization nor minimal expenditure is the scientific objective. When several independent experiments are justified, prefer an executable batch over a long queue of individually cheap probes. See [resource-aware planning](../docs/resource-planning.md).
 
 ### Baseline Control Reuse Principle (空白对照复用原则)
 

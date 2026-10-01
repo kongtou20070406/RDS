@@ -948,7 +948,7 @@ def cmd_advise(args, rds):
         require(isinstance(manual, dict) and isinstance(manual.get("facts", {}), dict),
                 "Research context and facts must be objects")
         require(isinstance(manual.get("costs", {}), dict), "Research context costs must be an object")
-        for key in ("decision", "targets", "budget", "max_depth", "max_candidates", "target_types", "templates", "frontier", "frontier_proposals"):
+        for key in ("decision", "targets", "budget", "max_depth", "max_candidates", "target_types", "templates", "frontier", "frontier_proposals", "resources"):
             if key in manual:
                 context[key] = manual[key]
         facts = dict(context.get("facts", {}))
@@ -1168,7 +1168,7 @@ def parser():
     f_verify.add_argument("--output")
     f_verify.add_argument("--no-cache", action="store_true")
     f_verify.add_argument("--tactics", nargs="+", choices=["rule", "gershgorin", "spectral_radius",
-                                                         "scale_invariance", "lean4", "interval"],
+                                                         "scale_invariance", "lean4", "rational", "interval"],
                           help="Run a bounded explicit tactic chain without the default proof cache")
     f_check = f_actions.add_parser("check")
     f_check.add_argument("--spec", required=True)
