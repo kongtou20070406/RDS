@@ -288,6 +288,32 @@ class QuickTests(unittest.TestCase):
         self.assertNotEqual(bad.returncode, 0)
         self.assertIn('No decision context', bad.stderr)
 
+    def test_two_field_array_scope_stops_before_launch_or_charge_and_atoms_still_execute(self):
+        self.initialize_ledger()
+        marker = self.root / 'scope-process-started'
+        self.script('from pathlib import Path\nPath(' + repr(str(marker)) + ').write_text("started")\n')
+        self.context['decision']['scope'] = {'N_range': [30, 40], 'purpose': 'synthetic scope regression'}
+        self.context_path.write_text(json.dumps(self.context), encoding='utf-8')
+        original = self.context_path.read_bytes()
+        before = ProjectStore(self.ledger).snapshot()['budget']
+        options = ['--context', str(self.context_path), '--graph', str(self.graph_path), '--ledger', str(self.ledger)]
+        bad = self.job('array-scope', False, *options)
+        self.assertNotEqual(bad.returncode, 0)
+        self.assertIn('scope/parameters field "N_range" must be a JSON atom; got array (list)', bad.stderr)
+        self.assertIn('structured original input', bad.stderr)
+        self.assertIn('explicit source binding', bad.stderr)
+        self.assertNotIn('at most 16', bad.stderr)
+        self.assertFalse(marker.exists())
+        self.assertFalse((self.root / '.rds/exec/array-scope').exists())
+        self.assertEqual(ProjectStore(self.ledger).snapshot()['budget'], before)
+        self.assertEqual(self.context_path.read_bytes(), original)
+        self.context['decision']['scope'] = {'N': 30, 'purpose': 'synthetic scope regression'}
+        self.context_path.write_text(json.dumps(self.context), encoding='utf-8')
+        good = json.loads(self.job('atomic-scope', True, *options).stdout)
+        self.assertEqual(good['run_status'], 'SUCCEEDED')
+        self.assertEqual(good['ledger_checkpoints'], 2)
+        self.assertEqual(marker.read_text(), 'started')
+
     def test_unresolved_method_scope_never_launches_or_charges_and_confirmation_is_recorded(self):
         self.initialize_ledger()
         self.context['method_constraints'] = [{'id': 'search-scope', 'quote': 'No numerical search',

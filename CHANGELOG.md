@@ -2,6 +2,7 @@
 
 ## 5.8.0 — Unreleased
 
+- Diagnose scope shape, field count, keys and non-atomic values separately, with bounded field locators and explicit-source guidance; retain the existing 16-field, 2048-byte and finite-JSON constraints.
 - Distinguish a declared output directory from a missing output file in failed receipts, and clarify file-only outputs in CLI help and runner guidance. Process exit 0 still requires output and binding validation for operational success.
 - Include the complete receipt error count and first bounded error in brief project status, exposing artifact-validation failures even when the command exits 0 and stderr is empty; retain all original errors in the full CAS record.
 - Expose current run-state counts and the last finished native receipt in brief project status, with an absolute locator for nonempty `stderr.bin`; preserve full CAS records, live-state semantics and UNKNOWN scientific assessments without reading raw logs.

@@ -246,6 +246,62 @@ class LedgerLoopTests(unittest.TestCase):
             "scope": decision["scope"], "candidate": candidate, "outcome": outcome,
             "evidence": context["facts"]})
 
+    def test_scope_accepts_only_json_atoms_and_locates_non_atomic_fields(self):
+        from rds_advisor import _scope
+        value = {"null": None, "string": "fixture", "integer": 30, "number": 0.5, "boolean": True}
+        original = copy.deepcopy(value)
+        self.assertIsNone(_scope(value))
+        self.assertEqual(value, original)
+        for child, actual in ((["private-value"], "array (list)"), ({"nested": "private-value"}, "object (dict)"),
+                              (("private-value",), "tuple"), ({"private-value"}, "set"), (b"private-value", "bytes")):
+            with self.subTest(actual=actual), self.assertRaises(ValueError) as caught:
+                _scope({"N_range": child, "purpose": "fixture"})
+            message = str(caught.exception)
+            self.assertIn('field "N_range" must be a JSON atom; got ' + actual, message)
+            self.assertIn("structured original input", message)
+            self.assertIn("explicit source binding", message)
+            self.assertNotIn("private-value", message)
+            self.assertNotIn("at most 16", message)
+        with self.assertRaises(ValueError) as caught:
+            _scope({"x" * 512: ["private-value"]})
+        message = str(caught.exception)
+        self.assertIn('field "' + "x" * 80 + '"...', message)
+        self.assertLess(len(message), 300)
+        self.assertNotIn("x" * 81, message)
+        self.assertNotIn("private-value", message)
+
+    def test_scope_distinguishes_dictionary_count_and_key_validation(self):
+        from rds_advisor import _scope
+        for value in (None, [], "fixture", 30):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "must be a JSON object"):
+                _scope(value)
+        self.assertIsNone(_scope({}))
+        self.assertIsNone(_scope({"field" + str(i): i for i in range(16)}))
+        with self.assertRaisesRegex(ValueError, "has 17 fields; at most 16 are allowed"):
+            _scope({"field" + str(i): [] for i in range(17)})
+        for key in (None, 30, "", "  ", "x" * 513):
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, "field names must be non-empty strings of at most 512 characters"):
+                _scope({key: None})
+        self.assertIsNone(_scope({"x" * 512: None, " spaced ": True}))
+
+    def test_scope_keeps_finite_json_validation_after_atomic_validation(self):
+        from rds_advisor import _scope
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "Out of range float values"):
+                _scope({"number": value})
+        with self.assertRaisesRegex(ValueError, "finite, bounded JSON"):
+            _scope({"text": "\ud800"})
+
+    def test_scope_keeps_2048_utf8_byte_boundary(self):
+        from rds_advisor import _scope
+        value = {"v": "é" * 1020}
+        raw = json.dumps(value, ensure_ascii=False, sort_keys=True, allow_nan=False, separators=(",", ":"))
+        self.assertEqual(len(raw.encode("utf-8")), 2048)
+        self.assertIsNone(_scope(value))
+        with self.assertRaisesRegex(ValueError, "JSON exceeds byte limit \\(2049 > 2048\\)"):
+            _scope({"v": value["v"] + "x"})
+        self.assertEqual(value["v"], "é" * 1020)
+
     def test_rejected_route_is_removed_from_candidates_actions_and_ranking(self):
         candidate = self.search()["search"]["candidates"][0]
         saved = self.record("rejected", candidate)

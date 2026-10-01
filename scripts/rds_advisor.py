@@ -849,7 +849,14 @@ def _json(value, cap=MAX_LOOP_BYTES):
 
 
 def _scope(value):
-    _require(isinstance(value, dict) and len(value) <= 16 and all(_text(key) and
-             (child is None or type(child) in (str, int, float, bool)) for key, child in value.items()),
-             "scope/parameters must have at most 16 JSON atomic fields")
+    _require(isinstance(value, dict), f"scope/parameters must be a JSON object (dict); got {type(value).__name__}")
+    _require(len(value) <= 16, f"scope/parameters has {len(value)} fields; at most 16 are allowed")
+    for key, child in value.items():
+        _require(_text(key), "scope/parameters field names must be non-empty strings of at most 512 characters")
+        if child is not None and type(child) not in (str, int, float, bool):
+            field = json.dumps(key[:80], ensure_ascii=True) + ("..." if len(key) > 80 else "")
+            kind = "array" if isinstance(child, list) else "object" if isinstance(child, dict) else None
+            actual = f"{kind} ({type(child).__name__})" if kind else type(child).__name__
+            raise ValueError(f"scope/parameters field {field} must be a JSON atom; got {actual}. "
+                "Keep the structured original input in a source file and reference it with an explicit source binding.")
     _json(value, 2048)

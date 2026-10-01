@@ -20,6 +20,8 @@ For an existing local Python file, the shortest form is `python -B scripts/rds_c
 
 Maintain the semantic `context.json` and structured graph for the actual next decision. The tool supplies repetitive bookkeeping around these inputs; it cannot derive the right mathematical question from arbitrary prose.
 
+Decision scopes are dictionaries with at most 16 fields and 2048 serialized UTF-8 bytes. Keys are nonempty strings of at most 512 characters; values are JSON atoms: strings, finite numbers, booleans or null. Keep arrays, tables and nested objects in explicit bound inputs or source records, and use scalar identifiers in the scope. Validation identifies the invalid field without rewriting its contents.
+
 ```powershell
 python -B scripts/rds_cli.py --root <existing-ledger> advise --context context.json --graph graph.json --record next-choice --brief
 python -B scripts/rds_cli.py --root <source-directory> exec --name probe-002 --timeout 30 --context context.json --graph graph.json --ledger <existing-ledger> -- python -B probe.py
