@@ -55,7 +55,10 @@ def strict_json(raw):
     def bad_constant(value):
         raise ValueError("Non-finite JSON value: " + value)
 
-    return json.loads(raw, object_pairs_hook=pairs, parse_constant=bad_constant)
+    try:
+        return json.loads(raw, object_pairs_hook=pairs, parse_constant=bad_constant)
+    except RecursionError as exc:
+        raise ValueError("JSON nesting exceeds the parser limit") from exc
 
 
 def load_spec(path):
@@ -850,12 +853,22 @@ def cmd_advise(args, rds):
             or (has_train and has_val), "--fit-telemetry and --baseline-loss require --train-loss and --val-loss")
     modes = [bool(getattr(args, name, None)) for name in ("literature", "telemetry", "doc", "plan")]
     require(sum(modes) + int(has_train) <= 1, "Choose one Advisor mode per call")
-    has_context = bool(getattr(args, "research_context", None) or getattr(args, "artifacts", None))
-    require(not getattr(args, "templates", None) or has_context,
+    has_search_context = bool(getattr(args, "research_context", None) or getattr(args, "artifacts", None))
+    has_context = bool(has_search_context or getattr(args, "frontier", None) or getattr(args, "frontier_proposals", None))
+    has_note = bool(getattr(args, "research_note", None))
+    require(not getattr(args, "templates", None) or has_search_context,
             "--templates requires --research-context or --artifacts with a decision")
-    require(not (any(modes) or has_train) or not (has_context or getattr(args, "templates", None) or getattr(args, "graph", None)),
-            "Research context, artifacts, templates and graph require the direction-search mode")
+    require(not (any(modes) or has_train) or not (has_context or has_note or getattr(args, "templates", None) or getattr(args, "graph", None)),
+            "Research context, artifacts, templates, frontier and graph require the direction-search mode")
     require(not getattr(args, "topic", None) or getattr(args, "doc", None), "--topic requires --doc")
+    note_review = None
+    if has_note:
+        from rds_research_note import load_research_note, review_research_note
+        note_review = review_research_note(load_research_note(args.research_note))
+        if not has_context and not getattr(args, "graph", None) and not getattr(args, "templates", None):
+            return {"advisor_type": "STRATEGIC_RESEARCH_ADVICE", "recommendations_count": 1,
+                    "recommendations": [{"type": "RESEARCH_LOOP_REVIEW", "assurance": "INPUT_REPORTED",
+                                         "review": note_review}]}
     advisor = RDSAdvisor(Path(args.root))
 
     if getattr(args, "literature", None):
@@ -895,10 +908,23 @@ def cmd_advise(args, rds):
         with rds.snapshot() as (_, snapshot):
             state = snapshot
     else:
-        require(getattr(args, "research_context", None) or getattr(args, "artifacts", None), "RDS is not initialized")
+        require(has_context or has_note, "RDS is not initialized")
         state = {}
     if getattr(args, "research_context", None):
         state["advisor_context"] = load_spec(args.research_context)
+    if getattr(args, "frontier", None):
+        context = state.setdefault("advisor_context", {})
+        require(isinstance(context, dict), "Research context must be an object")
+        require("frontier" not in context, "Supply frontier in --research-context or --frontier, not both")
+        context["frontier"] = strict_json(read_bounded(args.frontier, 2 * 1024 * 1024).decode("utf-8-sig"))
+    if getattr(args, "frontier_proposals", None):
+        context = state.setdefault("advisor_context", {})
+        require(isinstance(context, dict) and "frontier" in context, "--frontier-proposals requires frontier input")
+        require("frontier_proposals" not in context, "Supply one frontier proposal pack")
+        context["frontier_proposals"] = strict_json(read_bounded(args.frontier_proposals, 128 * 1024).decode("utf-8-sig"))
+    context = state.get("advisor_context", {})
+    require(not isinstance(context, dict) or "frontier_proposals" not in context or "frontier" in context,
+            "Frontier proposals require frontier input")
     imported = None
     if getattr(args, "artifacts", None):
         from rds_artifacts import BINDING_FIELDS, _unknown, ingest_manifest
@@ -908,7 +934,7 @@ def cmd_advise(args, rds):
         require(isinstance(manual, dict) and isinstance(manual.get("facts", {}), dict),
                 "Research context and facts must be objects")
         require(isinstance(manual.get("costs", {}), dict), "Research context costs must be an object")
-        for key in ("decision", "targets", "budget", "max_depth", "max_candidates", "target_types", "templates"):
+        for key in ("decision", "targets", "budget", "max_depth", "max_candidates", "target_types", "templates", "frontier", "frontier_proposals"):
             if key in manual:
                 context[key] = manual[key]
         facts = dict(context.get("facts", {}))
@@ -960,9 +986,18 @@ def cmd_advise(args, rds):
             imported["status"] = "CONFLICT"
         state["advisor_context"] = context
     if getattr(args, "templates", None):
+        context = state.get("advisor_context", {})
+        decision = context.get("decision") if isinstance(context, dict) else None
+        decision_id = decision.get("id") if isinstance(decision, dict) else decision
+        require(not isinstance(context, dict) or "frontier" not in context
+                or isinstance(decision_id, str) and bool(decision_id.strip()),
+                "--templates with frontier input requires an explicit direction-search decision")
         state["advisor_templates"] = load_spec(args.templates)
     _, graph = load_judgment_graph(getattr(args, "graph", None))
     recommendations = advisor.recommend_next_directions(state, graph)
+    if note_review is not None:
+        recommendations.insert(0, {"type": "RESEARCH_LOOP_REVIEW", "assurance": "INPUT_REPORTED",
+                                   "review": note_review})
     result = {
         "advisor_type": "STRATEGIC_RESEARCH_ADVICE",
         "active_branch": state.get("active_branch", "main"),
@@ -1175,6 +1210,7 @@ def parser():
 
     history = commands.add_parser("history", help="Read history through the installed Obelisk CLI")
     actions = history.add_subparsers(dest="subcommand", required=True)
+    actions.add_parser("preflight", help="Check the optional Obelisk history enhancement; no automatic installation")
     prepare = actions.add_parser("prepare")
     prepare.add_argument("--project-path")
     prepare.add_argument("--terms")
@@ -1195,9 +1231,19 @@ def parser():
     adv.add_argument("--fit-telemetry", default=None, help="Paired, comparable curve observations for fit diagnosis")
     adv.add_argument("--literature", default=None, help="Search scoped local primary-source records")
     adv.add_argument("--research-context", default=None, help="Sourced facts and the decision for bounded graph search")
+    adv.add_argument("--frontier", help="Versioned research graph and evidence for bounded graph-outside exploration questions")
+    adv.add_argument("--frontier-proposals", help="AI proposed nodes/relations and discriminating tests; definition checks only")
+    adv.add_argument("--research-note", help="Read a compact RESEARCH.md decision summary; no history mirror, writes or authorization")
     adv.add_argument("--artifacts", help="Hash-bound artifact manifest; reread originals at advice time")
     adv.add_argument("--templates", help="Versioned finite experiment template pack")
     adv.add_argument("--graph", default=None)
+
+    advancement = commands.add_parser("advancement", help="Score independent intervention predictions under a locked matched budget")
+    advancement_actions = advancement.add_subparsers(dest="action", required=True)
+    advancement_score = advancement_actions.add_parser("score")
+    advancement_score.add_argument("--protocol", required=True)
+    advancement_score.add_argument("--trajectories", required=True)
+    advancement_score.add_argument("--confirmations", help="Evaluator-only original outcomes; omit to report unmeasured tasks")
     return p
 
 
@@ -1207,8 +1253,7 @@ def main():
     try:
         if args.command == "history":
             from rds_obelisk import history_command
-            history_command(args)
-            return 0
+            return history_command(args) or 0
         if args.command == "formal":
             from rds_verify import checked_result, rules, verify
             from rds_verify_types import MAX_CERTIFICATE_BYTES
@@ -1234,7 +1279,14 @@ def main():
                     Path(args.output).write_bytes(raw)
             print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
             return {"PASS": 0, "FAIL": 1, "UNKNOWN": 2}.get(result.get("status"), 0)
-        if args.command == "advise":
+        if args.command == "advancement":
+            from rds_advancement import evaluate_advancement
+            protocol = strict_json(read_bounded(args.protocol, 1024 * 1024).decode("utf-8-sig"))
+            trajectories = strict_json(read_bounded(args.trajectories, 1024 * 1024).decode("utf-8-sig"))
+            confirmations = (strict_json(read_bounded(args.confirmations, 1024 * 1024).decode("utf-8-sig"))
+                             if args.confirmations else [])
+            result = evaluate_advancement(protocol, trajectories, confirmations)
+        elif args.command == "advise":
             result = cmd_advise(args, rds)
         elif args.command == "project":
             result = cmd_project(args)
@@ -1270,7 +1322,7 @@ def main():
             return 1
         if args.command == "checkpoint" and args.action == "restore" and result.get("status") == "CONFLICT":
             return 1
-    except (ValueError, KeyError, TypeError, OSError, sqlite3.Error, SyntaxError, ImportError, subprocess.SubprocessError) as exc:
+    except (ValueError, KeyError, TypeError, RecursionError, OSError, sqlite3.Error, SyntaxError, ImportError, subprocess.SubprocessError) as exc:
         print("[RDS-REJECT] " + str(exc), file=sys.stderr)
         return 1
     return 0

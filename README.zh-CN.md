@@ -187,11 +187,11 @@ python -B scripts/rds_cli.py --root ./my-project advise
 
 ## Obelisk 历史集成
 
-RDS 连接 [Obelisk](https://github.com/tommy0103/obelisk)，检索过去的会话历史，无需重复建立向量存储：
+推荐可选记忆增强：[Obelisk](https://github.com/tommy0103/obelisk)。轻量决策图用于防止科研打转；需要过去会话的精确信息时使用 Obelisk，不重复建立历史存储：
 
 ```powershell
-python -B scripts/rds_cli.py history prepare --project-path 'C:\research\project' --terms 'C7' --output 'query.mjs'
-python -B scripts/rds_cli.py history query --query 'query.mjs'
+python -B scripts/rds_cli.py history prepare --project-path 'C:\research\project' --terms 'C7' --output 'C:\queries\obq-c7-unique-token.mjs'
+python -B scripts/rds_cli.py history query --query 'C:\queries\obq-c7-unique-token.mjs'
 ```
 
 ---
