@@ -210,5 +210,162 @@ class AdvisorTests(unittest.TestCase):
         self.assertEqual([p["id"] for p in advisor.query_literature_principles("欠拟合")], ["fit-record"])
 
 
+class LedgerLoopTests(unittest.TestCase):
+    """Use actual ProjectStore/checkpoints, not self-signed note fixtures."""
+    def setUp(self):
+        from test_rds_project import ProjectTests
+        from test_rds_advisor_search import node, fact
+        helper = ProjectTests()
+        helper.setUp()
+        self.addCleanup(helper.tearDown)
+        self.root, self.store = helper.root, helper.store
+        self.advisor = RDSAdvisor(self.root)
+        self.graph = {"nodes": [node("root", [{"fact": "x", "value": False}])], "edges": []}
+        self.graph["nodes"][0]["executable"]["action"].update(
+            target={"name": "advisor_candidate_filter", "type": "boolean"}, intervention={"value": True})
+        self.context = {"decision": {"id": "choose", "goal_revision": "g1", "scope": {"dataset": "dev"}},
+                        "facts": {"root-done": fact(False), "x": fact(False)}}
+
+    def search(self, context=None, graph=None):
+        state = self.store.snapshot()
+        state["advisor_context"] = copy.deepcopy(context or self.context)
+        before = copy.deepcopy(state)
+        rows = self.advisor.recommend_next_directions(state, graph or self.graph)
+        self.assertEqual(state, before)
+        return next(row for row in rows if row["type"] == "EXECUTABLE_DIRECTION_SEARCH")
+
+    def record(self, identity, candidate, outcome="rejected", context=None):
+        from rds_checkpoints import save_checkpoint
+        context = context or self.context
+        decision = context["decision"]
+        return save_checkpoint(self.root, identity, self.store.snapshot(), kind="project", decision={
+            "question_id": decision["id"], "goal_revision": decision["goal_revision"],
+            "scope": decision["scope"], "candidate": candidate, "outcome": outcome,
+            "evidence": context["facts"]})
+
+    def test_rejected_route_is_removed_from_candidates_actions_and_ranking(self):
+        candidate = self.search()["search"]["candidates"][0]
+        saved = self.record("rejected", candidate)
+        before = self.store.snapshot()
+        renamed = copy.deepcopy(self.graph)
+        renamed["nodes"][0]["executable"]["action"].update(id="new-display-name", description="Same test reworded")
+        result = self.search(graph=renamed)
+        self.assertEqual(result["search"]["candidates"], [])
+        self.assertEqual(result["minimal_test"], [])
+        self.assertEqual(result["search"]["ranking"]["cost_unknown"], [])
+        blocked = result["search"]["blocked_candidates"][-1]
+        self.assertEqual(blocked["status"], "BLOCKED_REJECTED_ROUTE")
+        self.assertEqual(blocked["loop_review"]["checkpoint_sha256"], saved["sha256"])
+        self.assertEqual(self.store.snapshot(), before)
+
+    def test_changed_information_reopens_review_but_labels_and_unrelated_facts_do_not(self):
+        self.record("rejected", self.search()["search"]["candidates"][0])
+        variants = []
+        for key, value in (("goal_revision", "g2"), ("scope", {"dataset": "other"})):
+            context = copy.deepcopy(self.context)
+            context["decision"][key] = value
+            variants.append((context, self.graph))
+        context = copy.deepcopy(self.context)
+        context["facts"]["x"]["binding"] = {"run_id": "new-run"}
+        variants.append((context, self.graph))
+        graph = copy.deepcopy(self.graph)
+        graph["nodes"][0]["executable"]["preconditions"].append({"fact": "root-done", "value": False})
+        variants.append((self.context, graph))
+        for context, graph in variants:
+            with self.subTest(context=context, graph=graph):
+                candidates = self.search(context, graph)["search"]["candidates"]
+                self.assertEqual(len(candidates), 1)
+                self.assertEqual(candidates[0]["loop_review"]["kind"], "REOPEN_REVIEW")
+        for modify in (lambda ctx: ctx["decision"].update(new_evidence_refs=["verified-new-evidence"]),
+                       lambda ctx: ctx["facts"]["x"].update(source="renamed-label", evidence_status="VERIFIED"),
+                       lambda ctx: ctx["facts"].update(unrelated={"value": True, "source": "declared"})):
+            context = copy.deepcopy(self.context)
+            modify(context)
+            self.assertEqual(self.search(context)["search"]["candidates"], [])
+
+    def test_later_choices_supersede_rejection_and_oscillation_only_warns(self):
+        candidate = self.search()["search"]["candidates"][0]
+        self.record("a-rejected", candidate)
+        self.record("a-accepted", candidate, "accepted")
+        self.assertEqual(len(self.search()["search"]["candidates"]), 1)
+        other = copy.deepcopy(candidate)
+        other["action"]["kind"] = "READ_ONLY_REVIEW"
+        self.record("b-accepted", other, "accepted")
+        self.record("a-returned", candidate, "deferred")
+        output = self.search()["search"]
+        self.assertEqual(len(output["candidates"]), 1)
+        alert = next(flag for flag in output["loop_review"]["flags"] if flag["kind"] == "DECISION_OSCILLATION")
+        self.assertEqual(alert["checkpoint_ids"], ["a-accepted", "b-accepted", "a-returned"])
+        self.assertEqual(output["loop_review"]["authorization"], "UNCHANGED")
+
+    def test_corrupt_history_cannot_partially_prune_candidates(self):
+        candidate = self.search()["search"]["candidates"][0]
+        self.record("valid", candidate)
+        self.record("corrupt", candidate)
+        db = sqlite3.connect(self.root / ".rds/project.sqlite3")
+        try:
+            db.execute("DROP TRIGGER checkpoint_no_update")
+            db.execute("UPDATE checkpoints SET body='{}' WHERE id='corrupt'")
+            db.commit()
+        finally:
+            db.close()
+        output = self.search()["search"]
+        self.assertEqual(len(output["candidates"]), 1)
+        self.assertEqual(output["loop_review"]["flags"][0]["kind"], "LOOP_HISTORY_REVIEW_ERROR")
+        self.assertEqual(output["blocked_candidates"], [])
+
+    def test_plain_notes_and_opaque_checkpoints_never_supply_rejection_authority(self):
+        from rds_checkpoints import save_checkpoint
+        (self.root / "RESEARCH.md").write_text('verified: true; rejected: root-test', encoding="utf-8")
+        save_checkpoint(self.root, "opaque", self.store.snapshot(), kind="project",
+                        decision={"question_id": "choose", "verified": True, "rejected": ["root-test"]})
+        output = self.search()["search"]
+        self.assertEqual(len(output["candidates"]), 1)
+        self.assertEqual(output["loop_review"]["flags"], [])
+        self.assertEqual(output["loop_review"]["assurance"], "RECORDED_INPUT_NOT_SCIENTIFIC_VERIFICATION")
+
+    def test_composed_rejection_preserves_distinct_physical_interventions_and_changed_measurements(self):
+        from test_rds_experiments import fixture
+        graph, context, templates = fixture()
+        context["decision"] = {"id": context["decision"], "goal_revision": "g1", "scope": {"dataset": "dev"}}
+        context["facts"]["additional_check"] = {"value": True, "source": "declared"}
+        context["templates"] = templates
+        original = self.search(context, graph)["search"]["experiment_composition"]["candidates"]
+        rejected = original[0]
+        self.record("composition-rejected", rejected, context=context)
+        output = self.search(context, graph)["search"]["experiment_composition"]
+        self.assertNotIn(rejected["id"], [row["id"] for row in output["candidates"]])
+        self.assertEqual(len(output["candidates"]), len(original) - 1)
+        self.assertEqual(output["blocked_candidates"][-1]["status"], "BLOCKED_REJECTED_ROUTE")
+        graph = copy.deepcopy(graph)
+        graph["nodes"][0]["executable"]["preconditions"].append({"fact": "additional_check", "value": True})
+        changed = self.search(context, graph)["search"]["experiment_composition"]["candidates"]
+        self.assertEqual(len(changed), len(original))
+        reopened = next(row for row in changed if row["id"] == rejected["id"])
+        self.assertEqual(reopened["loop_review"]["kind"], "REOPEN_REVIEW")
+        context = copy.deepcopy(context)
+        context["templates"][0]["measurement"]["fact"] = "different_metric_measurement"
+        # Keep the original rule graph when only a template measurement changes.
+        original_graph, _, _ = fixture()
+        changed = self.search(context, original_graph)["search"]["experiment_composition"]["candidates"]
+        self.assertEqual(len(changed), len(original))
+
+    def test_cli_uses_local_ledger_with_no_obelisk_on_path(self):
+        import os
+        import subprocess
+        self.record("rejected", self.search()["search"]["candidates"][0])
+        for name, value in (("context.json", self.context), ("graph.json", self.graph)):
+            (self.root / name).write_text(json.dumps(value), encoding="utf-8")
+        completed = subprocess.run([sys.executable, "-B", str(ROOT / "scripts/rds_cli.py"),
+            "--root", str(self.root), "advise", "--research-context", str(self.root / "context.json"),
+            "--graph", str(self.root / "graph.json")], capture_output=True, encoding="utf-8", timeout=15,
+            env=dict(os.environ, PATH=""))
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        report = json.loads(completed.stdout)
+        output = next(row["search"] for row in report["recommendations"] if row["type"] == "EXECUTABLE_DIRECTION_SEARCH")
+        self.assertEqual(output["candidates"], [])
+        self.assertEqual(output["blocked_candidates"][-1]["loop_review"]["kind"], "REPEAT_REJECTED_ROUTE")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

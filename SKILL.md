@@ -26,13 +26,11 @@ Check what executed computation changes: a knob name or mathematical side condit
 
 ## Continuity and preferences
 
-Use the project's compact typed `RESEARCH.md` as a local weak direction graph for anti-loop bookkeeping: stable proposal/decision IDs, status, stop reasons and reopening conditions. Review it with `python -B scripts/rds_cli.py advise --research-note RESEARCH.md`. Note-only review needs no Obelisk, full judgment graph, principle library or SQLite. It may combine with `--artifacts` and `--frontier`; see [lightweight workflow](docs/lightweight-workflow.md).
+Record structured route decisions with `checkpoint save --decision` in the existing project/reference SQLite ledger. For local anti-loop review, supply `--research-context` with the question ID, goal revision, scope and current facts. Advisor verifies the checkpoint hashes and contract binding before pruning unchanged rejected routes; changed evidence or conditions reopen review, and A→B→A warns without veto. See [local decision workflow](docs/lightweight-workflow.md).
 
-The weak graph is `INPUT_REPORTED`, not source retrieval, precise chat recovery, authenticated evidence or execution authority. Source pointers are for audit and checking originals, not a new source index. Keep unanswered proposals pending. Maintain one project note, not chat mirrors, embedding stores or parallel state machines.
+Checkpoints authenticate recorded choices, not their scientific validity or execution authority. Keep unanswered proposals pending and existing receipt/formal gates intact. Do not add chat mirrors, source indexes or parallel state machines. The standalone `--research-note` Markdown route is retired.
 
 [Obelisk](references/obelisk.md) is an optional history enhancement when exact past wording, parameters or numbers are needed. Its existing bridge wraps the public CLI, requiring no second service. `history preflight` checks enhanced-mode setup; missing/unusable CLI leaves local anti-loop review usable, but must never be reported as a completed Obelisk query. Version success does not establish index freshness, skill loading or project coverage.
-
-The response-time target is at least 50% reduction on the same anti-loop task's complete local versus enhanced-retrieval-plus-guard path. Until measured it is `UNMEASURED`, not a scientific-effect claim; tag-only and full-history tasks are not equivalent comparisons.
 
 Apply and persist research preferences only with explicit opt-in. [Optional preferences](references/optional-preferences.md) are 空投's examples, not others' defaults or experiment authority.
 

@@ -1,6 +1,6 @@
 # Research discipline: detailed contracts and optional modes
 
-Read only the sections needed for the current decision. The [skill entrypoint](../SKILL.md) retains the core rules; [lightweight workflow](../docs/lightweight-workflow.md) explains the small user-facing loop. Local anti-loop review uses the compact typed project note independently. Obelisk preflight is optional enhanced-history setup, not a requirement for the research loop. The weak direction graph records decisions, stop reasons and reopening conditions; it is not a source index or precise chat recovery.
+Read only the sections needed for the current decision. The [skill entrypoint](../SKILL.md) retains the core rules; [local decision workflow](../docs/lightweight-workflow.md) explains ledger-backed anti-loop review. Advisor uses existing SQLite checkpoints, not a standalone Markdown note. Obelisk preflight is optional enhanced-history setup, not a requirement for the research loop.
 
 Sections: evidence and execution boundaries; decision contract; direction program and control reuse; evidence and human intervention; output contract; CLI execution; conditional formal verification; historical evaluation. These details remain available without loading every mode for every question.
 
@@ -16,7 +16,7 @@ it does not promote task gain, mechanism or research policy evidence.
 
 ## Start with the decision contract
 
-Extract from current project files and the user's instructions. Use the compact typed `RESEARCH.md` weak direction graph to review stable proposals, decision status, stop reasons and reopening conditions; its source pointers support audit, not source retrieval. This local review is INPUT_REPORTED and grants no authority. If exact original historical wording, parameters or numbers are needed, optionally retrieve the relevant evidence through the existing Obelisk CLI bridge; see [history enhancement](obelisk.md). Do not mirror chats or build a source index, embedding database, second archive or parallel state machine. The `.rds` ledger retains execution contracts and receipts. Fill missing low-risk details internally; ask only when a material goal or cost choice cannot be inferred.
+Extract from current project files and the user's instructions. Record structured candidate decisions through `checkpoint save --decision` in the existing `.rds` SQLite ledger. Supply the matching question ID, goal revision, scope and facts in `--research-context`; Advisor checks checkpoint identity and contract binding before pruning unchanged rejected routes. Changed facts or conditions reopen review; A→B→A produces a warning. These checks authenticate recorded choices, not scientific conclusions or execution authority. Exact historical wording, parameters or numbers may use the optional existing Obelisk CLI bridge; see [history enhancement](obelisk.md). Do not mirror chats or build a source index, embedding database, second archive or parallel state machine. Fill missing low-risk details internally; ask only when a material goal or cost choice cannot be inferred.
 
 ```yaml
 GOAL:

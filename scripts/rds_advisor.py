@@ -12,6 +12,8 @@ import sqlite3
 import time
 from typing import Any, Dict, List, Optional
 
+from rds_artifacts import strict_json
+
 MAX_DOCUMENT_BYTES = 2 * 1024 * 1024
 MAX_KNOWLEDGE_ROWS = 10000
 
@@ -428,10 +430,15 @@ class RDSAdvisor:
                 options.update({key: state["advisor_context"][key] for key in ("max_depth", "max_candidates")
                                 if key in state["advisor_context"]})
             search = search_directions(judgment_graph, state["advisor_context"], **options)
+            loop_review = self._review_loop_history(state, context, search)
             recommendations.append(_advice("STRATEGIC_RESEARCH_ADVICE", type="EXECUTABLE_DIRECTION_SEARCH", urgency="REVIEW",
                 reason="按明确的下一决策、带来源事实和图中结构化前置条件组合有界候选。",
                 search=search, observations=search["candidates"], limitations=search["limitations"],
                 minimal_test=[candidate["action"] for candidate in search["candidates"]]))
+            if loop_review is not None:
+                recommendations.append(_advice("STRATEGIC_RESEARCH_ADVICE", type="RESEARCH_LOOP_REVIEW", urgency="REVIEW",
+                    reason="Review scoped choices recorded in the existing transaction ledger.", review=loop_review,
+                    observations=loop_review["flags"], limitations=loop_review["limitations"]))
         active = state.get("active_branch", "main")
         branches = state.get("branches", {})
         branch, count = branches.get(active, {}), branches.get(active, {}).get("stagnation_count", 0)
@@ -510,3 +517,206 @@ class RDSAdvisor:
         for recommendation in recommendations:
             recommendation["assurance"] = "HEURISTIC_ONLY"
         return recommendations
+
+    def _review_loop_history(self, state, context, search):
+        """Filter unchanged rejected routes; checkpoints record choices, not scientific truth."""
+        decision = context.get("decision", {})
+        if not (isinstance(decision, dict) and _text(decision.get("id"))
+                and _text(decision.get("goal_revision")) and isinstance(decision.get("scope"), dict)):
+            return None
+        _scope(decision["scope"])
+        evidence = context.get("facts", {})
+        _require(isinstance(evidence, dict), "Loop evidence must be context facts")
+        _json(evidence)
+        directory = self.root_dir / ".rds"
+        kind = "project" if (directory / "project.sqlite3").is_file() else "reference"
+        path = directory / ("project.sqlite3" if kind == "project" else "state.sqlite3")
+        if not path.is_file():
+            return None
+        from rds_checkpoints import SCHEMA, MAX_BYTES as checkpoint_cap, _sha
+        review = {"assurance": "RECORDED_INPUT_NOT_SCIENTIFIC_VERIFICATION", "flags": [],
+                  "authorization": "UNCHANGED", "limitations": [
+                      "Checkpoint hashes authenticate recorded choices, not scientific validity or execution admission.",
+                      "Changed facts or conditions reopen review; source labels do not independently verify new evidence."]}
+        history = []
+        try:
+            db = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, isolation_level=None, timeout=0.05)
+            try:
+                db.execute("PRAGMA query_only=ON")
+                db.execute("BEGIN")
+                if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='checkpoints'").fetchone():
+                    return None
+                if kind == "project":
+                    row = db.execute("SELECT body,sha256 FROM contract WHERE id=1").fetchone()
+                    contract, contract_sha = strict_json(row[0]), row[1]
+                else:
+                    live = strict_json(db.execute("SELECT body FROM state WHERE id=1").fetchone()[0])
+                    contract, contract_sha = live["contract"], live["contract_sha256"]
+                _require(_sha(contract) == contract_sha and state.get("contract_sha256") == contract_sha
+                         and state.get("contract") == contract, "Live contract integrity or scope mismatch")
+                for checkpoint_id, sha, raw in db.execute("SELECT id,sha,body FROM checkpoints ORDER BY rowid"):
+                    _require(isinstance(raw, str) and len(raw.encode("utf-8")) <= checkpoint_cap
+                             and hashlib.sha256(raw.encode("utf-8")).hexdigest() == sha, "Checkpoint integrity failure: " + checkpoint_id)
+                    record = strict_json(raw)
+                    _require(record.get("id") == checkpoint_id and record.get("schema") == SCHEMA
+                             and record.get("kind") == kind and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", checkpoint_id),
+                             "Checkpoint identity mismatch: " + checkpoint_id)
+                    _require(record.get("contract_sha256") == contract_sha
+                             and _sha(record["snapshot"]["contract"]) == contract_sha,
+                             "Checkpoint contract mismatch: " + checkpoint_id)
+                    prior = record.get("decision", {})
+                    if not isinstance(prior, dict) or prior.get("question_id") != decision["id"]:
+                        continue
+                    fields = ("goal_revision", "scope", "candidate", "outcome", "evidence")
+                    if not all(key in prior for key in fields):
+                        continue  # Older opaque contexts never become route decisions.
+                    _require(_text(prior["goal_revision"]) and prior["outcome"] in
+                             ("rejected", "accepted", "plan_locked", "deferred") and isinstance(prior["evidence"], dict),
+                             "Invalid checkpoint decision: " + checkpoint_id)
+                    _scope(prior["scope"])
+                    _json(prior["evidence"])
+                    route = _loop_route(prior["candidate"])
+                    _require(route is not None, "Checkpoint decision needs a structured candidate: " + checkpoint_id)
+                    history.append({**prior, "route_sha256": route, "review_context": _loop_context(prior["candidate"], prior["evidence"]),
+                                    "checkpoint_id": checkpoint_id, "checkpoint_sha256": sha})
+            finally:
+                db.close()
+        except (sqlite3.Error, ValueError, KeyError, TypeError, AttributeError, UnicodeError, RecursionError) as exc:
+            review["flags"].append({"kind": "LOOP_HISTORY_REVIEW_ERROR", "reason": str(exc)})
+            review["status"] = "REVIEW_REQUIRED"
+            search["loop_review"] = review
+            return review  # No partial or corrupt history has pruning authority.
+        current_scope = (decision["goal_revision"], _json(decision["scope"]))
+        scoped = [row for row in history if (row["goal_revision"], _json(row["scope"])) == current_scope]
+        choices = []
+        for row in scoped:
+            if not choices or choices[-1]["route_sha256"] != row["route_sha256"]:
+                choices.append(row)
+            else:
+                choices[-1] = row
+        if len(choices) >= 3 and choices[-3]["route_sha256"] == choices[-1]["route_sha256"]:
+            review["flags"].append({"kind": "DECISION_OSCILLATION", "question_id": decision["id"],
+                "checkpoint_ids": [row["checkpoint_id"] for row in choices[-3:]],
+                "route_sha256": [row["route_sha256"] for row in choices[-3:]]})
+
+        def filter_search(output):
+            for key in ("experiment_composition", "rule_search"):
+                if isinstance(output.get(key), dict):
+                    filter_search(output[key])
+            kept = []
+            for candidate in output.get("candidates", []):
+                route = _loop_route(candidate)
+                matches = [row for row in scoped if row["route_sha256"] == route]
+                prior = matches[-1] if matches else next((row for row in reversed(history) if row["route_sha256"] == route), None)
+                if prior is None or prior["outcome"] != "rejected":
+                    kept.append(candidate)
+                    continue
+                changed = ((prior["goal_revision"], _json(prior["scope"])) != current_scope
+                           or prior["review_context"] != _loop_context(candidate, evidence))
+                flag = {"kind": "REOPEN_REVIEW" if changed else "REPEAT_REJECTED_ROUTE", "candidate_id": candidate.get("id"),
+                        "route_sha256": route, "checkpoint_id": prior["checkpoint_id"], "checkpoint_sha256": prior["checkpoint_sha256"]}
+                if flag not in review["flags"]:
+                    review["flags"].append(flag)
+                if changed:
+                    kept.append({**candidate, "loop_review": flag})
+                else:
+                    output.setdefault("blocked_candidates", []).append({**candidate, "status": "BLOCKED_REJECTED_ROUTE", "loop_review": flag})
+            output["candidates"] = kept
+            kept_ids = {row.get("id") for row in kept}
+            ranking = output.get("ranking", {})
+            if "cost_unknown" in ranking:
+                ranking["cost_unknown"] = [candidate_id for candidate_id in ranking["cost_unknown"] if candidate_id in kept_ids]
+            if "dominance" in ranking:
+                ranking["dominance"] = [row for row in ranking["dominance"] if row["better"] in kept_ids and row["worse"] in kept_ids]
+            for candidate in kept:
+                if "dominated_by" in candidate:
+                    candidate["dominated_by"] = [candidate_id for candidate_id in candidate["dominated_by"] if candidate_id in kept_ids]
+            if "pareto_front" in ranking:
+                ranking["pareto_front"] = [row["id"] for row in kept if not row.get("dominated_by")]
+            if "queries" in output:
+                used = {step.get("id") for candidate in kept for step in candidate.get("steps", [])}
+                output["queries"] = [row for row in output["queries"] if row.get("id") in used]
+
+        filter_search(search)
+        review["status"] = "REVIEW_REQUIRED" if review["flags"] else "RECORDED_HISTORY_REVIEWED"
+        search["loop_review"] = review
+        return review
+
+
+def _loop_route(candidate):
+    """Exact structured route equality; display IDs never establish route identity."""
+    if not isinstance(candidate, dict):
+        return None
+    action = candidate.get("action")
+    if isinstance(action, dict) and isinstance(action.get("description"), str) and action["description"].strip():
+        display = {"id"}
+        if any(key in action for key in ("target", "intervention", "parameters", "operation")):
+            display.update(("description", "question", "competing_explanations", "required_observables", "outcomes", "discrimination", "stop_condition"))
+        route = {"action": {key: value for key, value in action.items() if key not in display}}
+    elif isinstance(candidate.get("interventions"), list) and candidate["interventions"] and isinstance(candidate.get("control_bindings"), list):
+        route = {"interventions": sorted(candidate["interventions"], key=_json),
+                 "controls": sorted([{key: value for key, value in control.items() if key not in
+                     ("source", "reason", "truth", "evidence_status")} for control in candidate["control_bindings"]], key=_json)}
+    else:
+        return None
+    return hashlib.sha256(_json(route).encode("utf-8")).hexdigest()
+
+
+def _loop_context(candidate, evidence):
+    """Only declared dependencies and review conditions can reopen a route."""
+    derivation, action = candidate.get("derivation", []), candidate.get("action", {})
+    _require(isinstance(derivation, list) and all(isinstance(row, dict) for row in derivation), "Invalid recorded candidate derivation")
+    traces = [item for row in derivation if row.get("step") == "rule_to_template" for item in row.get("trace", [])]
+    _require(all(isinstance(row, dict) for row in traces), "Invalid recorded rule trace")
+    reports = [row for row in derivation + traces if row.get("step") == "fact_to_rule"]
+    reports += candidate.get("facts", []) + candidate.get("control_bindings", []) + candidate.get("observables", [])
+    reports += candidate.get("discrimination", {}).get("conditions", [])
+    _require(all(isinstance(row, dict) for row in reports), "Invalid recorded candidate predicates")
+    observable_names = action.get("required_observables", candidate.get("required_observables", []))
+    names = {row["fact"] for row in reports if isinstance(row.get("fact"), str)}
+    names.update(name for name in observable_names if isinstance(name, str) and name in evidence)
+    selected = {}
+    for name in names:
+        fact = evidence.get(name, {})
+        if isinstance(fact, dict):
+            source = fact.get("source", {})
+            selected[name] = {"value": fact.get("value"), "binding": fact.get("binding", {}),
+                "reliable": fact.get("reliable") is not False and fact.get("reliability") not in ("UNRELIABLE", "UNKNOWN"),
+                "source_sha256": source.get("sha256") if isinstance(source, dict) else None}
+        else:
+            selected[name] = fact
+    predicates = sorted([{key: row[key] for key in ("fact", "operator", "expected", "role") if key in row}
+                         for row in reports], key=_json)
+    return _json({"facts": selected, "conditions": predicates, "observables": observable_names,
+        "outcomes": action.get("outcomes", candidate.get("result_to_decision", [])),
+        "stop": action.get("stop_condition", candidate.get("stop_conditions", []))})
+
+
+# Bounded structured inputs for scoped ledger decisions.
+MAX_LOOP_BYTES = 256 * 1024
+
+
+def _require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def _text(value):
+    return isinstance(value, str) and bool(value.strip()) and len(value) <= 512
+
+
+def _json(value, cap=MAX_LOOP_BYTES):
+    try:
+        raw = json.dumps(value, ensure_ascii=False, sort_keys=True, allow_nan=False, separators=(",", ":"))
+        _require(len(raw.encode("utf-8")) <= cap, "Advisor loop JSON exceeds byte limit")
+        strict_json(raw)
+        return raw
+    except (TypeError, RecursionError, UnicodeError, OverflowError) as exc:
+        raise ValueError("Advisor loop input must be finite, bounded JSON") from exc
+
+
+def _scope(value):
+    _require(isinstance(value, dict) and len(value) <= 16 and all(_text(key) and
+             (child is None or type(child) in (str, int, float, bool)) for key, child in value.items()),
+             "scope/parameters must have at most 16 JSON atomic fields")
+    _json(value, 2048)
