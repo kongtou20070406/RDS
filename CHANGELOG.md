@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Track rule-replay input exposure in the project's existing RSI records. An optional `confirmation_campaign` rejects reuse of exposed heldout payloads by a different frozen evaluation, including case/campaign relabeling; failed and timed-out grading retain exposure. Frozen-pair replay, finite regression acceptance and rollback remain available. Add a scoped RSI evolution guide for decision rules, verifier capabilities and research policies. This guard does not attest independent sealing or scientific-policy gains.
+
 ## 5.7.0 — 2026-10-01
 
 Publish the compatible feature additions merged since 5.6.0-rc.2, including explicit theory budgets, native Lean verification and advisory resource planning. Preserve the existing rc.2 tag and readable ledgers; changed execution-engine bindings still require a new contract.

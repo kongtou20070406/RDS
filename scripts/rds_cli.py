@@ -819,7 +819,7 @@ def cmd_meta(args, rds):
         spec = load_spec(args.rule)
         reject_self_signatures(spec)
         _, graph = load_judgment_graph(args.graph)
-        result = evaluate_candidate(spec, graph, load_spec(args.cases))
+        result = evaluate_candidate(spec, graph, load_spec(args.cases), confirmation_dir=rds.directory / "rsi")
         if args.output:
             Path(args.output).write_text(canonical(result), encoding="utf-8")
         return result

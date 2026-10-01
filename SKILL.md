@@ -46,6 +46,7 @@ Apply and persist research preferences only with explicit opt-in. [Optional pref
 | Allocate available compute to useful work | [Resource-aware planning](docs/resource-planning.md): capacity, elapsed time, marginal cost and compatible batches. Advisory plans retain execution gates and do not reserve devices. |
 | Mathematical obligation / Lean certificate | [Formal framework](references/formal_framework.md) and discipline's formal section: actual checker and declared scope; `UNKNOWN` stays unknown. |
 | Graph gaps / Advisor advancement | [Frontier](docs/advisor-frontier.md) or [advancement protocol](docs/advisor-advancement.md). Proposed nodes/ASTs need independent evidence. |
+| Improve RDS itself / accumulate tools | [RSI evolution](docs/rsi-evolution.md): distinguish rule, capability and policy adoption; preserve input exposure and frozen parents, and do not call a reused curriculum independent confirmation. |
 
 Runner, Lean and RSI remain optional capabilities with their gates intact. Advisor and rule lint are heuristic; rule adoption needs bound evaluation. Software or historical-fixture success is not research-policy gain.
 

@@ -305,7 +305,7 @@ def apply_rule(rule_dict, graph_path=None, force=False, dry_run=False, *,
         supplied = _load_object(evaluation, "Evaluation report")
         pack = _load_object(cases, "Original casepack")
         # Do not trust report flags: execute both variants again and bind outputs.
-        replay = evaluate_candidate(rule_dict, graph, pack)
+        replay = evaluate_candidate(rule_dict, graph, pack, confirmation_dir=directory)
         require(json.dumps({k: v for k, v in supplied.items() if k != "elapsed_ms"}, sort_keys=True, allow_nan=False) ==
                 json.dumps({k: v for k, v in replay.items() if k != "elapsed_ms"}, sort_keys=True, allow_nan=False),
                 "Evaluation report differs from independently executed replay")

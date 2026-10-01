@@ -9,7 +9,7 @@ from rds_advisor_search import search_directions
 from rds_experiments import compose_experiments
 from rds_meta import digest, validate_rule
 
-VERSION = "rds-rsi-replay-1"
+VERSION = "rds-rsi-replay-2"
 LIMITS = {"max_cases": 64, "max_candidates": 64, "max_depth": 32,
           "max_nodes": 512, "max_combinations": 512, "max_compose_depth": 4,
           "max_runtime_ms": 10000}
@@ -25,7 +25,8 @@ def _json(value):
 def program_version():
     """Bind the replay engines, including the optional artifact importer."""
     base = Path(__file__).resolve().parent
-    names = ("rds_rsi.py", "rds_experiments.py", "rds_advisor_search.py", "rds_meta.py", "rds_artifacts.py")
+    names = ("rds_rsi.py", "rds_rsi_confirmation.py", "rds_experiments.py",
+             "rds_advisor_search.py", "rds_meta.py", "rds_artifacts.py")
     files = {name: hashlib.sha256((base / name).read_bytes()).hexdigest()
              for name in names if (base / name).exists()}
     return {"version": VERSION, "files": files, "sha256": digest(files)}
@@ -180,7 +181,7 @@ def _run(graph, case, budget):
     return output
 
 
-def evaluate_candidate(rule, graph, casepack):
+def evaluate_candidate(rule, graph, casepack, *, confirmation_dir=None):
     """Run baseline and candidate on the same frozen, declared casepack.
 
     Heldout status is caller-declared, not independently sealed. Acceptance
@@ -210,6 +211,13 @@ def evaluate_candidate(rule, graph, casepack):
         _check_graph(candidate_graph, budget)
         report["bindings"] = {"candidate_sha256": digest(rule), "base_graph_sha256": digest(graph),
                               "casepack_sha256": digest(casepack), "program": program_version()}
+        from rds_rsi_confirmation import record_exposure
+        campaign = casepack.get("confirmation_campaign")
+        if "confirmation_campaign" in casepack and campaign is None:
+            raise ValueError("confirmation_campaign cannot be null")
+        exposure = record_exposure(cases, report["bindings"], campaign, confirmation_dir)
+        if exposure is not None:
+            report["confirmation_exposure"] = exposure
         for case in cases:
             baseline = _run(graph, case, budget)
             candidate = _run(candidate_graph, case, budget)
@@ -238,7 +246,7 @@ def evaluate_candidate(rule, graph, casepack):
         report["replay_sha256"] = digest(report["results"])
         if not report["rejection_reasons"]:
             report.update(status="ACCEPTABLE_REGRESSION_CHANGE", adoption_eligible=True)
-    except (ValueError, TypeError, KeyError, RecursionError, OverflowError) as exc:
+    except (ValueError, TypeError, KeyError, RecursionError, OverflowError, OSError) as exc:
         report["rejection_reasons"].append(str(exc))
     report["elapsed_ms"] = round((time.perf_counter() - started) * 1000, 3)
     return report
