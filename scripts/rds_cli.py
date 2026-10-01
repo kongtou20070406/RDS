@@ -831,7 +831,7 @@ def cmd_meta(args, rds):
         from rds_meta import rollback_rule
         return rollback_rule(args.record, graph_path=args.graph, dry_run=args.dry_run)
     elif args.action == "reflect":
-        if (rds.directory / "project.sqlite3").is_file():
+        if _has_project_contract(args.root):
             from rds_project import ProjectStore
             state = ProjectStore(args.root).snapshot()
             receipts = state["receipts"]
@@ -918,7 +918,7 @@ def cmd_advise(args, rds):
             "status": "APPROVED",
             "actionable_suggestion": "方案通过门禁安全检查，可提交计划；正式提交时将重新核验预算和数据暴露。"
         }
-    if (rds.directory / "project.sqlite3").exists():
+    if _has_project_contract(args.root):
         from rds_project import ProjectStore
         state = ProjectStore(args.root).snapshot()
     elif rds.db_path.exists():
@@ -1024,6 +1024,10 @@ def cmd_advise(args, rds):
         "recommendations_count": len(recommendations),
         "recommendations": recommendations
     }
+    from rds_math import check_context
+    binding = check_context(args.root, state.get('advisor_context', {}))
+    if binding is not None:
+        result['objective_binding'] = binding
     if imported is not None:
         result["artifact_import"] = imported
     if getattr(args, "record", None) or getattr(args, "choose", None):
@@ -1052,6 +1056,16 @@ def cmd_project(args):
         from rds_costs import check_control_reuse
         return check_control_reuse(load_spec(args.candidate), load_spec(args.current), root=args.root)
     return store.snapshot()
+
+
+def _has_project_contract(root):
+    from rds_project import ProjectStore
+    store = ProjectStore(root)
+    if not store.path.is_file():
+        return False
+    with store._db(True) as db:
+        table = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='contract'").fetchone()
+        return bool(table and db.execute('SELECT 1 FROM contract WHERE id=1').fetchone())
 
 
 def _reference_binding_check(rds, snapshot):
@@ -1107,7 +1121,7 @@ def cmd_checkpoint(args, rds):
     from rds_checkpoints import restore_checkpoint, save_checkpoint
     kind = args.kind
     if kind == "auto":
-        kind = "project" if (rds.directory / "project.sqlite3").is_file() else "reference"
+        kind = "project" if _has_project_contract(args.root) else "reference"
     if kind == "project":
         from rds_project import ProjectStore
         snapshot = ProjectStore(args.root).snapshot(check_bindings=args.action == "restore")
@@ -1217,6 +1231,7 @@ def parser():
     quick.add_argument("--bind", action="append", default=[], help="Additional input: code|config|data|evaluator=relative/path")
     quick.add_argument("--output", "-o", "--out", action="append", default=[], help="Required output path in the frozen job workspace")
     quick.add_argument("--guard", help="Frozen metric/milestone policy; FAIL/UNKNOWN blocks promotion, retains the run")
+    quick.add_argument('--objective', help='Bind original rds-objective-v1 JSON; reuse a bound native objective by default')
     quick.add_argument("--background", action="store_true", help="Use the existing Windows Task Scheduler runner")
     quick.add_argument("--context", "--research-context", "-c", "--ctx", dest="research_context")
     quick.add_argument("--graph")
@@ -1245,6 +1260,44 @@ def parser():
     window.add_argument("--since", help="Inclusive start date, YYYY-MM-DD")
     usage.add_argument("--until", help="Inclusive end date, YYYY-MM-DD; default today")
     usage.add_argument("--json", action="store_true", help="Emit structured usage statistics")
+    math_cmd = commands.add_parser('math', help='Native immutable objectives and research assets; storage is not mathematical proof')
+    math_actions = math_cmd.add_subparsers(dest='action', required=True)
+    math_bind = math_actions.add_parser('bind')
+    math_bind.add_argument('--objective', required=True)
+    math_add = math_actions.add_parser('add')
+    math_add.add_argument('--id', required=True)
+    math_add.add_argument('--kind', choices=['lemma', 'algebraic-root', 'geometry', 'note'], default='note')
+    math_add.add_argument('--file', required=True)
+    math_add.add_argument('--depends', action='append', default=[])
+    for action in ('get', 'affected'):
+        math_actions.add_parser(action).add_argument('--id', required=True)
+    math_refute = math_actions.add_parser('refute')
+    math_refute.add_argument('--id', required=True)
+    math_refute.add_argument('--reason', required=True)
+    math_refute.add_argument('--evidence', required=True)
+    math_actions.add_parser('status')
+    for child in math_actions.choices.values():
+        child.add_argument('--json', action='store_true')
+    rsi = commands.add_parser('rsi', help='Extract, validate and register local function candidates; no MRS dependency')
+    rsi_actions = rsi.add_subparsers(dest='action', required=True)
+    rsi_extract = rsi_actions.add_parser('extract')
+    rsi_extract.add_argument('--source', required=True)
+    rsi_extract.add_argument('--entry', required=True)
+    rsi_extract.add_argument('--name', required=True)
+    rsi_validate = rsi_actions.add_parser('validate')
+    rsi_validate.add_argument('--name', required=True)
+    rsi_validate.add_argument('--cases', required=True)
+    rsi_validate.add_argument('--timeout', '-t', type=float, default=10)
+    rsi_validate.add_argument('--ledger', help='Charge a supplied operational wall-budget ledger before validation')
+    rsi_register = rsi_actions.add_parser('register')
+    rsi_register.add_argument('--name', required=True)
+    rsi_register.add_argument('--validation', help='Optional only when one passing local validation exists')
+    rsi_use = rsi_actions.add_parser('use')
+    rsi_use.add_argument('--name', required=True)
+    rsi_use.add_argument('--output', '-o', help='Export a verified local module to a project-relative .py file without overwriting')
+    rsi_actions.add_parser('list')
+    for child in rsi_actions.choices.values():
+        child.add_argument('--json', action='store_true')
     commands.add_parser("init").add_argument("--contract", required=True)
     hypo = commands.add_parser("hypothesis").add_subparsers(dest="action", required=True).add_parser("add")
     hypo.add_argument("--spec", required=True)
@@ -1450,6 +1503,12 @@ def _main():
             confirmations = (strict_json(read_bounded(args.confirmations, 1024 * 1024).decode("utf-8-sig"))
                              if args.confirmations else [])
             result = evaluate_advancement(protocol, trajectories, confirmations)
+        elif args.command == 'math':
+            from rds_math import command
+            result = command(args)
+        elif args.command == 'rsi':
+            from rds_tools import command
+            result = command(args)
         elif args.command == 'guard':
             from rds_guard import evaluate
             result = evaluate(args.policy, args.root)
@@ -1505,7 +1564,7 @@ def _main():
             result = cmd_decide(args, rds)
         else:
             result = cmd_status(args, rds)
-        compact = getattr(args, "brief", False) or args.command in {"exec", "reject", "guard", "hypergraph"} and not args.json
+        compact = getattr(args, "brief", False) or args.command in {"exec", "reject", "guard", "hypergraph", "math", "rsi"} and not args.json
         if compact:
             from rds_quick import brief
             print(json.dumps(brief(args.root, result, VERSION), ensure_ascii=False, separators=(",", ":"), allow_nan=False))
@@ -1517,6 +1576,8 @@ def _main():
             return {'PASS': 0, 'FAIL': 1, 'UNKNOWN': 2}.get(result.get('regression_review', result).get('status'), 2)
         if args.command == 'hypergraph' and result.get('truncated'):
             return 2
+        if args.command == 'rsi' and args.action == 'validate':
+            return {'LOCAL_CASES_PASSED': 0, 'FAILED': 1, 'UNKNOWN': 2}[result['status']]
         if args.command in {"project", "run"} and args.action in {"execute", "recover"} and result.get("run_status") in {"FAILED", "INTERRUPTED", "TIMED_OUT"}:
             return 1
         if args.command == "meta" and args.action == "evaluate-rule" and not result.get("adoption_eligible"):

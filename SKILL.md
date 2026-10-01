@@ -10,6 +10,8 @@ metadata:
 
 Help the researcher make the next useful decision and advance authorized work. Current support focuses on ML; another domain needs its own executable protocol and evidence.
 
+RDS runs without MRS. For sustained mathematical work, bind the original objective and retain exact assets and dependencies using the [native research records](docs/native-research.md). Use installed MRS only for a separately authorized record workflow; no automatic discovery, archive or second project is needed. Tool candidates can be extracted, checked and registered locally through the same native ledger.
+
 ## Small decision loop
 
 - Infer goal, metric, evidence, rival explanation, budget and next decision from the request and project. Fill low-risk detail internally; require no form. Missing evaluation calls for a minimal protocol before material commitments, never an invented goal, frozen metric or threshold.
@@ -53,6 +55,7 @@ Apply and persist research preferences only with explicit opt-in. [Optional pref
 | Mathematical obligation / Lean certificate | [Formal framework](references/formal_framework.md) and discipline's formal section: actual checker and declared scope; `UNKNOWN` stays unknown. |
 | Graph gaps / Advisor advancement | [Frontier](docs/advisor-frontier.md) or [advancement protocol](docs/advisor-advancement.md). Proposed nodes/ASTs need independent evidence. |
 | Improve RDS itself / accumulate tools | [RSI evolution](docs/rsi-evolution.md): distinguish rule, capability and policy adoption; preserve input exposure and frozen parents, and do not call a reused curriculum independent confirmation. |
+| Bind a mathematical objective / retain assets / reuse a local function | [Native research](docs/native-research.md): immutable original bytes, declared dependency review and `rsi extract/validate/register/use`; hashes and finite cases do not prove mathematics. |
 
 Runner, Lean and RSI remain optional capabilities with their gates intact. Advisor and rule lint are heuristic; rule adoption needs bound evaluation. Software or historical-fixture success is not research-policy gain.
 

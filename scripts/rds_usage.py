@@ -8,7 +8,7 @@ import time
 
 COMMANDS = {"init", "hypothesis", "gate", "plan", "run", "data", "decide", "status",
             "project", "checkpoint", "artifacts", "formal", "meta", "history", "advise",
-            "advancement", "branch", "usage", "exec", "reject", "guard", "hypergraph"}
+            "advancement", "branch", "usage", "exec", "reject", "guard", "hypergraph", "math", "rsi"}
 ROOT_OPTIONS = {"--root", "--workspace", "--project-root", "-w", "-d", "--dir"}
 COMMAND_MACROS = {"verify": ("formal", "verify"), "prove": ("formal", "verify"), "证明": ("formal", "verify"),
                   "check": ("formal", "check"), "核查": ("formal", "check"),
@@ -22,6 +22,7 @@ COMMAND_ALIASES = {"exec": {"execute", "test", "eval", "start", "执行", "运�
                    "formal": {"proof", "theorem", "形式化", "验证"},
                    "guard": {"regression", "regressions", "回退检查"},
                    "hypergraph": {"graph", "deps", "blockers", "and-or", "超图", "依赖"},
+                   "math": {"assets", "数学", "资产"}, "rsi": {"tools", "evolve", "演化", "工具"},
                    "execute": {"exec", "执行"}, "save": {"record", "保存"}, "restore": {"resume", "恢复"}}
 _last_error = None
 
@@ -77,7 +78,7 @@ def _label(argv):
             if command == 'exec':
                 values = ROOT_OPTIONS | {'--name', '--id', '--timeout', '-t', '--time', '--timeout-seconds',
                     '--bind', '--output', '-o', '--out', '--guard', '--context', '--research-context', '-c',
-                    '--ctx', '--graph', '--choose', '--ledger', '-l', '--db'}
+                    '--ctx', '--graph', '--choose', '--ledger', '-l', '--db', '--objective'}
                 i = index + 1
                 while i < len(argv):
                     if not argv[i].startswith('-'):

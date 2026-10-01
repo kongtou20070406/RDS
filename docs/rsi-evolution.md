@@ -2,6 +2,8 @@
 
 RSI improves RDS's own rules, tools and search policy. Use a small failure-driven loop: preserve the original failure, identify the reusable missing capability, freeze one candidate change and its parent, compare them using the same acceptance standard, then adopt a scoped improvement or retain the rejection. Task-specific cases validate the capability; avoid encoding one current task or numerical instance into the general mechanism. Tool development, failures, comparison and confirmation consume the authorized research budget. Do not turn a passing software check into a scientific-performance claim.
 
+[Native research records and local tools](native-research.md) implement objective/asset binding and the explicit extract → validate → register → reuse path without MRS. Local qualification uses the existing project ledger and native runner; public PR promotion and measured policy evolution remain separate, unimplemented outer-loop steps.
+
 ## Three objects, three adoption meanings
 
 | Object | Change | Required acceptance | Permitted conclusion |

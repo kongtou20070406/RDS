@@ -229,6 +229,13 @@ class ProjectStore:
         found = []
         errors = []
         checked = {}
+        if 'objective_sha256' in contract:
+            from rds_math import objective
+            try:
+                goal = objective(self.root)
+                require(goal and goal['asset']['sha256'] == contract['objective_sha256'], 'Frozen mathematical objective differs')
+            except (ValueError, OSError, sqlite3.Error) as exc:
+                errors.append('Objective binding unavailable: ' + str(exc))
         for b in contract["bindings"]:
             try:
                 path = self._path(b["path"])
@@ -252,7 +259,11 @@ class ProjectStore:
     def initialize(self, contract):
         require(isinstance(contract, dict) and type(contract.get("schema")) is int
                 and contract["schema"] == 1, "Project contract schema must be 1")
-        require(set(contract) <= {"schema", "bindings", "allowed_commands", "output_roots", "budget", "description"}, "Unknown contract fields")
+        require(set(contract) <= {"schema", "bindings", "allowed_commands", "output_roots", "budget", "description", "objective_sha256"}, "Unknown contract fields")
+        if 'objective_sha256' in contract:
+            from rds_math import objective
+            goal = objective(self.root)
+            require(goal and goal['asset']['sha256'] == contract['objective_sha256'], 'Initialize the matching native objective first')
         require(isinstance(contract.get("bindings"), list) and contract["bindings"], "Bindings required")
         paths = {}
         binding_roles = set()

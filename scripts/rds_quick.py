@@ -20,12 +20,16 @@ MAX_TOTAL_BYTES = 64 * 1024 * 1024
 
 
 def cas_json(root, value):
-    raw = canonical(value).encode('utf-8')
+    return cas_bytes(root, canonical(value).encode('utf-8'), 'json')
+
+
+def cas_bytes(root, raw, suffix='bin'):
+    require(isinstance(raw, bytes) and re.fullmatch(r'[a-z0-9]{1,12}', suffix), 'Invalid CAS bytes or suffix')
     sha = hashlib.sha256(raw).hexdigest()
     directory = Path(root).resolve() / '.rds' / 'cas'
     require(directory.resolve().is_relative_to(Path(root).resolve()), 'CAS escapes project root')
     directory.mkdir(parents=True, exist_ok=True)
-    path = directory / (sha + '.json')
+    path = directory / (sha + '.' + suffix)
     try:
         with path.open('xb') as handle:
             handle.write(raw)
@@ -255,6 +259,14 @@ def execute(args, review=None):
         selected = choice(review[0], review[1], args.choose)  # Reject ambiguity before creating a job.
         args.choose = selected['candidate']['id']
     argv[0] = ProjectStore._command(argv)
+    from rds_math import bind_objective, blob, objective, objective_spec, read_bytes
+    goal = objective(root)
+    goal_raw = blob(root, goal['asset']) if goal else None
+    if getattr(args, 'objective', None):
+        supplied = read_bytes(root / args.objective)
+        objective_spec(supplied)
+        require(goal_raw is None or goal_raw == supplied, 'Objective is frozen; changed goals need an explicit new project')
+        goal_raw = supplied
     guard_path, guard_seconds = None, 0
     binds = list(args.bind)
     if getattr(args, 'guard', None):
@@ -270,6 +282,8 @@ def execute(args, review=None):
     request = {'argv': argv, 'timeout': timeout, 'outputs': args.output,
                'inputs': [{'path': p.relative_to(root).as_posix(), 'roles': sorted(roles),
                            'sha256': hashlib.sha256(raw_by_path[p]).hexdigest()} for p, roles in sorted(files.items())]}
+    if goal_raw is not None:
+        request['objective_sha256'] = hashlib.sha256(goal_raw).hexdigest()
     if guard_path is not None:
         request['guard'] = {'path': guard_path.relative_to(root).as_posix(), 'wall_seconds': guard_seconds,
                             'engine_sha256': file_sha(Path(__file__).with_name('rds_guard.py'))}
@@ -315,6 +329,11 @@ def execute(args, review=None):
         _charge_ledger(args.ledger, workspace, request, timeout)
     workspace.mkdir(parents=True)
     bindings = []
+    if goal_raw is not None:
+        bind_objective(root, goal_raw)
+        bind_objective(workspace, goal_raw)
+        (workspace / 'rds-exec-objective.json').write_bytes(goal_raw)
+        bindings.append({'path': 'rds-exec-objective.json', 'sha256': request['objective_sha256'], 'role': 'config'})
     for p, roles in files.items():
         target = workspace / p.relative_to(root)
         require(not target.name.startswith('rds-exec-'), 'Input uses a reserved rds-exec- filename')
@@ -344,6 +363,8 @@ def execute(args, review=None):
     output_roots = sorted({Path(p).parts[0] for p in args.output}) or ['outputs']
     contract = {'schema': 1, 'bindings': bindings, 'allowed_commands': [frozen_argv],
                 'output_roots': output_roots, 'budget': {'wall_seconds': timeout}, 'description': 'Explicitly invoked frozen tool command; not an OS sandbox or science verdict'}
+    if goal_raw is not None:
+        contract['objective_sha256'] = request['objective_sha256']
     store.initialize(contract)
     if review is not None:
         require(args.ledger, '--context for exec needs an existing --ledger for prospective decisions')
@@ -391,6 +412,11 @@ def brief(root, value, version, formal=False):
     """Persist full output and expose a bounded, truthful operational digest."""
     ref = cas_json(root, value)
     summary = {'status': value.get('status', value.get('run_status', 'RECORDED')), 'sha256': ref['sha256'], 'record': ref['path']}
+    for key in ('id', 'name', 'source_sha256', 'module', 'assurance'):
+        if key in value:
+            summary[key] = value[key]
+    if 'affected' in value:
+        summary['affected_count'] = len(value['affected'])
     if 'recommendations' in value:
         summary['gaps'] = sum(len(r.get('frontier', {}).get('gaps', [])) for r in value['recommendations'])
         summary['candidates'] = [c.get('id') for r in value['recommendations'] for c in r.get('search', {}).get('candidates', [])][:3]

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add native immutable mathematical objectives and exact research-asset records in the existing project SQLite/CAS, with declared dependency review and optional objective binding at quick execution and Advisor boundaries. MRS remains optional; storage never upgrades a mathematical verdict.
+- Add explicit `rsi extract`, native case validation, local registration and verified module export/reuse. Preserve failed receipts, reject changed source/evaluator/results and keep finite local cases distinct from mathematical proof, fresh confirmation and research-policy improvement.
+
 - Add compatible `exec` and `reject` entries over the existing frozen runner and checkpoint ledger; complete operational identities and known decision fields without handwritten protocol boilerplate.
 - Review scoped candidates before quick execution and retain its result for the next decision. Missing prerequisites, ambiguous choices and unchanged rejections cannot start a prospective research job.
 - Add compact digests with retained complete records, command aliases, unique prefixes and actionable repair hints. Preserve original stdout/stderr, UNKNOWN scientific status and execution gates.
