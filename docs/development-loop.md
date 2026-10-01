@@ -4,6 +4,12 @@ RDS development uses its own executable tools: record a concrete problem, run an
 
 Use the latest available development checkout for each new iteration rather than an older installed Skill copy. Freeze that iteration's source tree and test workload before execution, and retain its commit or file hashes, original logs, receipt, artifact import and Advisor next-step record. Upgrade the snapshot at the next meaningful boundary when new code is ready; never relabel a previous passing receipt as evidence for a changed tree. Independent checks may run in parallel when resources and budgets allow it. The goal is earlier reliable progress, not the smallest amount of computation; see [resource-aware planning](resource-planning.md).
 
+## Current 5.8 delivery scope
+
+Prioritize defects and friction observed in current use: low-boilerplate native execution, compact output and tolerant command entry; consistent brief progress across Skill and host instructions; source-backed method-scope clarification; native objective/assets and reusable tools; and accurate hypergraph evidence boundaries. Reproduce each actual issue, repair the general mechanism and complete the relevant engineering regressions before delivery.
+
+Long-trajectory efficacy studies, RSI research-policy gain measurement and original ExplorationBench access are outside this release's active work and are not release gates. Preserve existing evidence records; passing software checks does not establish those scientific claims. No benchmark-dependent work is needed to complete this maintenance scope.
+
 ## Reproduce a development iteration
 
 From the repository, choose a **new empty workspace**:
