@@ -1,5 +1,8 @@
 """Installed-toolchain discovery and honest exact-arithmetic degradation."""
 import copy
+from contextlib import redirect_stdout
+import io
+import json
 import os
 from pathlib import Path
 import sys
@@ -9,6 +12,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import rds_lean_verify as lean
+import rds_cli
 import rds_verify as engine
 
 SPEC = {"schema": 1, "kind": "lean_obligation", "relation": "lt", "left": "1/2", "right": "3/4"}
@@ -58,6 +62,7 @@ class NativeDiscoveryTests(unittest.TestCase):
             result = engine.verify(SPEC)
         self.assertEqual(result["status"], "PASS", result)
         self.assertEqual(result["assurance"], "CERTIFICATE_CHECKED")
+        self.assertEqual(result["backend"], lean.FALLBACK_BACKEND)
         leaf = result["certificate"]["proof"]["certificate"]
         self.assertEqual(leaf["backend"], lean.FALLBACK_BACKEND)
         with mock.patch.object(lean, "verify", side_effect=AssertionError("replay must not search")):
@@ -79,6 +84,82 @@ class NativeDiscoveryTests(unittest.TestCase):
             result = lean.verify(SPEC)
         self.assertEqual(result["status"], "UNKNOWN")
         fallback.assert_not_called()
+
+
+class ExplicitBackendTests(unittest.TestCase):
+    def test_zero_denominator_is_unknown_before_either_backend_runs(self):
+        with mock.patch.object(lean, "_native_check", side_effect=AssertionError("No native call")):
+            for tactic in ("lean4", "rational"):
+                with self.subTest(tactic=tactic):
+                    result = engine.LeanFormalEngine().verify({**SPEC, "left": "1/0"}, [tactic])
+                    self.assertEqual(result["status"], "UNKNOWN", result)
+                    self.assertEqual(result["assurance"], "NONE")
+
+    def test_lean4_missing_native_never_generates_fallback_evidence(self):
+        with mock.patch.object(lean, "_native_check", side_effect=lean.NoNativeLean("not installed")), \
+                mock.patch.object(lean, "_fallback_certificate", side_effect=AssertionError("No fallback")):
+            result = engine.LeanFormalEngine().verify(SPEC, ["lean4"])
+        self.assertEqual(result["status"], "UNKNOWN", result)
+        self.assertEqual(result["assurance"], "NONE")
+        self.assertIn("not installed", result["tactics"][0]["reason"])
+
+    def test_rational_and_replay_never_invoke_native_or_upgrade_assurance(self):
+        with mock.patch.object(lean, "_native_check", side_effect=AssertionError("No native call")), \
+                mock.patch.object(lean, "_executable", side_effect=AssertionError("No discovery")):
+            result = engine.LeanFormalEngine().verify(SPEC, ["rational"])
+            replay = engine.checked_result(SPEC, result["certificate"])
+            false = engine.LeanFormalEngine().verify({**SPEC, "left": "1", "right": "0"}, ["rational"])
+        for answer in (result, replay):
+            self.assertEqual(answer["status"], "PASS", answer)
+            self.assertEqual(answer["backend"], lean.FALLBACK_BACKEND)
+            self.assertEqual(answer["assurance"], "CERTIFICATE_CHECKED")
+            self.assertEqual(answer["semantics"], "closed_exact_rational_relation")
+        self.assertEqual(false["status"], "UNKNOWN")
+        self.assertEqual(false["assurance"], "NONE")
+
+    def test_explicit_chain_can_choose_rational_after_native_is_unavailable(self):
+        with mock.patch.object(lean, "_native_check", side_effect=lean.NoNativeLean("not installed")):
+            result = engine.LeanFormalEngine().verify(SPEC, ["lean4", "rational"])
+        self.assertEqual([item["status"] for item in result["tactics"]], ["UNKNOWN", "PASS"])
+        self.assertEqual(result["assurance"], "CERTIFICATE_CHECKED")
+
+    def test_lean4_rejects_even_valid_lower_assurance_certificate(self):
+        fallback = lean.verify_rational(SPEC)
+        with mock.patch.object(lean, "verify", return_value=fallback):
+            result = engine.LeanFormalEngine().verify(SPEC, ["lean4"])
+        self.assertEqual(result["status"], "UNKNOWN")
+        self.assertEqual(result["assurance"], "NONE")
+
+    def test_cli_cached_fallback_cannot_satisfy_explicit_native_and_replay_stays_rational(self):
+        with tempfile.TemporaryDirectory() as folder:
+            spec_path, proof_path = Path(folder) / "spec.json", Path(folder) / "proof.json"
+            spec_path.write_text(json.dumps(SPEC), encoding="utf-8")
+
+            def command(*arguments):
+                output = io.StringIO()
+                with mock.patch.object(sys, "argv", ["rds_cli", "--root", folder, "formal", *arguments]), \
+                        redirect_stdout(output):
+                    code = rds_cli.main()
+                return code, json.loads(output.getvalue())
+
+            with mock.patch.object(lean, "_native_check", side_effect=lean.NoNativeLean("not installed")):
+                first_code, first = command("verify", "--spec", str(spec_path))
+                cached_code, cached = command("verify", "--spec", str(spec_path))
+                native_code, native = command("verify", "--spec", str(spec_path), "--tactics", "lean4")
+            self.assertEqual((first_code, cached_code, native_code), (0, 0, 2))
+            self.assertTrue(first["cache"]["stored"])
+            self.assertTrue(cached["cache"]["hit"])
+            self.assertEqual(cached["backend"], lean.FALLBACK_BACKEND)
+            self.assertEqual(native["status"], "UNKNOWN")
+            self.assertEqual(native["assurance"], "NONE")
+            with mock.patch.object(lean, "_native_check", side_effect=AssertionError("No native call")):
+                rational_code, rational = command("verify", "--spec", str(spec_path), "--tactics", "rational",
+                                                 "--output", str(proof_path))
+                check_code, replay = command("check", "--spec", str(spec_path), "--certificate", str(proof_path))
+            self.assertEqual((rational_code, check_code), (0, 0))
+            for answer in (rational, replay):
+                self.assertEqual(answer["backend"], lean.FALLBACK_BACKEND)
+                self.assertEqual(answer["assurance"], "CERTIFICATE_CHECKED")
 
 
 @unittest.skipUnless(installed(), "No installed native Lean binary")

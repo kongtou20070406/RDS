@@ -218,3 +218,17 @@ Advisor [PR #15](https://github.com/kongtou20070406/research-direction-selector/
 资源改动及本综述已发布 [PR #17](https://github.com/kongtou20070406/research-direction-selector/pull/17)，当前集成树含上述两线与资源规划。代码级联合审查确认 Advisor 在 checker 前原子保守扣费，生成与重放共享外层 allowance deadline；Lean 内部放宽到 60 秒不绕过该期限。超时清理进程树并留存证据；统计 `application_status=UNKNOWN` 不能获得经验准入。费用中的 CPU/GPU 估计仍不等于实际用量，控制器并不承诺整个 API 的硬截止时间。
 
 依赖策略的事实边界也已核对：目前没有 `required-native` 安装模式或 `doctor` 命令。`--tactics lean4` 和退出码 0 都可能来自精确有理数 Python fallback，完整版验收须检查 `LEAN_KERNEL_CHECKED` 并独立重放；Frontier 原生准入与统计义务已有对应门禁。已修订英文/中文接入文档中的过期描述。不会以此次文档修正声称自动安装器已实现。
+
+### 8.1 本轮接管复核的统计能力范围
+
+接管复核直接读取 `scripts/rds_statistical_verify.py`：统计输入仅接受 `{schema, kind, theorem}`，选择 Ville、Hoeffding 或 DPI 的通用条件定理；样本量、观测数据、采样过程和应用前提参数仍不受支持。该适配器对有效请求始终保留 `application_status=UNKNOWN`。因此本阶段交付的是**通用条件定理的原生重放与未闭合经验前提的准入阻断**，不能声称已有从实际数据闭合统计假设的消费者，也不能声称已完成 Hoeffding 经验早停、继续采样或自适应停止策略。形式 PASS 证明相应条件命题，不证明某次实验满足其前提。
+
+### 8.2 接管后的组合验收（本地最终源码）
+
+本轮通过当前 RDS 自开发执行器完成全量检查，原件位于 `C:/Users/XU/Documents/ChatGPT/obelisk升级/RDS-takeover-full-acceptance-20261001`。`out/test-results.json` 与原始 `stderr.bin` 一致：**526 项，521 项实际执行通过，5 项跳过，零失败**，测试耗时 `136.035` 秒；`out/receipt.json` 为 `SUCCEEDED/COMPLETED`，实际墙钟 `137.9340413` 秒。五项跳过分别为两项缺少 PyTorch 的真实模块导出、两项 POSIX 文件名行为，以及一项未构建固定 Formal 库的真实统计重放。标量原生 Lean 测试实际执行；这里没有将跳过项计为通过，也没有用此结果代替第八章已有的 Linux 统计 CI 证据。
+
+已核读同一工作区后续原件：`07-import.json` 为 `IMPORTED`；`08-advice.json` 根据真实零失败事实提出 `review-next-change` 的 READY 候选；`09-rule-replay.json` 为 `ACCEPTABLE_REGRESSION_CHANGE`；`10-isolated-adoption.json` 为 `APPLIED`；`11-rollback.json` 为 `ROLLED_BACK`。这验证了软件检查结果进入建议、规则重放、隔离采用与回滚的有限工程链条，不构成科研收益或完整 L3 的证据。墙钟已测量，CPU/GPU 用量与 API 成本未测量，成本报告仍为 PARTIAL。
+
+显式后端已分开：`--tactics lean4` 要求原生 Lean，依赖缺失或核验失败返回 UNKNOWN，不再静默降为 Python；精简模式使用 `--tactics rational`。`C:/Users/XU/Documents/ChatGPT/obelisk升级/RDS-delivery-checks-20261001/explicit-native.json` 对 `1/2 < 3/4` 返回 `LEAN_KERNEL_CHECKED`、Lean 4.33.1、空公理；`explicit-rational.json` 对同一输入返回 `CERTIFICATE_CHECKED`、`rds_python_closed_rational`。非法有理数输入保留 UNKNOWN。该选择是执行后端约束，仍不等于已实现 `required-native` 安装器或 `doctor`。
+
+主控另执行既有 `benchmarks/run.py` 六项检查通过（`11.345` 秒），redteam 四项攻击全部拦截、退出码 0；它们与全量回归用途不同，不累加成独立样本数。最新组合源码的本地验收已经完成；本章以上原生统计 CI 对应此前明确列出的 Lean 提交，**PR #17 最新提交的 CI 与最终合并在此快照中仍待完成**，不能将旧提交的成功状态移作新提交证据。提交与远端交付由主控统一完成。

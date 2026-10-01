@@ -24,7 +24,7 @@ python -B scripts/rds_cli.py --root . formal check --spec examples/formal/lean_o
 
 固定模板使用 Lean 的 Rat 定义与 `by decide` 证明 `RDS.obligation`。适配器以 `--trust=0` 调用 Lean，并要求完全匹配的空公理审计结果。独立检查重新渲染期望模板，核对声明／源码绑定、程序指纹和版本，再次调用 Lean。它不重放已保存的 `.olean` 证明对象，也不把缓存 stdout 当作证明。
 
-接受的原生原子结果为 PASS / `LEAN_KERNEL_CHECKED`，后端是 `backend: lean4_closed_rational`，语义为 `semantics: closed_Lean_Rat_relation`。原生编译失败和资源限制产生 UNKNOWN，不是已检查的反驳。没有原生程序时，支持的闭合有理数关系可由精确 Python 检查器核验，但标记为独立的 `CERTIFICATE_CHECKED`。统计库义务必须具备原生编译器和已构建库，缺失时保持 UNKNOWN。CLI 对 PASS／FAIL／UNKNOWN 的退出码是 0／1／2：退出码 0 或选择 `--tactics lean4` 本身都不能证明调用了 Lean 内核。有限定理模块只有在必需叶子非空且每个叶子均为 `LEAN_KERNEL_CHECKED` 时才给出该保证，否则已接受模块保留 `CERTIFICATE_CHECKED`。
+接受的原生原子结果为 PASS / `LEAN_KERNEL_CHECKED`，后端是 `backend: lean4_closed_rational`，语义为 `semantics: closed_Lean_Rat_relation`。原生编译失败和资源限制产生 UNKNOWN，不是已检查的反驳。显式 `--tactics lean4` 必须原生核验，缺编译器时返回 UNKNOWN；显式 `--tactics rational` 只用精确 Python 检查支持的闭合有理数关系，标记为独立的 `CERTIFICATE_CHECKED`。默认 `rule` 仍可自动选择后端，原子结果明确报告实际使用的后端。统计库义务必须具备原生编译器和已构建库，缺失时保持 UNKNOWN。CLI 对 PASS／FAIL／UNKNOWN 的退出码是 0／1／2，因此通用退出码 0 仍需结合所选方法和保证等级判断。有限定理模块只有在必需叶子非空且每个叶子均为 `LEAN_KERNEL_CHECKED` 时才给出该保证，否则已接受模块保留 `CERTIFICATE_CHECKED`。
 
 `formal check` 接受框架证书或完整框架结果，重新构造结论；底层原生检查器接受自己的领域证书并重复原生检查，两种格式不同。任意 Lean 文本、用户 tactics、通用 mathlib 翻译和实际训练图的证明仍不支持；数学侧条件不能建立实用收益或因果性。见[全部注册 kind 与证据边界](formal-verification.zh-CN.md)和[版本化实现契约](https://github.com/kongtou20070406/research-direction-selector/blob/995e8eb98f75697ef1ce43a9991f0686e5c29caa/references/formal_framework.md)。
 

@@ -330,15 +330,15 @@ def checked_result(spec, certificate):
         leaves = ([proof["certificate"]] if outcomes is None else
                   [item["certificate"] for item in proof["theorems"].values() if "certificate" in item])
         native = bool(leaves) and all(leaf.get("assurance") == "LEAN_KERNEL_CHECKED" for leaf in leaves)
-        atomic_native = native and outcomes is None
+        atomic = outcomes is None
         result = {"status": verdict, "assurance": "LEAN_KERNEL_CHECKED" if native else "CERTIFICATE_CHECKED",
-                  "backend": leaves[0]["backend"] if atomic_native else "rds_declarative",
+                  "backend": leaves[0].get("backend", "rds_declarative") if atomic else "rds_declarative",
                   "semantics": SEMANTICS, "spec_sha256": certificate["spec_sha256"],
                   "verifier_sha256": certificate["verifier_sha256"], "certificate": certificate}
         if outcomes is not None:
             result["theorems"] = outcomes
-        elif atomic_native:
-            result["semantics"] = leaves[0]["semantics"]
+        elif atomic:
+            result["semantics"] = leaves[0].get("semantics", SEMANTICS)
         conditional = [leaf for leaf in leaves if leaf.get("conditional_statement") is True]
         if conditional:
             result.update(conditional_statement=True, application_status="UNKNOWN",
@@ -355,30 +355,44 @@ class LeanFormalEngine:
 
     `rule` selects the trusted registry. Other tactics select compatible domain
     rules. Lean4 accepts only supported generated native obligations; a compiler
-    exit code alone cannot certify a claim.
+    exit code alone cannot certify a claim. Rational uses exact Python only.
     """
-    TACTICS = ("rule", "gershgorin", "spectral_radius", "scale_invariance", "lean4", "interval")
+    TACTICS = ("rule", "gershgorin", "spectral_radius", "scale_invariance", "lean4", "rational", "interval")
 
     def verify(self, spec, tactics=("rule", "interval")):
         try:
             require(isinstance(tactics, (list, tuple)) and 1 <= len(tactics) <= len(self.TACTICS),
-                    "Tactic chain requires 1..6 tactics")
+                    f"Tactic chain requires 1..{len(self.TACTICS)} tactics")
             require(all(isinstance(t, str) and t in self.TACTICS for t in tactics), "Unknown tactic")
             require(len(set(tactics)) == len(tactics), "Repeated tactics are not allowed")
             _bounded_json(spec)
             require(isinstance(spec, dict), "Specification must be an object")
             attempts = []
-            tried = False
+            tried = set()
             compatible = {"interval": {"network_bounds", "network_margin"},
                           "lean4": {"lean_obligation", "statistical_obligation"},
+                          "rational": {"lean_obligation"},
                           "gershgorin": {"matrix_spectral_bound"},
                           "spectral_radius": {"matrix_spectral_exact"},
                           "scale_invariance": {"scale_equivariance"}}
             for tactic in tactics:
                 applies = tactic == "rule" or spec.get("kind") in compatible.get(tactic, set())
-                if applies and not tried:
-                    answer = verify(spec)
-                    tried = True
+                explicit_rational = spec.get("kind") == "lean_obligation" and tactic in {"lean4", "rational"}
+                method = tactic if explicit_rational else "rule"
+                if applies and method not in tried:
+                    if explicit_rational:
+                        rule = REGISTRY.rule(spec)
+                        adapter = importlib.import_module(rule.module)
+                        answer = (adapter.verify_rational(spec) if tactic == "rational" else
+                                  adapter.verify(spec, allow_fallback=False))
+                        if answer["status"] == "PASS":
+                            proof = {"rule": rule.name, "certificate": answer["certificate"]}
+                            answer = checked_result(spec, _wrap(spec, "PASS", proof))
+                    else:
+                        answer = verify(spec)
+                    tried.add(method)
+                    if tactic == "lean4" and answer["status"] in {"PASS", "FAIL"}:
+                        require(answer["assurance"] == "LEAN_KERNEL_CHECKED", "Lean4 requires native kernel evidence")
                 else:
                     answer = _unknown("Tactic is unavailable or incompatible with this declaration")
                 attempts.append({"tactic": tactic, "status": answer["status"],

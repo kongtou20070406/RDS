@@ -1168,7 +1168,7 @@ def parser():
     f_verify.add_argument("--output")
     f_verify.add_argument("--no-cache", action="store_true")
     f_verify.add_argument("--tactics", nargs="+", choices=["rule", "gershgorin", "spectral_radius",
-                                                         "scale_invariance", "lean4", "interval"],
+                                                         "scale_invariance", "lean4", "rational", "interval"],
                           help="Run a bounded explicit tactic chain without the default proof cache")
     f_check = f_actions.add_parser("check")
     f_check.add_argument("--spec", required=True)

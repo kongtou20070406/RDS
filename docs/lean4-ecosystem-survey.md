@@ -25,6 +25,8 @@
 
 官方发布接口本次确认 **Lean v4.34.1 与 Mathlib v4.34.1 均为最新稳定版，发布于 2026-09-24**。用户已允许升级。RDS 原生开发线的此前已验证基线为 4.33.1；升级后的验收必须来自该具体源码、工具链和依赖锁的真实构建，不以改动版本字符串代替兼容测试。[Lean release](https://github.com/leanprover/lean4/releases/tag/v4.34.1)、[Mathlib release](https://github.com/leanprover-community/mathlib4/releases/tag/v4.34.1)
 
+当前集成树的 `formal/lean-toolchain` 与 `formal/lakefile.lean` 仍固定 **Lean/Mathlib 4.33.1**。下文的 4.34.1 配置是升级草案，不是当前安装命令或已通过的兼容结果；原生统计构建、真实证书重放与最终源码状态见[协作账本第八章](collaboration-ledger.md#八最终集成审查2026-10-01)。最新上游版本、项目依赖版本和外部组件兼容版本分别记录。
+
 “拿来用”分三层：直接使用独立 CLI/Python API；经过少量 schema/版本适配后使用；仅可复用论文或核心理论、仍需新 checker。后文逐项说明，不把三层统称即插即用。Lean 包与 `.olean` 紧密依赖工具链；SciLean、TorchLean、REPL 和模型训练环境各自的版本不能未经检查混装。
 
 ## 3. A/B/C 三条附属工程路线

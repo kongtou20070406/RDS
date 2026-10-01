@@ -48,3 +48,5 @@ Apply and persist research preferences only with explicit opt-in. [Optional pref
 | Graph gaps / Advisor advancement | [Frontier](docs/advisor-frontier.md) or [advancement protocol](docs/advisor-advancement.md). Proposed nodes/ASTs need independent evidence. |
 
 Runner, Lean and RSI remain optional capabilities with their gates intact. Advisor and rule lint are heuristic; rule adoption needs bound evaluation. Software or historical-fixture success is not research-policy gain.
+
+Use `formal verify --tactics lean4` when native Lean checking is required; missing native dependencies must remain `UNKNOWN`. Use `--tactics rational` for the supported exact Python rational checker, with `CERTIFICATE_CHECKED` assurance. Default `rule` may choose either available backend. Report the actual backend and assurance, and keep mathematical proof separate from empirical application premises.
