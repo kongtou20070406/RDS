@@ -136,6 +136,46 @@ class QuickTests(unittest.TestCase):
         self.assertEqual(report['receipt']['run_status'], 'FAILED')
         self.assertEqual(report['receipt']['assessment']['mechanism'], 'UNKNOWN')
         self.assertFalse((Path(report['job_root']) / '.rds/project.sqlite3').is_symlink())
+        status = self.call('project', 'status', '--brief', root=report['job_root'])
+        summary = json.loads(status.stdout)
+        self.assertIn('run_states', summary, status.stdout)
+        self.assertEqual(summary['status'], 'RECORDED')
+        self.assertEqual(summary['run_states'], {'FAILED': 1})
+        self.assertEqual((summary['runs'], summary['receipts']), (1, 1))
+        receipt = summary['latest_receipt']
+        self.assertEqual((receipt['run_id'], receipt['run_status'], receipt['exit_code']),
+                         (report['receipt']['run_id'], 'FAILED', 1))
+        stderr = Path(receipt['stderr_path'])
+        self.assertTrue(stderr.is_absolute())
+        self.assertIn('preserved failure', stderr.read_text(encoding='utf-8'))
+        raw = Path(summary['record']).read_bytes()
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), summary['sha256'])
+        full = json.loads(raw)
+        self.assertEqual(full['receipts'][0]['assessment'], {'task_gain': 'UNKNOWN', 'mechanism': 'UNKNOWN'})
+        self.assertNotIn('preserved failure', status.stdout)
+
+    def test_project_brief_distinguishes_live_states_and_latest_finished_receipt(self):
+        from rds_quick import brief
+        runs = [{'status': 'RUNNING', 'run_status': 'RUNNING'},
+                {'status': 'RESERVED', 'run_status': 'RESERVED'},
+                {'status': 'COMPLETED', 'run_status': 'SUCCEEDED'}]
+        value = {'runs': runs, 'receipts': []}
+        summary = brief(self.root, value, 'test')
+        self.assertEqual(summary['status'], 'RECORDED')
+        self.assertEqual(summary['run_states'], {'RUNNING': 1, 'RESERVED': 1, 'COMPLETED': 1})
+        self.assertNotIn('latest_receipt', summary)
+        # Snapshot receipt ordering is by run ID, not finishing time.
+        value['receipts'] = [
+            {'run_id': 'a-new', 'run_status': 'FAILED', 'exit_code': 7, 'ended_at': 20.0,
+             'cwd': str(self.root), 'artifacts': [{'kind': 'stderr.bin', 'path': 'error.bin', 'size': 0}]},
+            {'run_id': 'z-old', 'run_status': 'SUCCEEDED', 'exit_code': 0, 'ended_at': 10.0,
+             'cwd': str(self.root), 'artifacts': []},
+            {'run_id': 'missing-time', 'cwd': str(self.root)},
+            {'run_id': 'missing-cwd', 'ended_at': 30.0}]
+        summary = brief(self.root, value, 'test')
+        self.assertEqual(summary['latest_receipt'], {'run_id': 'a-new', 'run_status': 'FAILED', 'exit_code': 7})
+        self.assertEqual(summary['run_states'], {'RUNNING': 1, 'RESERVED': 1, 'COMPLETED': 1})
+        self.assertNotIn('run_status', summary)
 
     def test_aliases_and_unique_prefixes_preserve_command_tail_and_values(self):
         from rds_cli import parser
