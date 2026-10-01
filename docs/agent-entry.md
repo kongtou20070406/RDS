@@ -1,0 +1,59 @@
+# Low-friction research entry
+
+Programmatic completion supplies file hashes, protocol identities, timestamps, receipts and previously recorded question/scope fields. It does not invent a research objective, budget, seed, hidden input, proof, causal explanation or scientific rejection. The normal frozen ProjectStore and append-only checkpoints remain authoritative.
+
+## Wrap a command
+
+```powershell
+python -B scripts/rds_cli.py --root <source-directory> exec --name probe-001 --timeout 30 -- python -B probe.py
+```
+
+One call freezes inputs, constructs the contract/protocol/manifest, reserves the explicit wall allowance, executes and records the real receipt. No handwritten protocol JSON is needed. The default cap is 60 seconds; supply the appropriate bounded cap. Jobs that must outlive the conversation use `--background`, the existing Windows Task Scheduler runner. Jobs longer than 3600 seconds use the regular project runner.
+
+The command runs in `<source-directory>/.rds/exec/probe-001`, a frozen copy. Existing file arguments and static local Python imports are copied, including package initializers. Add implicit inputs with `--bind data=relative/file.json` (also `code`, `config`, `evaluator`). Dynamic imports, external packages, environment access and remote inputs are not completely discovered. Keep these limitations explicit; this trusted-code runner is not an OS sandbox. Non-Python/inline commands require an explicit code binding. Commands cannot invoke a shell.
+
+Use `--output outputs/result.json` to require an output in the job copy. Read original stdout/stderr and declared outputs through the receipt's artifact paths. A repeated identical job returns the existing receipt without executing again; changed input bytes require a new name. Failure/timeout logs and spent costs survive. Exit code 0 means operational completion; mathematical or policy success remains unknown.
+
+## Select before executing
+
+Maintain the semantic `context.json` and structured graph for the actual next decision. The tool supplies repetitive bookkeeping around these inputs; it cannot derive the right mathematical question from arbitrary prose.
+
+```powershell
+python -B scripts/rds_cli.py --root <existing-ledger> advise --context context.json --graph graph.json --record next-choice --brief
+python -B scripts/rds_cli.py --root <source-directory> exec --name probe-002 --timeout 30 --context context.json --graph graph.json --ledger <existing-ledger> -- python -B probe.py
+```
+
+If exactly one `READY` candidate remains, its identity is completed automatically. Otherwise supply `--choose <candidate-id>` from the advice. This records the caller's planned route, not scientific acceptance. The prospective `exec` reviews the current ledger, records the choice **before execution**, then records the execution identity afterward in that same ledger. Unchanged rejected routes are unavailable; changed relevant facts, premises or scope can reopen review. Unknown prerequisites, ambiguity or corrupt history cannot authorize a quick research run. An `exec` without context/ledger is explicitly an operational wrapper and does not claim direction selection.
+
+Prospective child jobs consume a conservative wall allowance in that same parent ledger before launch; unspent allowance is not refunded. Changing a job name or creating a fresh child directory cannot replenish it. Quick execution requires a wall-only parent budget; multi-resource work needs an explicit project manifest. The original human deadline and authorization still apply.
+
+## Record a scoped rejection
+
+```powershell
+python -B scripts/rds_cli.py --root <existing-ledger> reject --reason "declared scoped counterexample" --evidence witness.json
+```
+
+The latest matching checkpoint supplies the question ID, goal revision, scope, candidate and contemporaneous facts. `--route` can verify the expected candidate. The tool retains the original witness bytes and hash, reason and previous checkpoint identity. Missing context produces an actionable error. It never infers a mathematical counterexample from a failed process or permanently bans a route outside its recorded scope.
+
+Inside Python, the same entry is available from the skill's `scripts` directory:
+
+```python
+from rds_quick import record_falsification
+record_falsification(ledger_root, witness=bad_example_dict, reason="why this scoped claim fails")
+```
+
+This records caller-declared falsification with `RECORDED_INPUT_NOT_SCIENTIFIC_VERIFICATION` assurance. Run the appropriate exact checker separately when required.
+
+## Output and tolerant spelling
+
+New `exec`/`reject` commands return a compact digest by default; `--json` returns their full report. `advise`, `project status`, `status`, `formal verify` and `formal check` support `--brief`/`--digest`. Full JSON is retained in `.rds/cas/<sha256>.json`; original execution logs remain intact in the runner's artifact directory. Counts are local ledger counts, not proof of scientific use or autonomy.
+
+Research progress reports using RDS lead with the latest genuine digest's `badge`. If no current record exists, say `UNKNOWN`; do not copy a historical PASS. Only direct checked formal results can give a formal verdict, and the actual assurance/application status remains separate. A successful operational wrapper does not supply a Formal PASS badge.
+
+Exact commands take priority, followed by explicit aliases and unique command prefixes. Examples: `advisor`/`review` → `advise`, `proj` → `project`, `cp` → `checkpoint`, `execute` → `exec`, `deny` → `reject`, `calls` → `usage`; Chinese aliases include `审查`, `执行`, `否决`, `检查点`, `项目`, `调用`, `状态`. `--workspace` and `--project-root` alias `--root`, including after the subcommand; `--context` aliases `--research-context`. Ambiguous `adv` reports `advise, advancement`; a typo receives repair suggestions. Values, budgets, paths, witness contents and the wrapped argv after `--` are never fuzzy-normalized.
+
+## Performance and design provenance
+
+Pure Frontier queries skip the unrelated judgment graph and ML recommendations. No persistent cached proof or scientific truth is introduced. Measure real local timings and output bytes before making speed/token claims; desktop/network reconnection time is outside this CLI measurement.
+
+The interface follows independently implemented standard practices also observable in Claude Code: ranked command/alias suggestions, exact matches taking precedence, and definitions loaded when needed. The [official MCP guide](https://code.claude.com/docs/en/mcp#scale-with-mcp-tool-search) documents deferred tool discovery. The [official exact-match bug report](https://github.com/anthropics/claude-code/issues/19259) illustrates the need to separate fuzzy suggestions from execution. A bounded inspection of a third-party 2.1.88 source-map reconstruction informed the comparison; it is an old snapshot, not an authenticated current Anthropic source commit. No reconstructed code or dependency was copied into RDS.

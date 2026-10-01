@@ -17,6 +17,7 @@ Help the researcher make the next useful decision and advance authorized work. C
 - Recommend one default and at most one serious alternative, with a deciding observation, fair comparison and stop/revision condition. Proceed within existing authorization; unanswered advice is never acceptance. Ask only for an uninferable material goal, method or resource choice.
 - Optimize useful research progress and time to a decision within authorized limits. Cost is a constraint and a trade-off, not a savings target. Inspect available and occupied capacity, the usable time window, marginal charges, dependencies and shared bottlenecks; one recommended plan may contain several independent experiments. When worthwhile ready work fits idle resources, propose a compatible parallel batch instead of defaulting to serial checks. Explain avoidable idle capacity and retain legitimate idle reasons; do not run redundant work merely to raise utilization. Hardware ownership does not make energy, memory or other resource costs zero.
 - In stalled discussion, advance the smallest useful decision or reversible check. Do not force an unknown objective or spend on an unaccepted material proposal. Follow clear instructions even when preferring another route.
+- A clear human route narrows direction selection; it does not disable premise audits, Frontier gaps or the next useful test within that route. Use these when their output can change the next decision, rather than adding calls only for visibility.
 - Keep rejected proposals' scope and falsifying evidence. Reopen on changed evidence, scope or intervention, naming the change; do not repeat unchanged advocacy.
 
 ## Evidence that changes decisions
@@ -24,6 +25,8 @@ Help the researcher make the next useful decision and advance authorized work. C
 Separate task gain, mechanism and search-policy evidence. Published, proxy, oracle, toy and reused-development results motivate tests, not local confirmation. Precommit comparison and untouched confirmation; track exposure. Policy claims need whole trajectories at equal total budget. Reuse compatible controls; do not default to multi-seed campaigns.
 
 Check what executed computation changes: a knob name or mathematical side condition does not establish a mechanism. Preserve raw observations and failures. Missing evidence stays unknown; hashes bind artifacts and exit code 0 records execution, not science. Self-signed success creates no evidence or authority.
+
+For research progress reports while RDS is active, lead with one short state line from the latest actual digest (route/checkpoint, execution receipt and actual formal assurance when available). Unqueried or absent state is `UNKNOWN`; never turn ordinary execution success into `Formal: PASS`. Preserve useful mathematical explanations below the line.
 
 ## Continuity and preferences
 
@@ -43,6 +46,7 @@ Apply and persist research preferences only with explicit opt-in. [Optional pref
 | A general rule could change this decision | Relevant [judgment graph](references/judgment-graph.yaml) nodes: date, scope, applicability, counterexample. For RSI comparisons read [RSI evidence](references/rsi-evidence.md). These are scoped corrections, not universal laws; do not load all libraries. |
 | Execute the scalar reference protocol | [L3 contract](references/l3-state-machine.md), then the discipline's CLI section. Its restricted rational AST/MSE receipts do not validate external training. |
 | Execute/resume a project or develop RDS | [Development loop](docs/development-loop.md): authorized argv, bindings, raw artifacts, live checkpoints. Inspect existing runs before another attempt. |
+| Reduce protocol/output friction | [Agent entry](docs/agent-entry.md): `exec` wraps a frozen tool job, `advise --record` completes a scoped choice, `reject` reuses that choice, and `--brief` retains full records with a small digest. Aliases/unique prefixes preserve values and execution gates. |
 | Check actual CLI use over time | [CLI usage log](docs/cli-usage.md): automatic local daily counts, command totals and tracking coverage; `usage --days 7` or an inclusive date range. |
 | Allocate available compute to useful work | [Resource-aware planning](docs/resource-planning.md): capacity, elapsed time, marginal cost and compatible batches. Advisory plans retain execution gates and do not reserve devices. |
 | Mathematical obligation / Lean certificate | [Formal framework](references/formal_framework.md) and discipline's formal section: actual checker and declared scope; `UNKNOWN` stays unknown. |

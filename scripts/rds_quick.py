@@ -1,0 +1,344 @@
+"""Small CLI adapters over the existing runner and checkpoint ledger.
+
+Completion supplies file identities and operational fields, never scientific facts.
+"""
+import ast
+from copy import deepcopy
+import hashlib
+import json
+from pathlib import Path
+import re
+import time
+
+from rds_project import ProjectStore, canonical, digest, file_sha, number, require
+
+MAX_INPUT_BYTES = 2 * 1024 * 1024
+MAX_FILES = 128
+MAX_TOTAL_BYTES = 64 * 1024 * 1024
+
+
+def cas_json(root, value):
+    raw = canonical(value).encode('utf-8')
+    sha = hashlib.sha256(raw).hexdigest()
+    directory = Path(root).resolve() / '.rds' / 'cas'
+    require(directory.resolve().is_relative_to(Path(root).resolve()), 'CAS escapes project root')
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / (sha + '.json')
+    try:
+        with path.open('xb') as handle:
+            handle.write(raw)
+    except FileExistsError:
+        require(file_sha(path) == sha, 'CAS integrity failure')
+    return {'sha256': sha, 'path': str(path), 'bytes': len(raw)}
+
+
+def latest_decision(root, checkpoint_id=None):
+    """Reuse recovery's integrity checks; do not infer a question from directory names."""
+    from rds_checkpoints import restore_checkpoint
+    store = ProjectStore(root)
+    snapshot = store.snapshot(check_bindings=True)
+    with store._db(True) as db:
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='checkpoints'").fetchone():
+            raise ValueError('No decision context: record a scoped choice with advise --choose --record first')
+        row = (db.execute('SELECT id FROM checkpoints WHERE id=?', (checkpoint_id,)).fetchone() if checkpoint_id
+               else db.execute('SELECT id FROM checkpoints ORDER BY rowid DESC LIMIT 1').fetchone())
+    require(row is not None, 'No recorded decision context')
+    restored = restore_checkpoint(root, row['id'], snapshot, kind='project')
+    require(restored['status'] != 'CONFLICT', 'Checkpoint conflicts with live project bindings')
+    decision = restored['decision']
+    require(all(k in decision for k in ('question_id', 'goal_revision', 'scope', 'candidate', 'evidence')),
+            'Latest checkpoint has no scoped route; supply advise --context --choose --record')
+    return decision, restored
+
+
+def choice(advice, context, candidate_id=None):
+    from rds_advisor import _scope, _text, _loop_route
+    decision = context.get('decision', {})
+    require(isinstance(decision, dict) and _text(decision.get('id')) and _text(decision.get('goal_revision')),
+            'Recording a choice needs decision.id and goal_revision in the context')
+    _scope(decision.get('scope'))
+    available = [c for r in advice.get('recommendations', []) if r.get('type') == 'EXECUTABLE_DIRECTION_SEARCH'
+                 for c in r['search']['candidates']]
+    matches = ([c for c in available if c.get('status') == 'READY'] if candidate_id is None else
+               [c for c in available if c.get('id') == candidate_id or c.get('action', {}).get('id') == candidate_id])
+    require(len(matches) == 1, 'Choose one returned candidate ID; missing, pruned or ambiguous candidate')
+    candidate = matches[0]
+    require(candidate.get('status') == 'READY', 'Candidate still needs evidence; inspect its pending prerequisites')
+    require(not any(f.get('kind') == 'LOOP_HISTORY_REVIEW_ERROR' for r in advice.get('recommendations', [])
+                    for f in r.get('review', {}).get('flags', [])), 'Repair checkpoint integrity before executing a candidate')
+    require(_loop_route(candidate) is not None, 'Candidate has no structured route identity')
+    return {'question_id': decision['id'], 'goal_revision': decision['goal_revision'],
+              'scope': deepcopy(decision['scope']), 'candidate': deepcopy(candidate),
+              'outcome': 'plan_locked', 'evidence': deepcopy(context.get('facts', {})),
+              'scientific_support': 'UNKNOWN'}
+
+
+def record_choice(root, advice, context, candidate_id, checkpoint_id):
+    from rds_checkpoints import save_checkpoint
+    record = choice(advice, context, candidate_id)
+    record['advice'] = cas_json(root, advice)
+    saved = save_checkpoint(root, checkpoint_id, ProjectStore(root).snapshot(check_bindings=True),
+                            kind='project', decision=record)
+    saved['candidate_id'] = record['candidate']['id']
+    return saved
+
+
+def reject_route(args):
+    from rds_checkpoints import save_checkpoint
+    decision, previous = latest_decision(args.root)
+    require(isinstance(args.reason, str) and args.reason.strip() and len(args.reason) <= 512, 'Rejection reason must contain 1–512 characters')
+    candidate = decision['candidate']
+    names = {candidate.get('id'), candidate.get('action', {}).get('id')}
+    route = args.route or candidate.get('id') or candidate.get('action', {}).get('id')
+    require(route in names, 'Route does not match the current recorded candidate; select it with advise --choose --record')
+    path = Path(args.evidence).resolve()
+    require(path.is_file(), 'Falsifying evidence must be an existing file')
+    # Read bounded original bytes; a label or exit status is not a proof.
+    with path.open('rb') as handle:
+        raw = handle.read(MAX_INPUT_BYTES + 1)
+    require(len(raw) <= MAX_INPUT_BYTES, 'Evidence exceeds 2 MiB; supply a bounded witness or certificate')
+    witness = {'source_path': str(path), 'sha256': hashlib.sha256(raw).hexdigest(),
+               'size': len(raw), 'assurance': 'RECORDED_INPUT_NOT_SCIENTIFIC_VERIFICATION'}
+    directory = Path(args.root).resolve() / '.rds' / 'cas'
+    require(directory.resolve().is_relative_to(Path(args.root).resolve()), 'CAS escapes project root')
+    directory.mkdir(parents=True, exist_ok=True)
+    copy = directory / (witness['sha256'] + '.bin')
+    try:
+        with copy.open('xb') as handle:
+            handle.write(raw)
+    except FileExistsError:
+        require(file_sha(copy) == witness['sha256'], 'Witness CAS integrity failure')
+    witness['path'] = str(copy)
+    decision = {**decision, 'outcome': 'rejected', 'reason': args.reason,
+                'falsification': witness, 'previous_checkpoint': previous['id']}
+    checkpoint_id = args.id or 'reject-' + str(time.time_ns())
+    saved = save_checkpoint(args.root, checkpoint_id, ProjectStore(args.root).snapshot(check_bindings=True),
+                            kind='project', decision=decision)
+    return {'status': 'RECORDED_REJECTION', 'route': route, 'checkpoint': saved,
+            'evidence': witness, 'scientific_support': 'UNKNOWN', 'execution_started': False}
+
+
+def record_falsification(root, *, witness, reason, route=None):
+    """Python entry for a declared counterexample, using the same checkpoint gates."""
+    from types import SimpleNamespace
+    raw = canonical(witness).encode('utf-8')
+    require(isinstance(witness, dict) and len(raw) <= MAX_INPUT_BYTES, 'Witness must be a bounded JSON object')
+    ref = cas_json(root, witness)
+    return reject_route(SimpleNamespace(root=root, route=route, reason=reason, evidence=ref['path'], id=None))
+
+
+def _charge_ledger(root, workspace, request, seconds):
+    """Conservatively charge external controller work to the existing budget.
+
+    This decreases allowance; it never extends the contract or grants execution
+    authority. The child still has its own frozen command and run admission.
+    """
+    store = ProjectStore(root)
+    with store._db() as db:
+        db.execute('BEGIN IMMEDIATE')
+        contract = store._contract(db)
+        require(set(contract['budget']) == {'wall_seconds'}, 'Quick exec supports a wall-only parent ledger; use a full project manifest for other resources')
+        _, errors = store._bindings(contract)
+        require(not errors, '; '.join(errors))
+        amount = number(seconds, 'external wall allowance', True)
+        row = db.execute("SELECT * FROM budget WHERE resource='wall_seconds'").fetchone()
+        require(row['spent'] + row['charged'] + row['reserved'] + amount <= row['cap'] + 1e-9,
+                'Insufficient parent ledger wall_seconds budget')
+        event = {'kind': 'EXTERNAL_RUN_ALLOWANCE', 'job_root': str(workspace), 'request_sha256': digest(request),
+                 'resource': 'wall_seconds', 'amount': amount, 'accounting': 'CONSERVATIVE_ALLOWANCE',
+                 'execution_authority': 'UNCHANGED'}
+        require(db.execute("SELECT 1 FROM events WHERE json_extract(body,'$.kind')='EXTERNAL_RUN_ALLOWANCE' AND json_extract(body,'$.job_root')=? LIMIT 1",
+                           (str(workspace),)).fetchone() is None, 'External job allowance already consumed; inspect its preserved state')
+        db.execute("UPDATE budget SET charged=charged+? WHERE resource='wall_seconds'", (amount,))
+        db.execute('INSERT INTO events(body) VALUES (?)', (canonical(event),))
+
+
+def _checkpoint_name(stage, name):
+    value = 'exec-' + stage + '-' + name
+    return value if len(value) <= 64 else 'exec-' + stage + '-' + digest(name)[:48]
+
+
+def _inputs(root, argv, binds):
+    """Bound existing argv files and static local Python imports, once per file.
+
+    Dynamic imports, environment reads and remote files require explicit --bind.
+    """
+    files, pending, raw_by_path = {}, [], {}
+    total = 0
+
+    def add(value, role):
+        path = (root / value).resolve()
+        require(path.is_relative_to(root) and not path.is_relative_to((root / '.rds').resolve()), 'Input escapes source root or addresses operational state')
+        require(path.is_file(), 'Input file unavailable: ' + value)
+        if path not in raw_by_path:
+            with path.open('rb') as handle:
+                raw = handle.read(MAX_INPUT_BYTES + 1)
+            require(len(raw) <= MAX_INPUT_BYTES, 'Input exceeds 2 MiB: ' + value)
+            raw_by_path[path] = raw
+            pending.append(path)
+        files.setdefault(path, set()).add(role)
+        if path.suffix == '.py':
+            parent = path.parent
+            while parent != root:
+                init = parent / '__init__.py'
+                if init.is_file() and init not in raw_by_path:
+                    add(init.relative_to(root).as_posix(), 'code')
+                parent = parent.parent
+
+    for value in argv[1:]:
+        if not value.startswith('-') and (root / value).is_file():
+            add(value, 'code' if Path(value).suffix == '.py' else 'data')
+    for binding in binds:
+        role, sep, value = binding.partition('=')
+        require(sep and role in {'code', 'config', 'data', 'evaluator'}, '--bind expects code|config|data|evaluator=relative/path')
+        add(value, role)
+    while pending:
+        path = pending.pop()
+        raw = raw_by_path[path]
+        total += len(raw)
+        require(len(files) <= MAX_FILES and total <= MAX_TOTAL_BYTES, 'Input discovery exceeds 128 files or 64 MiB; use an explicit project contract')
+        if path.suffix != '.py':
+            continue
+        try:
+            tree = ast.parse(raw)
+        except (SyntaxError, ValueError) as exc:
+            raise ValueError('Cannot inspect Python input: ' + str(path)) from exc
+        for node in ast.walk(tree):
+            names = [n.name for n in node.names] if isinstance(node, ast.Import) else [node.module or ''] if isinstance(node, ast.ImportFrom) else []
+            for name in names:
+                parts = name.split('.') if name else []
+                bases = [path.parent, root]
+                if isinstance(node, ast.ImportFrom) and node.level:
+                    base = path.parent
+                    for _ in range(node.level - 1):
+                        base = base.parent
+                    bases = [base]
+                for base in bases:
+                    stem = base.joinpath(*parts)
+                    candidates = [stem.with_suffix('.py'), stem / '__init__.py'] if parts else []
+                    if isinstance(node, ast.ImportFrom):
+                        candidates += [stem / (alias.name + '.py') for alias in node.names]
+                    for local in candidates:
+                        if local.is_file():
+                            add(str(local.relative_to(root)), 'code')
+    require(any('code' in roles for roles in files.values()), 'Bind at least one code file; inline commands need --bind code=...')
+    return files, raw_by_path
+
+
+def execute(args, review=None):
+    """Create one frozen normal ProjectStore per named job, without JSON boilerplate."""
+    root = Path(args.root).resolve()
+    require(root.is_dir(), 'Source root must exist')
+    require(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}', args.name or ''), 'Job name must contain 1–64 safe identifier characters')
+    timeout = number(args.timeout, 'timeout', True)
+    require(timeout <= 3600, 'Quick exec is bounded to 3600 seconds; use project execute --background for longer jobs')
+    argv = list(args.argv)
+    if argv[:1] == ['--']:
+        argv.pop(0)
+    require(argv, 'Supply the command after --')
+    if review is not None:
+        selected = choice(review[0], review[1], args.choose)  # Reject ambiguity before creating a job.
+        args.choose = selected['candidate']['id']
+    argv[0] = ProjectStore._command(argv)
+    files, raw_by_path = _inputs(root, argv, args.bind)
+    request = {'argv': argv, 'timeout': timeout, 'outputs': args.output,
+               'inputs': [{'path': p.relative_to(root).as_posix(), 'roles': sorted(roles),
+                           'sha256': hashlib.sha256(raw_by_path[p]).hexdigest()} for p, roles in sorted(files.items())]}
+    if review is not None:
+        request['research_context'] = {'sha256': digest(review[1]), 'candidate': args.choose,
+                                       'ledger': str(Path(args.ledger).resolve())}
+    workspace = root / '.rds' / 'exec' / args.name
+    require(workspace.resolve().is_relative_to(root), 'Exec workspace escapes root')
+    if workspace.exists():
+        from rds_project import load_json
+        previous = load_json(workspace / 'rds-exec-request.json')
+        require(previous == request, 'Job identity is frozen; changed inputs need a new --name')
+        state = ProjectStore(workspace).snapshot(check_bindings=True)
+        require(not state['binding_check']['errors'], 'Frozen job bindings changed')
+        receipt = next((r for r in state['receipts'] if r['run_id'] == args.name), None)
+        return {'status': 'EXISTING_JOB', 'job_root': str(workspace), 'receipt': receipt,
+                'execution_started': False, 'scientific_support': 'UNKNOWN'}
+    if review is not None:
+        _charge_ledger(args.ledger, workspace, request, timeout)
+    workspace.mkdir(parents=True)
+    bindings = []
+    for p, roles in files.items():
+        target = workspace / p.relative_to(root)
+        require(not target.name.startswith('rds-exec-'), 'Input uses a reserved rds-exec- filename')
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(raw_by_path[p])
+        for role in roles:
+            bindings.append({'path': target.relative_to(workspace).as_posix(), 'sha256': file_sha(target), 'role': role})
+    metadata = {'kind': 'OPERATIONAL_COMMAND_WRAPPER', 'request': request,
+                'input_discovery': 'ARGV_FILES_AND_STATIC_LOCAL_PYTHON_IMPORTS',
+                'hidden_inputs': 'UNKNOWN', 'evaluator': 'EXIT_CODE_AND_DECLARED_OUTPUT_EXISTENCE_ONLY',
+                'scientific_support': 'UNKNOWN'}
+    for name, value in [('rds-exec-request.json', request), ('rds-exec-metadata.json', metadata)]:
+        (workspace / name).write_text(canonical(value), encoding='utf-8')
+    bindings.append({'path': 'rds-exec-request.json', 'sha256': file_sha(workspace / 'rds-exec-request.json'), 'role': 'config'})
+    for role in ('config', 'data', 'evaluator'):
+        if not any(b['role'] == role for b in bindings):
+            bindings.append({'path': 'rds-exec-metadata.json', 'sha256': file_sha(workspace / 'rds-exec-metadata.json'), 'role': role})
+    # Missing scientific identity is explicit UNKNOWN, not guessed from filenames.
+    protocol = {k: 'UNKNOWN' for k in ('data_split', 'init', 'seed', 'checkpoint', 'schedule', 'sample_work', 'numeric_protocol')}
+    protocol.update({role + '_sha256': ProjectStore._role_sha({'bindings': bindings}, role) for role in ('code', 'config', 'data')})
+    protocol['purpose'] = 'OPERATIONAL_COMMAND_WRAPPER'
+    (workspace / 'rds-exec-protocol.json').write_text(canonical(protocol), encoding='utf-8')
+    bindings.append({'path': 'rds-exec-protocol.json', 'sha256': file_sha(workspace / 'rds-exec-protocol.json'), 'role': 'protocol'})
+    # Absolute source-file arguments must refer to their frozen copies.
+    frozen_argv = [argv[0]] + [str(Path(v).resolve().relative_to(root)) if Path(v).is_absolute() and Path(v).resolve() in files else v for v in argv[1:]]
+    store = ProjectStore(workspace)
+    output_roots = sorted({Path(p).parts[0] for p in args.output}) or ['outputs']
+    contract = {'schema': 1, 'bindings': bindings, 'allowed_commands': [frozen_argv],
+                'output_roots': output_roots, 'budget': {'wall_seconds': timeout}, 'description': 'Explicitly invoked frozen tool command; not an OS sandbox or science verdict'}
+    store.initialize(contract)
+    if review is not None:
+        require(args.ledger, '--context for exec needs an existing --ledger for prospective decisions')
+        record_choice(args.ledger, review[0], review[1], args.choose, _checkpoint_name('before', args.name))
+    manifest = {'schema': 1, 'id': args.name, 'arm': 'tool', 'control_id': None,
+                'protocol': {'path': 'rds-exec-protocol.json', 'sha256': file_sha(workspace / 'rds-exec-protocol.json')},
+                'argv': frozen_argv, 'outpaths': args.output, 'timeout_seconds': timeout,
+                'resource_estimates': {'wall_seconds': timeout}, 'description': 'Frozen quick exec'}
+    store.register(manifest)
+    receipt = store.execute(args.name, background=args.background)
+    if review is not None:
+        from rds_checkpoints import save_checkpoint
+        decision, _ = latest_decision(args.ledger, _checkpoint_name('before', args.name))
+        decision = {**decision, 'execution': {'job_root': str(workspace), 'receipt_sha256': receipt.get('sha256'),
+                                            'run_status': receipt.get('run_status', 'UNKNOWN')},
+                    'pending_evidence': ['Assess the original output; completion alone does not reject or prove a hypothesis']}
+        save_checkpoint(args.ledger, _checkpoint_name('after', args.name), ProjectStore(args.ledger).snapshot(), kind='project', decision=decision)
+    return {'status': receipt.get('run_status', 'UNKNOWN'), 'job_root': str(workspace),
+            'receipt': receipt, 'execution_started': True, 'scientific_support': 'UNKNOWN'}
+
+
+def brief(root, value, version, formal=False):
+    """Persist full output and expose a bounded, truthful operational digest."""
+    ref = cas_json(root, value)
+    summary = {'status': value.get('status', value.get('run_status', 'RECORDED')), 'sha256': ref['sha256'], 'record': ref['path']}
+    if 'recommendations' in value:
+        summary['gaps'] = sum(len(r.get('frontier', {}).get('gaps', [])) for r in value['recommendations'])
+        summary['candidates'] = [c.get('id') for r in value['recommendations'] for c in r.get('search', {}).get('candidates', [])][:3]
+        summary['flags'] = [f.get('kind') for r in value['recommendations'] for f in r.get('review', {}).get('flags', [])][:3]
+    if 'job_root' in value:
+        summary['job_root'] = value['job_root']
+        summary['run_status'] = (value.get('receipt') or {}).get('run_status', 'UNKNOWN')
+    if 'checkpoint' in value:
+        summary['checkpoint'] = value['checkpoint'].get('id')
+        summary['route'] = value['checkpoint'].get('candidate_id', value.get('route'))
+    if isinstance(value.get('runs'), list):
+        summary['runs'] = len(value['runs'])
+        summary['receipts'] = len(value.get('receipts', []))
+    assurance = value.get('assurance') if formal else None
+    formal_status = value.get('status', 'UNKNOWN') if formal and assurance in {'CERTIFICATE_CHECKED', 'LEAN_KERNEL_CHECKED'} else 'UNKNOWN'
+    if formal:
+        summary['formal_assurance'] = assurance or 'NONE'
+        summary['application_status'] = value.get('application_status', 'UNKNOWN')
+    ledger = Path(root).resolve() / '.rds' / 'project.sqlite3'
+    if ledger.is_file():
+        store = ProjectStore(root)
+        with store._db(True) as db:
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='checkpoints'").fetchone():
+                summary['ledger_checkpoints'] = db.execute('SELECT COUNT(*) FROM checkpoints').fetchone()[0]
+    summary['badge'] = f'[RDS {version} | State: {summary["status"]} | Ledger: {summary.get("ledger_checkpoints", "UNKNOWN")} | Formal: {formal_status} | Record: {ref["sha256"][:8]}]'
+    return summary

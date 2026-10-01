@@ -397,7 +397,9 @@ class ProjectStore:
             require(isinstance(protocol_ref, dict) and set(protocol_ref) == {"path", "sha256"}, "Protocol must bind a file and SHA256")
             require(any(b["role"] == "protocol" and b["path"] == protocol_ref["path"] and b["sha256"] == protocol_ref["sha256"] for b in contract["bindings"]), "Protocol is not bound by contract")
             protocol = load_json(self._path(protocol_ref["path"]))
-            require(isinstance(protocol, dict) and all(k in protocol for k in IDENTITY), "Protocol identity fields required")
+            require(isinstance(protocol, dict), "Protocol must be an object")
+            missing = [k for k in IDENTITY if k not in protocol]
+            require(not missing, "Protocol identity fields required: " + ", ".join(missing) + "; exec can complete operational identity fields")
             require(not {"path", "sha256"} & set(protocol), "Protocol identity uses reserved fields")
             for role in ("code", "config", "data"):
                 require(protocol[role + "_sha256"] == self._role_sha(contract, role), "Protocol identity conflicts with bindings")

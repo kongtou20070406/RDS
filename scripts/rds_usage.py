@@ -8,7 +8,7 @@ import time
 
 COMMANDS = {"init", "hypothesis", "gate", "plan", "run", "data", "decide", "status",
             "project", "checkpoint", "artifacts", "formal", "meta", "history", "advise",
-            "advancement", "branch", "usage"}
+            "advancement", "branch", "usage", "exec", "reject"}
 _last_error = None
 
 
@@ -45,7 +45,7 @@ def _label(argv):
     for token in argv:
         if skip:
             skip = False
-        elif token == "--root":
+        elif token in {"--root", "--workspace", "--project-root"}:
             skip = True
         elif token in COMMANDS:
             command = token

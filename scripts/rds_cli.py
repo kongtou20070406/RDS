@@ -7,6 +7,7 @@ JSON cannot certify manipulation, metric gain, final authorization or success.
 """
 import argparse
 import ast
+import difflib
 from contextlib import contextmanager
 from copy import deepcopy
 from fractions import Fraction
@@ -108,6 +109,7 @@ def engine_id():
     here = Path(__file__).resolve().parent
     from rds_verify import verifier_id
     return digest({"cli": digest((here / "rds_cli.py").read_bytes()),
+                   "quick": digest((here / "rds_quick.py").read_bytes()),
                    "usage": digest((here / "rds_usage.py").read_bytes()),
                    "probe": digest((here / "rds_probe.py").read_bytes()),
                    "formal_kernel": digest((here / "rds_formal_kernel.py").read_bytes()),
@@ -867,7 +869,6 @@ def cmd_meta(args, rds):
 
 def cmd_advise(args, rds):
     from rds_advisor import RDSAdvisor
-    from rds_meta import load_judgment_graph
     require(not getattr(args, "research_note", None),
             "--research-note is retired; use checkpoint save --decision and a scoped --research-context")
     has_train = getattr(args, "train_loss", None) is not None
@@ -1008,7 +1009,13 @@ def cmd_advise(args, rds):
                 or isinstance(decision_id, str) and bool(decision_id.strip()),
                 "--templates with frontier input requires an explicit direction-search decision")
         state["advisor_templates"] = load_spec(args.templates)
-    _, graph = load_judgment_graph(getattr(args, "graph", None))
+    frontier_only = isinstance(state.get("advisor_context"), dict) and "frontier" in state["advisor_context"] and "decision" not in state["advisor_context"]
+    require(not frontier_only or not getattr(args, "graph", None), "--graph needs an explicit direction-search decision")
+    if frontier_only:
+        graph = {}
+    else:
+        from rds_meta import load_judgment_graph
+        _, graph = load_judgment_graph(getattr(args, "graph", None))
     recommendations = advisor.recommend_next_directions(state, graph)
     result = {
         "advisor_type": "STRATEGIC_RESEARCH_ADVICE",
@@ -1018,6 +1025,10 @@ def cmd_advise(args, rds):
     }
     if imported is not None:
         result["artifact_import"] = imported
+    if getattr(args, "record", None) or getattr(args, "choose", None):
+        require(getattr(args, "record", None), "--choose needs --record; omit --choose only when one READY candidate remains")
+        from rds_quick import record_choice
+        result["checkpoint"] = record_choice(args.root, result, state.get("advisor_context", {}), args.choose, args.record)
     return result
 
 
@@ -1110,11 +1121,106 @@ def cmd_checkpoint(args, rds):
     return restore_checkpoint(args.root, args.id, snapshot, kind=kind)
 
 
+class FriendlyParser(argparse.ArgumentParser):
+    """Exact commands first, documented aliases second, unique prefixes last.
+
+    Never approximate paths/values or the command after --. Typos receive a
+    repair hint rather than triggering a different operation.
+    """
+    def parse_args(self, args=None, namespace=None):
+        tokens = list(sys.argv[1:] if args is None else args)
+        boundary = tokens.index("--") if "--" in tokens else len(tokens)
+        front, tail = tokens[:boundary], tokens[boundary:]
+        def all_options(parser):
+            options = dict(parser._option_string_actions)
+            for action in parser._actions:
+                if isinstance(action, argparse._SubParsersAction):
+                    for child in action.choices.values():
+                        options.update(all_options(child))
+            return options
+        options = all_options(self)
+        globals_, remaining, i = [], [], 0
+        while i < len(front):
+            key = front[i].split("=", 1)[0]
+            if key in {"--root", "--workspace", "--project-root"}:
+                require(not globals_, "Supply one project root")
+                if "=" in front[i]:
+                    globals_ = ["--root", front[i].split("=", 1)[1]]
+                else:
+                    if i + 1 >= len(front):
+                        self.error(key + " requires a path")
+                    globals_ = ["--root", front[i + 1]]
+                    i += 1
+            else:
+                remaining.append(front[i])
+                action = options.get(key)
+                if action is not None and action.nargs != 0 and '=' not in front[i]:
+                    count = action.nargs if isinstance(action.nargs, int) else 1
+                    remaining.extend(front[i + 1:i + 1 + count])
+                    i += count
+            i += 1
+        current, result, i = self, [], 0
+        aliases = {"exec": {"execute", "执行"}, "advise": {"advisor", "review", "审查"},
+                   "reject": {"deny", "否决"}, "checkpoint": {"cp", "检查点"},
+                   "project": {"proj", "项目"}, "usage": {"calls", "调用"}, "status": {"状态"},
+                   "execute": {"exec", "执行"}, "save": {"record", "保存"}, "restore": {"resume", "恢复"}}
+        while i < len(remaining):
+            token = remaining[i]
+            if token.startswith("-"):
+                key = token.split("=", 1)[0]
+                action = current._option_string_actions.get(key)
+                if action is None:
+                    opts = [v for v in current._option_string_actions if v.startswith(key)]
+                    action = current._option_string_actions[opts[0]] if len(opts) == 1 else None
+                result.append(token)
+                if action is not None and action.nargs != 0 and "=" not in token:
+                    count = action.nargs if isinstance(action.nargs, int) else 1
+                    result.extend(remaining[i + 1:i + 1 + count])
+                    i += count
+            else:
+                sub = next((a for a in current._actions if isinstance(a, argparse._SubParsersAction)), None)
+                if sub is not None:
+                    choices = sub.choices
+                    exact = next((v for v in choices if v.casefold() == token.casefold()), None)
+                    matches = ([exact] if exact else [v for v in choices if token.casefold() in aliases.get(v, set())])
+                    if not matches:
+                        matches = [v for v in choices if v.casefold().startswith(token.casefold())]
+                    if len(matches) != 1:
+                        suggestions = matches or difflib.get_close_matches(token, choices, n=3, cutoff=0.5)
+                        self.error("Ambiguous or unknown command " + token + "; candidates: " + ", ".join(suggestions))
+                    resolved = matches[0]
+                    if resolved != token:
+                        print("[RDS-RESOLVE] " + token + " -> " + resolved, file=sys.stderr)
+                    token = resolved
+                    current = choices[resolved]
+                result.append(token)
+            i += 1
+        return super().parse_args(globals_ + result + tail, namespace)
+
+
 def parser():
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--root", default=".")
+    p = FriendlyParser(description=__doc__)
+    p.add_argument("--root", "--workspace", "--project-root", default=".")
     p.add_argument("--version", action="version", version=VERSION)
     commands = p.add_subparsers(dest="command", required=True)
+    quick = commands.add_parser("exec", help="Freeze, bind and execute a local tool command without contract JSON")
+    quick.add_argument("--name", "--id", required=True)
+    quick.add_argument("--timeout", type=float, default=60, help="Wall cap in seconds (default 60, max 3600)")
+    quick.add_argument("--bind", action="append", default=[], help="Additional input: code|config|data|evaluator=relative/path")
+    quick.add_argument("--output", action="append", default=[], help="Required output path in the frozen job workspace")
+    quick.add_argument("--background", action="store_true", help="Use the existing Windows Task Scheduler runner")
+    quick.add_argument("--context", "--research-context", dest="research_context")
+    quick.add_argument("--graph")
+    quick.add_argument("--choose", help="Exact candidate ID from the direction review")
+    quick.add_argument("--ledger", help="Existing project ledger for prospective choice and execution feedback")
+    quick.add_argument("--json", action="store_true", help="Return the full operational receipt")
+    quick.add_argument("argv", nargs=argparse.REMAINDER)
+    reject = commands.add_parser("reject", help="Record a scoped rejection using the current choice, without decision JSON")
+    reject.add_argument("--route", help="Current candidate ID; default the single recorded route")
+    reject.add_argument("--reason", required=True)
+    reject.add_argument("--evidence", required=True)
+    reject.add_argument("--id")
+    reject.add_argument("--json", action="store_true")
     usage = commands.add_parser("usage", help="Show locally recorded daily CLI invocation counts")
     window = usage.add_mutually_exclusive_group()
     window.add_argument("--days", type=int, default=14)
@@ -1138,7 +1244,7 @@ def parser():
     expose.add_argument("--actor", required=True)
     expose.add_argument("--reason", required=True)
     commands.add_parser("decide").add_argument("--run", required=True)
-    commands.add_parser("status")
+    commands.add_parser("status").add_argument("--brief", "--digest", action="store_true")
 
     project = commands.add_parser("project", help="Locked local project runner with receipts and resource accounting")
     pr_actions = project.add_subparsers(dest="action", required=True)
@@ -1148,7 +1254,7 @@ def parser():
     pr_exec.add_argument("--id", required=True)
     pr_exec.add_argument("--background", action="store_true", help="Use a tool-owned Windows Task Scheduler task")
     pr_actions.add_parser("recover").add_argument("--id", required=True)
-    pr_actions.add_parser("status")
+    pr_actions.add_parser("status").add_argument("--brief", "--digest", action="store_true")
     pr_actions.add_parser("costs")
     pr_control = pr_actions.add_parser("control-check")
     pr_control.add_argument("--candidate", required=True)
@@ -1171,6 +1277,7 @@ def parser():
     f_actions = formal.add_subparsers(dest="action", required=True)
     f_actions.add_parser("rules")
     f_verify = f_actions.add_parser("verify")
+    f_verify.add_argument("--brief", "--digest", action="store_true")
     f_verify.add_argument("--spec", required=True)
     f_verify.add_argument("--output")
     f_verify.add_argument("--no-cache", action="store_true")
@@ -1178,6 +1285,7 @@ def parser():
                                                          "scale_invariance", "lean4", "rational", "interval"],
                           help="Run a bounded explicit tactic chain without the default proof cache")
     f_check = f_actions.add_parser("check")
+    f_check.add_argument("--brief", "--digest", action="store_true")
     f_check.add_argument("--spec", required=True)
     f_check.add_argument("--certificate", required=True)
 
@@ -1248,7 +1356,10 @@ def parser():
     adv.add_argument("--baseline-loss", default=None)
     adv.add_argument("--fit-telemetry", default=None, help="Paired, comparable curve observations for fit diagnosis")
     adv.add_argument("--literature", default=None, help="Search scoped local primary-source records")
-    adv.add_argument("--research-context", default=None, help="Sourced facts and the decision for bounded graph search")
+    adv.add_argument("--research-context", "--context", default=None, help="Sourced facts and the decision for bounded graph search")
+    adv.add_argument("--choose", help="Exact candidate ID to record as the caller's planned route")
+    adv.add_argument("--record", help="New checkpoint ID; use with --choose to complete the decision fields")
+    adv.add_argument("--brief", "--digest", action="store_true", help="Save full advice and return a bounded digest")
     adv.add_argument("--frontier", help="Versioned research graph and evidence for bounded graph-outside exploration questions")
     adv.add_argument("--frontier-proposals", help="AI proposed nodes/relations and discriminating tests; definition checks only")
     adv.add_argument("--research-note", help="Retired: use checkpoint save --decision with a scoped --research-context")
@@ -1266,7 +1377,11 @@ def parser():
 
 
 def _main():
-    args = parser().parse_args()
+    try:
+        args = parser().parse_args()
+    except ValueError as exc:
+        print("[RDS-REJECT] " + str(exc), file=sys.stderr)
+        return 1
     if args.command == "usage":
         from rds_usage import render, summarize
         try:
@@ -1304,7 +1419,11 @@ def _main():
                     raw = canonical(result).encode("utf-8")
                     require(len(raw) <= MAX_CERTIFICATE_BYTES, "Proof artifact exceeds byte limit")
                     Path(args.output).write_bytes(raw)
-            print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
+            if getattr(args, "brief", False):
+                from rds_quick import brief
+                print(json.dumps(brief(args.root, result, VERSION, formal=True), ensure_ascii=False, separators=(",", ":"), allow_nan=False))
+            else:
+                print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
             return {"PASS": 0, "FAIL": 1, "UNKNOWN": 2}.get(result.get("status"), 0)
         if args.command == "advancement":
             from rds_advancement import evaluate_advancement
@@ -1313,6 +1432,19 @@ def _main():
             confirmations = (strict_json(read_bounded(args.confirmations, 1024 * 1024).decode("utf-8-sig"))
                              if args.confirmations else [])
             result = evaluate_advancement(protocol, trajectories, confirmations)
+        elif args.command == "exec":
+            from rds_quick import execute
+            require("--" in sys.argv[1:], "Separate the wrapped command with --; command arguments are never normalized")
+            review = None
+            require(bool(args.research_context) == bool(args.ledger) and (not args.choose or args.research_context),
+                    "Prospective exec needs --context and --ledger; --choose is optional only for one READY candidate")
+            if args.research_context:
+                review_args = argparse.Namespace(root=args.ledger, research_context=args.research_context, graph=args.graph)
+                review = (cmd_advise(review_args, RDSState(args.ledger)), load_spec(args.research_context))
+            result = execute(args, review=review)
+        elif args.command == "reject":
+            from rds_quick import reject_route
+            result = reject_route(args)
         elif args.command == "advise":
             result = cmd_advise(args, rds)
         elif args.command == "project":
@@ -1342,7 +1474,14 @@ def _main():
             result = cmd_decide(args, rds)
         else:
             result = cmd_status(args, rds)
-        print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
+        compact = getattr(args, "brief", False) or args.command in {"exec", "reject"} and not args.json
+        if compact:
+            from rds_quick import brief
+            print(json.dumps(brief(args.root, result, VERSION), ensure_ascii=False, separators=(",", ":"), allow_nan=False))
+        else:
+            print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
+        if args.command == "exec" and (result.get("receipt") or {}).get("run_status") in {"FAILED", "INTERRUPTED", "TIMED_OUT"}:
+            return 1
         if args.command in {"project", "run"} and args.action in {"execute", "recover"} and result.get("run_status") in {"FAILED", "INTERRUPTED", "TIMED_OUT"}:
             return 1
         if args.command == "meta" and args.action == "evaluate-rule" and not result.get("adoption_eligible"):

@@ -508,6 +508,8 @@ class RDSAdvisor:
             recommendations.append(_advice("STRATEGIC_RESEARCH_ADVICE", type="RESEARCH_FRONTIER", urgency="REVIEW",
                 reason="Use sourced graph gaps, residuals and integer dimensional constraints to ask for new relations.",
                 frontier=frontier, observations=frontier["gaps"], limitations=frontier["limitations"]))
+            if "decision" not in context:
+                return recommendations  # Pure frontier queries do not need unrelated ML advice or rule libraries.
         if context and (not isinstance(context, dict) or "decision" in context or "frontier" not in context):
             from rds_advisor_search import search_directions
             options = {"templates": state["advisor_templates"]} if state.get("advisor_templates") else {}

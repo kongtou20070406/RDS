@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Add compatible `exec` and `reject` entries over the existing frozen runner and checkpoint ledger; complete operational identities and known decision fields without handwritten protocol boilerplate.
+- Review scoped candidates before quick execution and retain its result for the next decision. Missing prerequisites, ambiguous choices and unchanged rejections cannot start a prospective research job.
+- Add compact digests with retained complete records, genuine state badges, command aliases, unique prefixes and actionable repair hints. Preserve original stdout/stderr, UNKNOWN scientific status and execution gates.
+- Skip unrelated rule loading and ML advice for pure Frontier queries. Measure output reduction and local runtime separately from scientific-policy improvement.
+
+These compatible new CLI features require the next MINOR release under `docs/versioning.md`; the current published 5.7.0 tag is unchanged.
+
+## Unreleased
+
 - Record local CLI invocation starts/exits automatically, across projects. Add `usage` with daily counts, inclusive date ranges, command/mode totals and JSON output; distinguish untracked history and preserve command behavior when logging fails. Keep prompts and argument payloads out of the log.
 
 - Let trusted proof rules declare supporting source files for verifier identity binding, and share bounded exact-JSON admission across framework/domain checkers. Bound containers before expansion; retain existing Boolean/null semantics with stricter domain options.
