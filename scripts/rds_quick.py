@@ -6,8 +6,10 @@ import ast
 from copy import deepcopy
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
+import sys
 import time
 
 from rds_project import ProjectStore, canonical, digest, file_sha, number, require
@@ -91,6 +93,11 @@ def reject_route(args):
     names = {candidate.get('id'), candidate.get('action', {}).get('id')}
     route = args.route or candidate.get('id') or candidate.get('action', {}).get('id')
     require(route in names, 'Route does not match the current recorded candidate; select it with advise --choose --record')
+    domain = None
+    if getattr(args, 'domain', None):
+        from rds_guard import read, validate_domain
+        domain, _ = read(args.domain)
+        validate_domain(domain, candidate)
     path = Path(args.evidence).resolve()
     require(path.is_file(), 'Falsifying evidence must be an existing file')
     # Read bounded original bytes; a label or exit status is not a proof.
@@ -111,6 +118,8 @@ def reject_route(args):
     witness['path'] = str(copy)
     decision = {**decision, 'outcome': 'rejected', 'reason': args.reason,
                 'falsification': witness, 'previous_checkpoint': previous['id']}
+    if domain is not None:
+        decision['rejected_domain'] = domain
     checkpoint_id = args.id or 'reject-' + str(time.time_ns())
     saved = save_checkpoint(args.root, checkpoint_id, ProjectStore(args.root).snapshot(check_bindings=True),
                             kind='project', decision=decision)
@@ -118,13 +127,18 @@ def reject_route(args):
             'evidence': witness, 'scientific_support': 'UNKNOWN', 'execution_started': False}
 
 
-def record_falsification(root, *, witness, reason, route=None):
+def record_falsification(root, *, witness, reason, route=None, domain=None):
     """Python entry for a declared counterexample, using the same checkpoint gates."""
     from types import SimpleNamespace
     raw = canonical(witness).encode('utf-8')
     require(isinstance(witness, dict) and len(raw) <= MAX_INPUT_BYTES, 'Witness must be a bounded JSON object')
+    if domain is not None:
+        from rds_guard import validate_domain
+        decision, _ = latest_decision(root)
+        validate_domain(domain, decision['candidate'])
     ref = cas_json(root, witness)
-    return reject_route(SimpleNamespace(root=root, route=route, reason=reason, evidence=ref['path'], id=None))
+    return reject_route(SimpleNamespace(root=root, route=route, reason=reason, evidence=ref['path'], id=None,
+                                       domain=cas_json(root, domain)['path'] if domain is not None else None))
 
 
 def _charge_ledger(root, workspace, request, seconds):
@@ -229,24 +243,52 @@ def execute(args, review=None):
     """Create one frozen normal ProjectStore per named job, without JSON boilerplate."""
     root = Path(args.root).resolve()
     require(root.is_dir(), 'Source root must exist')
-    require(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}', args.name or ''), 'Job name must contain 1–64 safe identifier characters')
     timeout = number(args.timeout, 'timeout', True)
     require(timeout <= 3600, 'Quick exec is bounded to 3600 seconds; use project execute --background for longer jobs')
     argv = list(args.argv)
     if argv[:1] == ['--']:
         argv.pop(0)
     require(argv, 'Supply the command after --')
+    if argv[0].endswith('.py') and (root / argv[0]).is_file():
+        argv = [sys.executable, '-B'] + argv
     if review is not None:
         selected = choice(review[0], review[1], args.choose)  # Reject ambiguity before creating a job.
         args.choose = selected['candidate']['id']
     argv[0] = ProjectStore._command(argv)
-    files, raw_by_path = _inputs(root, argv, args.bind)
+    guard_path, guard_seconds = None, 0
+    binds = list(args.bind)
+    if getattr(args, 'guard', None):
+        from rds_guard import policy_inputs, exact
+        require(not args.background, 'Synchronous regression review cannot run with --background; review the completed background receipt separately')
+        guard_path = (root / args.guard).resolve()
+        policy, dependencies = policy_inputs(guard_path, root)
+        guard_seconds = float(exact(policy.get('wall_seconds', 30)))
+        require(guard_seconds < timeout, 'Exec timeout must cover both the command and the guard wall cap')
+        require(all(row['candidate'] in args.output for row in policy.get('metrics', [])), 'Declare each guarded candidate using --output')
+        binds += ['data=' + p.relative_to(root).as_posix() for p in dependencies]
+    files, raw_by_path = _inputs(root, argv, binds)
     request = {'argv': argv, 'timeout': timeout, 'outputs': args.output,
                'inputs': [{'path': p.relative_to(root).as_posix(), 'roles': sorted(roles),
                            'sha256': hashlib.sha256(raw_by_path[p]).hexdigest()} for p, roles in sorted(files.items())]}
+    if guard_path is not None:
+        request['guard'] = {'path': guard_path.relative_to(root).as_posix(), 'wall_seconds': guard_seconds,
+                            'engine_sha256': file_sha(Path(__file__).with_name('rds_guard.py'))}
+        if policy.get('milestones'):
+            from rds_verify import verifier_id
+            request['guard']['verifier_sha256'] = verifier_id()
+            request['guard']['native_executable'] = os.environ.get('RDS_LEAN_EXECUTABLE')
+            if any(row['expected']['assurance'] == 'LEAN_KERNEL_CHECKED' for row in policy['milestones']):
+                from rds_lean_verify import _executable
+                try:
+                    native, fingerprint = _executable()
+                    request['guard']['native_binding'] = {'path': str(native), 'sha256': fingerprint}
+                except (ValueError, OSError) as exc:
+                    request['guard']['native_binding'] = {'status': 'UNKNOWN', 'reason': str(exc)}
     if review is not None:
         request['research_context'] = {'sha256': digest(review[1]), 'candidate': args.choose,
                                        'ledger': str(Path(args.ledger).resolve())}
+    args.name = args.name or 'exec-' + digest(request)[:20]
+    require(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}', args.name), 'Job name must contain 1–64 safe identifier characters')
     workspace = root / '.rds' / 'exec' / args.name
     require(workspace.resolve().is_relative_to(root), 'Exec workspace escapes root')
     if workspace.exists():
@@ -256,8 +298,19 @@ def execute(args, review=None):
         state = ProjectStore(workspace).snapshot(check_bindings=True)
         require(not state['binding_check']['errors'], 'Frozen job bindings changed')
         receipt = next((r for r in state['receipts'] if r['run_id'] == args.name), None)
-        return {'status': 'EXISTING_JOB', 'job_root': str(workspace), 'ledger_root': str(Path(args.ledger).resolve()) if review is not None else str(workspace), 'receipt': receipt,
-                'execution_started': False, 'scientific_support': 'UNKNOWN'}
+        result = {'status': 'EXISTING_JOB', 'job_root': str(workspace), 'ledger_root': str(Path(args.ledger).resolve()) if review is not None else str(workspace), 'receipt': receipt,
+                  'execution_started': False, 'scientific_support': 'UNKNOWN'}
+        if guard_path is not None:
+            store = ProjectStore(workspace)
+            with store._db(True) as db:
+                event = db.execute("SELECT body FROM events WHERE json_extract(body,'$.kind')='QUICK_EXEC_REGRESSION_REVIEW' ORDER BY rowid DESC LIMIT 1").fetchone()
+            require(event is not None, 'Guard review is unfinished; inspect the retained job and allowance')
+            ref = json.loads(event['body'])['report']
+            report_path = Path(ref['path']).resolve()
+            require(report_path.is_relative_to((workspace / '.rds' / 'cas').resolve()) and file_sha(report_path) == ref['sha256'], 'Guard report CAS integrity failure')
+            from rds_guard import read
+            result['regression_review'] = read(report_path)[0]
+        return result
     if review is not None:
         _charge_ledger(args.ledger, workspace, request, timeout)
     workspace.mkdir(parents=True)
@@ -297,20 +350,41 @@ def execute(args, review=None):
         record_choice(args.ledger, review[0], review[1], args.choose, _checkpoint_name('before', args.name))
     manifest = {'schema': 1, 'id': args.name, 'arm': 'tool', 'control_id': None,
                 'protocol': {'path': 'rds-exec-protocol.json', 'sha256': file_sha(workspace / 'rds-exec-protocol.json')},
-                'argv': frozen_argv, 'outpaths': args.output, 'timeout_seconds': timeout,
-                'resource_estimates': {'wall_seconds': timeout}, 'description': 'Frozen quick exec'}
+                'argv': frozen_argv, 'outpaths': args.output, 'timeout_seconds': timeout - guard_seconds,
+                'resource_estimates': {'wall_seconds': timeout - guard_seconds}, 'description': 'Frozen quick exec'}
     store.register(manifest)
+    for output in args.output:
+        store._path(output, output=True, contract=contract).parent.mkdir(parents=True, exist_ok=True)
+    if guard_path is not None:
+        _charge_ledger(workspace, workspace, request, guard_seconds)
     receipt = store.execute(args.name, background=args.background)
+    regression = None
+    if guard_path is not None:
+        from rds_guard import evaluate
+        try:
+            regression = evaluate(workspace / request['guard']['path'], workspace)
+        except (OSError, ValueError, KeyError, TypeError, RecursionError) as exc:
+            regression = {'status': 'UNKNOWN', 'promotion_eligible': False, 'reason': str(exc), 'scientific_support': 'UNKNOWN'}
+        if receipt.get('run_status') != 'SUCCEEDED':
+            regression = {**regression, 'status': 'UNKNOWN', 'promotion_eligible': False, 'reason': 'The command did not succeed'}
+        ref = cas_json(workspace, regression)
+        with store._db() as db:
+            db.execute('INSERT INTO events(body) VALUES (?)', (canonical({'kind': 'QUICK_EXEC_REGRESSION_REVIEW', 'report': ref}),))
     if review is not None:
         from rds_checkpoints import save_checkpoint
         decision, _ = latest_decision(args.ledger, _checkpoint_name('before', args.name))
         decision = {**decision, 'execution': {'job_root': str(workspace), 'receipt_sha256': receipt.get('sha256'),
                                             'run_status': receipt.get('run_status', 'UNKNOWN')},
                     'pending_evidence': ['Assess the original output; completion alone does not reject or prove a hypothesis']}
+        if regression is not None:
+            decision['regression_review'] = {'status': regression['status'], 'report': ref, 'scientific_support': 'UNKNOWN'}
         save_checkpoint(args.ledger, _checkpoint_name('after', args.name), ProjectStore(args.ledger).snapshot(), kind='project', decision=decision)
-    return {'status': receipt.get('run_status', 'UNKNOWN'), 'job_root': str(workspace),
+    result = {'status': receipt.get('run_status', 'UNKNOWN'), 'job_root': str(workspace),
             'ledger_root': str(Path(args.ledger).resolve()) if review is not None else str(workspace),
             'receipt': receipt, 'execution_started': True, 'scientific_support': 'UNKNOWN'}
+    if regression is not None:
+        result['regression_review'] = regression
+    return result
 
 
 def brief(root, value, version, formal=False):
@@ -324,6 +398,9 @@ def brief(root, value, version, formal=False):
     if 'job_root' in value:
         summary['job_root'] = value['job_root']
         summary['run_status'] = (value.get('receipt') or {}).get('run_status', 'UNKNOWN')
+    if 'regression_review' in value:
+        summary['regression_status'] = value['regression_review'].get('status', 'UNKNOWN')
+        summary['promotion_eligible'] = value['regression_review'].get('promotion_eligible') is True
     if 'checkpoint' in value:
         summary['checkpoint'] = value['checkpoint'].get('id')
         summary['route'] = value['checkpoint'].get('candidate_id', value.get('route'))
@@ -333,6 +410,7 @@ def brief(root, value, version, formal=False):
     assurance = value.get('assurance') if formal else None
     formal_status = value.get('status', 'UNKNOWN') if formal and assurance in {'CERTIFICATE_CHECKED', 'LEAN_KERNEL_CHECKED'} else 'UNKNOWN'
     if formal:
+        summary['formal_status'] = formal_status
         summary['formal_assurance'] = assurance or 'NONE'
         summary['application_status'] = value.get('application_status', 'UNKNOWN')
     ledger_root = Path(value.get('ledger_root', root)).resolve()
@@ -343,5 +421,4 @@ def brief(root, value, version, formal=False):
             summary['ledger_checkpoints'] = 0
             if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='checkpoints'").fetchone():
                 summary['ledger_checkpoints'] = db.execute('SELECT COUNT(*) FROM checkpoints').fetchone()[0]
-    summary['badge'] = f'[RDS {version} | State: {summary["status"]} | Ledger: {summary.get("ledger_checkpoints", "UNKNOWN")} | Formal: {formal_status} | Record: {ref["sha256"][:8]}]'
     return summary

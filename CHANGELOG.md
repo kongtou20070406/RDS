@@ -4,12 +4,14 @@
 
 - Add compatible `exec` and `reject` entries over the existing frozen runner and checkpoint ledger; complete operational identities and known decision fields without handwritten protocol boilerplate.
 - Review scoped candidates before quick execution and retain its result for the next decision. Missing prerequisites, ambiguous choices and unchanged rejections cannot start a prospective research job.
-- Add compact digests with retained complete records, genuine state badges, command aliases, unique prefixes and actionable repair hints. Preserve original stdout/stderr, UNKNOWN scientific status and execution gates.
+- Add compact digests with retained complete records, command aliases, unique prefixes and actionable repair hints. Preserve original stdout/stderr, UNKNOWN scientific status and execution gates.
 - Skip unrelated rule loading and ML advice for pure Frontier queries. Measure output reduction and local runtime separately from scientific-policy improvement.
 
-These compatible new CLI features require the next MINOR release under `docs/versioning.md`; the current published 5.7.0 tag is unchanged.
-
-## Unreleased
+- Complete optional exec names from frozen-request hashes, support local Python shorthand and implicit child boundaries, and create validated output parents. Expand aliases/macros and short flags without changing existing `run`/`plan` meanings or child arguments.
+- Add opt-in exact comparable-metric guards and bounded frozen-certificate milestone replay. FAIL/UNKNOWN prevents promotion while preserving the executed run; reserve guard and child work within one wall allowance. Reject withdrawn/incompatible baselines and backend/assurance substitutions.
+- Retain explicitly justified negative parameter intervals in the scoped checkpoint ledger. Advisor checks witness integrity and unchanged facts, scope, goal revision, action family and undeclared parameters before suppressing a nearby repeat; a point witness never creates a universal interval.
+- Expose bounded AND/OR proof dependency analysis through the common CLI and aliases. Distinguish all-premise dependencies, alternative proof paths, direct-evidence obligations and truncation from scientific proof.
+- Replace fixed progress badges with a Skill instruction to report a short factual progress sentence at meaningful advances or blockers; no extra display calls or per-invocation cards.
 
 - Record local CLI invocation starts/exits automatically, across projects. Add `usage` with daily counts, inclusive date ranges, command/mode totals and JSON output; distinguish untracked history and preserve command behavior when logging fails. Keep prompts and argument payloads out of the log.
 
@@ -18,6 +20,8 @@ These compatible new CLI features require the next MINOR release under `docs/ver
 - Add the separate `geometry.unit_disk_rational_voronoi` certificate rule: bounded rational inputs, exact full-disk Voronoi/circle extrema and frozen source-bound replay. Preserve the original core for certificate compatibility; support the rational tactic and retain the existing quadtree rule. Coverage establishes a construction upper bound only.
 
 - Track rule-replay input exposure in the project's existing RSI records. An optional `confirmation_campaign` rejects reuse of exposed heldout payloads by a different frozen evaluation, including case/campaign relabeling; failed and timed-out grading retain exposure. Frozen-pair replay, finite regression acceptance and rollback remain available. Add a scoped RSI evolution guide for decision rules, verifier capabilities and research policies. This guard does not attest independent sealing or scientific-policy gains.
+
+These compatible new CLI features require the next MINOR release under `docs/versioning.md`; the current published 5.7.0 tag is unchanged.
 
 ## 5.7.0 — 2026-10-01
 

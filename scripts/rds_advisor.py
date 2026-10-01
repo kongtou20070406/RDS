@@ -632,6 +632,7 @@ class RDSAdvisor:
                       "Checkpoint hashes authenticate recorded choices, not scientific validity or execution admission.",
                       "Changed facts or conditions reopen review; source labels do not independently verify new evidence."]}
         history = []
+        checked_witnesses = set()
         try:
             db = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, isolation_level=None, timeout=0.05)
             try:
@@ -670,11 +671,25 @@ class RDSAdvisor:
                     _json(prior["evidence"])
                     route = _loop_route(prior["candidate"])
                     _require(route is not None, "Checkpoint decision needs a structured candidate: " + checkpoint_id)
+                    if prior['outcome'] == 'rejected' and 'rejected_domain' in prior:
+                        from rds_guard import validate_domain, MAX_BYTES
+                        validate_domain(prior['rejected_domain'], prior['candidate'])
+                        witness = prior.get('falsification', {})
+                        witness_sha = witness.get('sha256')
+                        _require(isinstance(witness_sha, str) and re.fullmatch('[0-9a-f]{64}', witness_sha), 'Declared-domain rejection needs a witness hash')
+                        original = Path(witness['path']).resolve()
+                        _require(original.is_relative_to((directory / 'cas').resolve()), 'Domain witness must be in the project CAS')
+                        if (str(original), witness_sha) not in checked_witnesses:
+                            with original.open('rb') as handle:
+                                witness_raw = handle.read(MAX_BYTES + 1)
+                            _require(len(witness_raw) <= MAX_BYTES and hashlib.sha256(witness_raw).hexdigest() == witness_sha,
+                                     'Declared-domain witness CAS integrity failure')
+                            checked_witnesses.add((str(original), witness_sha))
                     history.append({**prior, "route_sha256": route, "review_context": _loop_context(prior["candidate"], prior["evidence"]),
                                     "checkpoint_id": checkpoint_id, "checkpoint_sha256": sha})
             finally:
                 db.close()
-        except (sqlite3.Error, ValueError, KeyError, TypeError, AttributeError, UnicodeError, RecursionError) as exc:
+        except (sqlite3.Error, OSError, ValueError, KeyError, TypeError, AttributeError, UnicodeError, RecursionError) as exc:
             review["flags"].append({"kind": "LOOP_HISTORY_REVIEW_ERROR", "reason": str(exc)})
             review["status"] = "REVIEW_REQUIRED"
             search["loop_review"] = review
@@ -701,19 +716,29 @@ class RDSAdvisor:
                 route = _loop_route(candidate)
                 matches = [row for row in scoped if row["route_sha256"] == route]
                 prior = matches[-1] if matches else next((row for row in reversed(history) if row["route_sha256"] == route), None)
+                domain_match = False
+                if prior is None:
+                    from rds_guard import in_domain, same_family
+                    prior = next((row for row in reversed(scoped) if row['outcome'] == 'rejected'
+                        and 'rejected_domain' in row and same_family(row['candidate'], candidate, row['rejected_domain']['parameters'])
+                        and in_domain(row['rejected_domain']['parameters'], candidate.get('action', {}).get('parameters', {}))), None)
+                    domain_match = prior is not None
                 if prior is None or prior["outcome"] != "rejected":
                     kept.append(candidate)
                     continue
                 changed = ((prior["goal_revision"], _json(prior["scope"])) != current_scope
                            or prior["review_context"] != _loop_context(candidate, evidence))
-                flag = {"kind": "REOPEN_REVIEW" if changed else "REPEAT_REJECTED_ROUTE", "candidate_id": candidate.get("id"),
+                repeat_kind = 'REPEAT_DECLARED_REJECTED_DOMAIN' if domain_match else 'REPEAT_REJECTED_ROUTE'
+                flag = {"kind": "REOPEN_REVIEW" if changed else repeat_kind, "candidate_id": candidate.get("id"),
                         "route_sha256": route, "checkpoint_id": prior["checkpoint_id"], "checkpoint_sha256": prior["checkpoint_sha256"]}
+                if domain_match:
+                    flag['witness_sha256'] = prior['falsification']['sha256']
                 if flag not in review["flags"]:
                     review["flags"].append(flag)
                 if changed:
                     kept.append({**candidate, "loop_review": flag})
                 else:
-                    output.setdefault("blocked_candidates", []).append({**candidate, "status": "BLOCKED_REJECTED_ROUTE", "loop_review": flag})
+                    output.setdefault("blocked_candidates", []).append({**candidate, "status": 'BLOCKED_DECLARED_DOMAIN' if domain_match else "BLOCKED_REJECTED_ROUTE", "loop_review": flag})
             output["candidates"] = kept
             kept_ids = {row.get("id") for row in kept}
             ranking = output.get("ranking", {})

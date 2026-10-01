@@ -8,10 +8,20 @@ import time
 
 COMMANDS = {"init", "hypothesis", "gate", "plan", "run", "data", "decide", "status",
             "project", "checkpoint", "artifacts", "formal", "meta", "history", "advise",
-            "advancement", "branch", "usage", "exec", "reject"}
-COMMAND_ALIASES = {"exec": {"execute", "执行"}, "advise": {"advisor", "review", "审查"},
-                   "reject": {"deny", "否决"}, "checkpoint": {"cp", "检查点"},
-                   "project": {"proj", "项目"}, "usage": {"calls", "调用"}, "status": {"状态"},
+            "advancement", "branch", "usage", "exec", "reject", "guard", "hypergraph"}
+ROOT_OPTIONS = {"--root", "--workspace", "--project-root", "-w", "-d", "--dir"}
+COMMAND_MACROS = {"verify": ("formal", "verify"), "prove": ("formal", "verify"), "证明": ("formal", "verify"),
+                  "check": ("formal", "check"), "核查": ("formal", "check"),
+                  "snapshot": ("checkpoint", "save"), "存档": ("checkpoint", "save")}
+COMMAND_ALIASES = {"exec": {"execute", "test", "eval", "start", "执行", "运行", "跑", "测试"},
+                   "advise": {"advisor", "review", "suggest", "route", "审查", "建议", "路线", "规划"},
+                   "reject": {"deny", "falsify", "counterexample", "drop", "否决", "反例", "证伪", "拒绝"},
+                   "checkpoint": {"cp", "ledger", "检查点", "快照", "账本"},
+                   "project": {"proj", "项目"}, "usage": {"calls", "调用", "调用次数"},
+                   "status": {"stat", "info", "show", "summary", "状态", "进度", "总览"},
+                   "formal": {"proof", "theorem", "形式化", "验证"},
+                   "guard": {"regression", "regressions", "回退检查"},
+                   "hypergraph": {"graph", "deps", "blockers", "and-or", "超图", "依赖"},
                    "execute": {"exec", "执行"}, "save": {"record", "保存"}, "restore": {"resume", "恢复"}}
 _last_error = None
 
@@ -47,20 +57,35 @@ def _label(argv):
     argv = argv[:argv.index('--')] if '--' in argv else argv
     command = "other"
     skip = False
-    for token in argv:
+    end = len(argv)
+    for index, token in enumerate(argv):
         if skip:
             skip = False
-        elif token in {"--root", "--workspace", "--project-root"}:
+        elif token in ROOT_OPTIONS:
             skip = True
         elif token == "--":
             break
         elif not token.startswith('-'):
             exact = next((c for c in COMMANDS if c.casefold() == token.casefold()), None)
+            if exact is None and token.casefold() in COMMAND_MACROS:
+                command = COMMAND_MACROS[token.casefold()][0]
+                break
             aliases = [c for c in COMMANDS if token.casefold() in COMMAND_ALIASES.get(c, set())]
             prefixes = [c for c in COMMANDS if c.startswith(token.casefold())]
             matches = [exact] if exact else aliases or prefixes
             command = matches[0] if len(matches) == 1 else 'other'
+            if command == 'exec':
+                values = ROOT_OPTIONS | {'--name', '--id', '--timeout', '-t', '--time', '--timeout-seconds',
+                    '--bind', '--output', '-o', '--out', '--guard', '--context', '--research-context', '-c',
+                    '--ctx', '--graph', '--choose', '--ledger', '-l', '--db'}
+                i = index + 1
+                while i < len(argv):
+                    if not argv[i].startswith('-'):
+                        end = i
+                        break
+                    i += 2 if argv[i].split('=', 1)[0] in values and '=' not in argv[i] else 1
             break  # Never label a wrapped command or argument as an RDS invocation.
+    argv = argv[:end]
     mode = "help" if "--help" in argv or "-h" in argv else "version" if "--version" in argv else "command"
     return command if command != "other" else mode if mode != "command" else command, mode
 

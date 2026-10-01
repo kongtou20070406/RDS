@@ -76,3 +76,5 @@ For a different frozen evaluation, previously exposed heldout payloads are rejec
 - [Statistical Gödel Machine v2, 2026-09-17](https://arxiv.org/abs/2510.10232v2): separates exploration and statistical confirmation with a global error budget. RDS's current conditional Lean theorem checks and this input guard do not implement that statistical acceptance system.
 
 See [development verification](development-loop.md), [resource planning](resource-planning.md), and [the evidence discipline](../references/rsi-evidence.md). The first useful delivery is one replayable improvement applied at the next safe research boundary; larger policy claims require their own fair evaluation.
+
+The [2026-10-01 extended review](guardrails-prior-art-20261001.md) checks the latest AIDE², CoEvoSkills and SAGE primary sources and separates harness evolution, surrogate verification and model training. The [opt-in regression guards](regression-guards.md) replay frozen milestones and compare compatible metrics without hiding weaker results or automatically adopting arbitrary code.

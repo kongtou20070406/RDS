@@ -111,6 +111,7 @@ def engine_id():
     return digest({"cli": digest((here / "rds_cli.py").read_bytes()),
                    "quick": digest((here / "rds_quick.py").read_bytes()),
                    "usage": digest((here / "rds_usage.py").read_bytes()),
+                   "guard": digest((here / "rds_guard.py").read_bytes()),
                    "probe": digest((here / "rds_probe.py").read_bytes()),
                    "formal_kernel": digest((here / "rds_formal_kernel.py").read_bytes()),
                    "declarative_verifier": verifier_id(),
@@ -1129,40 +1130,27 @@ class FriendlyParser(argparse.ArgumentParser):
     """
     def parse_args(self, args=None, namespace=None):
         tokens = list(sys.argv[1:] if args is None else args)
-        boundary = tokens.index("--") if "--" in tokens else len(tokens)
-        front, tail = tokens[:boundary], tokens[boundary:]
-        def all_options(parser):
-            options = dict(parser._option_string_actions)
-            for action in parser._actions:
-                if isinstance(action, argparse._SubParsersAction):
-                    for child in action.choices.values():
-                        options.update(all_options(child))
-            return options
-        options = all_options(self)
-        globals_, remaining, i = [], [], 0
-        while i < len(front):
-            key = front[i].split("=", 1)[0]
-            if key in {"--root", "--workspace", "--project-root"}:
-                require(not globals_, "Supply one project root")
-                if "=" in front[i]:
-                    globals_ = ["--root", front[i].split("=", 1)[1]]
+        from rds_usage import COMMAND_ALIASES as aliases, COMMAND_MACROS, ROOT_OPTIONS
+        current, result, globals_, i = self, [], [], 0
+        wrapped = False
+        while i < len(tokens):
+            token = tokens[i]
+            if token == '--':
+                result.extend(tokens[i:])
+                break
+            key = token.split('=', 1)[0]
+            if key in ROOT_OPTIONS:
+                if globals_:
+                    self.error('Supply one project root')
+                if '=' in token:
+                    globals_ = ['--root', token.split('=', 1)[1]]
                 else:
-                    if i + 1 >= len(front):
-                        self.error(key + " requires a path")
-                    globals_ = ["--root", front[i + 1]]
+                    if i + 1 >= len(tokens):
+                        self.error(key + ' requires a path')
+                    globals_ = ['--root', tokens[i + 1]]
                     i += 1
-            else:
-                remaining.append(front[i])
-                action = options.get(key)
-                if action is not None and action.nargs != 0 and '=' not in front[i]:
-                    count = action.nargs if isinstance(action.nargs, int) else 1
-                    remaining.extend(front[i + 1:i + 1 + count])
-                    i += count
-            i += 1
-        current, result, i = self, [], 0
-        from rds_usage import COMMAND_ALIASES as aliases
-        while i < len(remaining):
-            token = remaining[i]
+                i += 1
+                continue
             if token.startswith("-"):
                 key = token.split("=", 1)[0]
                 action = current._option_string_actions.get(key)
@@ -1172,13 +1160,28 @@ class FriendlyParser(argparse.ArgumentParser):
                 result.append(token)
                 if action is not None and action.nargs != 0 and "=" not in token:
                     count = action.nargs if isinstance(action.nargs, int) else 1
-                    result.extend(remaining[i + 1:i + 1 + count])
+                    result.extend(tokens[i + 1:i + 1 + count])
                     i += count
             else:
                 sub = next((a for a in current._actions if isinstance(a, argparse._SubParsersAction)), None)
+                if sub is None and wrapped:
+                    # Once the child starts, neither root flags nor its options are ours.
+                    print('[RDS-RESOLVE] implicit child boundary before ' + token, file=sys.stderr)
+                    result.extend(['--'] + tokens[i:])
+                    break
                 if sub is not None:
                     choices = sub.choices
                     exact = next((v for v in choices if v.casefold() == token.casefold()), None)
+                    macro = COMMAND_MACROS.get(token.casefold()) if current is self and exact is None else None
+                    if macro:
+                        result.extend(macro)
+                        print('[RDS-RESOLVE] ' + token + ' -> ' + ' '.join(macro), file=sys.stderr)
+                        current = choices[macro[0]]
+                        for nested in macro[1:]:
+                            children = next(a for a in current._actions if isinstance(a, argparse._SubParsersAction))
+                            current = children.choices[nested]
+                        i += 1
+                        continue
                     matches = ([exact] if exact else [v for v in choices if token.casefold() in aliases.get(v, set())])
                     if not matches:
                         matches = [v for v in choices if v.casefold().startswith(token.casefold())]
@@ -1190,34 +1193,52 @@ class FriendlyParser(argparse.ArgumentParser):
                         print("[RDS-RESOLVE] " + token + " -> " + resolved, file=sys.stderr)
                     token = resolved
                     current = choices[resolved]
+                    wrapped = wrapped or (sub is next(a for a in self._actions if isinstance(a, argparse._SubParsersAction)) and resolved == 'exec')
                 result.append(token)
             i += 1
-        return super().parse_args(globals_ + result + tail, namespace)
+        return super().parse_args(globals_ + result, namespace)
+
+    def error(self, message):
+        options = list(self._option_string_actions)
+        unknown = next((token for token in message.split() if token.startswith('--')), None)
+        suggestions = difflib.get_close_matches(unknown or '', options, n=2, cutoff=0.5)
+        hint = 'python scripts/rds_cli.py ' + (' '.join(suggestions) if suggestions else self.prog.split('rds_cli.py')[-1].strip() + ' --help')
+        super().error(message + '\n[RDS-HINT] ' + hint)
 
 
 def parser():
     p = FriendlyParser(description=__doc__)
-    p.add_argument("--root", "--workspace", "--project-root", default=".")
+    p.add_argument("--root", "--workspace", "--project-root", "-w", "-d", "--dir", default=".")
     p.add_argument("--version", action="version", version=VERSION)
     commands = p.add_subparsers(dest="command", required=True)
     quick = commands.add_parser("exec", help="Freeze, bind and execute a local tool command without contract JSON")
-    quick.add_argument("--name", "--id", required=True)
-    quick.add_argument("--timeout", type=float, default=60, help="Wall cap in seconds (default 60, max 3600)")
+    quick.add_argument("--name", "--id", help="Optional stable identity; defaults to frozen-request hash")
+    quick.add_argument("--timeout", "-t", "--time", "--timeout-seconds", type=float, default=60, help="Wall cap in seconds (default 60, max 3600)")
     quick.add_argument("--bind", action="append", default=[], help="Additional input: code|config|data|evaluator=relative/path")
-    quick.add_argument("--output", action="append", default=[], help="Required output path in the frozen job workspace")
+    quick.add_argument("--output", "-o", "--out", action="append", default=[], help="Required output path in the frozen job workspace")
+    quick.add_argument("--guard", help="Frozen metric/milestone policy; FAIL/UNKNOWN blocks promotion, retains the run")
     quick.add_argument("--background", action="store_true", help="Use the existing Windows Task Scheduler runner")
-    quick.add_argument("--context", "--research-context", dest="research_context")
+    quick.add_argument("--context", "--research-context", "-c", "--ctx", dest="research_context")
     quick.add_argument("--graph")
     quick.add_argument("--choose", help="Exact candidate ID from the direction review")
-    quick.add_argument("--ledger", help="Existing project ledger for prospective choice and execution feedback")
+    quick.add_argument("--ledger", "-l", "--db", help="Existing project ledger for prospective choice and execution feedback")
     quick.add_argument("--json", action="store_true", help="Return the full operational receipt")
     quick.add_argument("argv", nargs=argparse.REMAINDER)
     reject = commands.add_parser("reject", help="Record a scoped rejection using the current choice, without decision JSON")
     reject.add_argument("--route", help="Current candidate ID; default the single recorded route")
-    reject.add_argument("--reason", required=True)
-    reject.add_argument("--evidence", required=True)
+    reject.add_argument("--reason", "-m", "--why", "--message", required=True)
+    reject.add_argument("--evidence", "-e", "--witness", required=True)
+    reject.add_argument("--domain", help="Explicit min/max/eq parameter predicates and universal-range justification")
     reject.add_argument("--id")
     reject.add_argument("--json", action="store_true")
+    guard = commands.add_parser('guard', help='Check a frozen comparable-metric/milestone policy without changing the incumbent')
+    guard.add_argument('--policy', required=True)
+    guard.add_argument('--json', action='store_true')
+    hypergraph = commands.add_parser('hypergraph', help='Bounded AND/OR proof dependency analysis, not proof certification')
+    hypergraph.add_argument('--input', '-i', required=True)
+    hypergraph.add_argument('--output', '-o')
+    hypergraph.add_argument('--audit-files', action='store_true')
+    hypergraph.add_argument('--json', action='store_true')
     usage = commands.add_parser("usage", help="Show locally recorded daily CLI invocation counts")
     window = usage.add_mutually_exclusive_group()
     window.add_argument("--days", type=int, default=14)
@@ -1353,7 +1374,7 @@ def parser():
     adv.add_argument("--baseline-loss", default=None)
     adv.add_argument("--fit-telemetry", default=None, help="Paired, comparable curve observations for fit diagnosis")
     adv.add_argument("--literature", default=None, help="Search scoped local primary-source records")
-    adv.add_argument("--research-context", "--context", default=None, help="Sourced facts and the decision for bounded graph search")
+    adv.add_argument("--research-context", "--context", "-c", "--ctx", default=None, help="Sourced facts and the decision for bounded graph search")
     adv.add_argument("--choose", help="Exact candidate ID to record as the caller's planned route")
     adv.add_argument("--record", help="New checkpoint ID; use with --choose to complete the decision fields")
     adv.add_argument("--brief", "--digest", action="store_true", help="Save full advice and return a bounded digest")
@@ -1429,9 +1450,22 @@ def _main():
             confirmations = (strict_json(read_bounded(args.confirmations, 1024 * 1024).decode("utf-8-sig"))
                              if args.confirmations else [])
             result = evaluate_advancement(protocol, trajectories, confirmations)
+        elif args.command == 'guard':
+            from rds_guard import evaluate
+            result = evaluate(args.policy, args.root)
+        elif args.command == 'hypergraph':
+            from rds_hypergraph import analyze_hypergraph, audit_sources
+            spec = strict_json(read_bounded(args.input, 8 * 1024 * 1024).decode('utf-8-sig'))
+            result = analyze_hypergraph(spec)
+            if args.audit_files:
+                result['source_file_audit'] = audit_sources(spec, Path(args.input).resolve().parent)
+            if args.output:
+                output = Path(args.output)
+                output.parent.mkdir(parents=True, exist_ok=True)
+                with output.open('x', encoding='utf-8') as handle:
+                    handle.write(canonical(result) + '\n')
         elif args.command == "exec":
             from rds_quick import execute
-            require("--" in sys.argv[1:], "Separate the wrapped command with --; command arguments are never normalized")
             review = None
             require(bool(args.research_context) == bool(args.ledger) and (not args.choose or args.research_context),
                     "Prospective exec needs --context and --ledger; --choose is optional only for one READY candidate")
@@ -1471,7 +1505,7 @@ def _main():
             result = cmd_decide(args, rds)
         else:
             result = cmd_status(args, rds)
-        compact = getattr(args, "brief", False) or args.command in {"exec", "reject"} and not args.json
+        compact = getattr(args, "brief", False) or args.command in {"exec", "reject", "guard", "hypergraph"} and not args.json
         if compact:
             from rds_quick import brief
             print(json.dumps(brief(args.root, result, VERSION), ensure_ascii=False, separators=(",", ":"), allow_nan=False))
@@ -1479,6 +1513,10 @@ def _main():
             print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
         if args.command == "exec" and (result.get("receipt") or {}).get("run_status") in {"FAILED", "INTERRUPTED", "TIMED_OUT"}:
             return 1
+        if args.command == 'guard' or args.command == 'exec' and 'regression_review' in result:
+            return {'PASS': 0, 'FAIL': 1, 'UNKNOWN': 2}.get(result.get('regression_review', result).get('status'), 2)
+        if args.command == 'hypergraph' and result.get('truncated'):
+            return 2
         if args.command in {"project", "run"} and args.action in {"execute", "recover"} and result.get("run_status") in {"FAILED", "INTERRUPTED", "TIMED_OUT"}:
             return 1
         if args.command == "meta" and args.action == "evaluate-rule" and not result.get("adoption_eligible"):

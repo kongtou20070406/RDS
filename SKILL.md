@@ -26,7 +26,7 @@ Separate task gain, mechanism and search-policy evidence. Published, proxy, orac
 
 Check what executed computation changes: a knob name or mathematical side condition does not establish a mechanism. Preserve raw observations and failures. Missing evidence stays unknown; hashes bind artifacts and exit code 0 records execution, not science. Self-signed success creates no evidence or authority.
 
-For research progress reports while RDS is active, lead with one short state line from the latest actual digest (route/checkpoint, execution receipt and actual formal assurance when available). Unqueried or absent state is `UNKNOWN`; never turn ordinary execution success into `Formal: PASS`. Preserve useful mathematical explanations below the line.
+During RDS-guided work, briefly tell the user what advanced and the next step or blocker at meaningful progress points. Ground RDS-use claims in actual calls and results. Use one plain-language sentence; no fixed status card, badge, per-call report or extra call just for display. Unknown evidence stays unknown.
 
 ## Continuity and preferences
 
@@ -47,6 +47,7 @@ Apply and persist research preferences only with explicit opt-in. [Optional pref
 | Execute the scalar reference protocol | [L3 contract](references/l3-state-machine.md), then the discipline's CLI section. Its restricted rational AST/MSE receipts do not validate external training. |
 | Execute/resume a project or develop RDS | [Development loop](docs/development-loop.md): authorized argv, bindings, raw artifacts, live checkpoints. Inspect existing runs before another attempt. |
 | Reduce protocol/output friction | [Agent entry](docs/agent-entry.md): `exec` wraps a frozen tool job, `advise --record` completes a scoped choice, `reject` reuses that choice, and `--brief` retains full records with a small digest. Aliases/unique prefixes preserve values and execution gates. |
+| Prevent promoting a known regression / declare a rejected parameter interval | [Regression guards](docs/regression-guards.md): explicit comparable metrics, frozen milestone replay and scoped parameter predicates; all original results survive. |
 | Check actual CLI use over time | [CLI usage log](docs/cli-usage.md): automatic local daily counts, command totals and tracking coverage; `usage --days 7` or an inclusive date range. |
 | Allocate available compute to useful work | [Resource-aware planning](docs/resource-planning.md): capacity, elapsed time, marginal cost and compatible batches. Advisory plans retain execution gates and do not reserve devices. |
 | Mathematical obligation / Lean certificate | [Formal framework](references/formal_framework.md) and discipline's formal section: actual checker and declared scope; `UNKNOWN` stays unknown. |

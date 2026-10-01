@@ -12,7 +12,9 @@ One call freezes inputs, constructs the contract/protocol/manifest, reserves the
 
 The command runs in `<source-directory>/.rds/exec/probe-001`, a frozen copy. Existing file arguments and static local Python imports are copied, including package initializers. Add implicit inputs with `--bind data=relative/file.json` (also `code`, `config`, `evaluator`). Dynamic imports, external packages, environment access and remote inputs are not completely discovered. Keep these limitations explicit; this trusted-code runner is not an OS sandbox. Non-Python/inline commands require an explicit code binding. Commands cannot invoke a shell.
 
-Use `--output outputs/result.json` to require an output in the job copy. Read original stdout/stderr and declared outputs through the receipt's artifact paths. A repeated identical job returns the existing receipt without executing again; changed input bytes require a new name. Failure/timeout logs and spent costs survive. Exit code 0 means operational completion; mathematical or policy success remains unknown.
+Use `--output outputs/result.json` to require an output in the job copy; its parent directories are created after runner validation. Read original stdout/stderr and declared outputs through the receipt's artifact paths. Omit `--name` to derive a stable name from the frozen request: an identical call reuses its receipt and changed inputs produce a new identity. Explicit names remain immutable. Failure/timeout logs and spent costs survive. Exit code 0 means operational completion; mathematical or policy success remains unknown.
+
+For an existing local Python file, the shortest form is `python -B scripts/rds_cli.py exec -t 10 probe.py`. The entry supplies the current Python executable and infers the child boundary. Once the child starts, all its arguments remain untouched, including `--help` and `--root`. Use explicit `--` for commands whose boundary is unclear.
 
 ## Select before executing
 
@@ -48,9 +50,15 @@ This records caller-declared falsification with `RECORDED_INPUT_NOT_SCIENTIFIC_V
 
 New `exec`/`reject` commands return a compact digest by default; `--json` returns their full report. `advise`, `project status`, `status`, `formal verify` and `formal check` support `--brief`/`--digest`. Full JSON is retained in `.rds/cas/<sha256>.json`; original execution logs remain intact in the runner's artifact directory. Counts are local ledger counts, not proof of scientific use or autonomy.
 
-Research progress reports using RDS lead with the latest genuine digest's `badge`. If no current record exists, say `UNKNOWN`; do not copy a historical PASS. Only direct checked formal results can give a formal verdict, and the actual assurance/application status remains separate. A successful operational wrapper does not supply a Formal PASS badge.
+At meaningful progress points, the agent gives one short plain-language sentence about what advanced and the next step or blocker. For example: “RDS excluded the unchanged route; the next check targets the missing premise.” Use actual calls and outputs, without a fixed card or reporting every internal invocation. Ordinary execution success never supplies a formal verdict; checked backend, assurance and application status remain separate. Complete receipts are available when an audit needs them.
 
 Exact commands take priority, followed by explicit aliases and unique command prefixes. Examples: `advisor`/`review` → `advise`, `proj` → `project`, `cp` → `checkpoint`, `execute` → `exec`, `deny` → `reject`, `calls` → `usage`; Chinese aliases include `审查`, `执行`, `否决`, `检查点`, `项目`, `调用`, `状态`. `--workspace` and `--project-root` alias `--root`, including after the subcommand; `--context` aliases `--research-context`. Ambiguous `adv` reports `advise, advancement`; a typo receives repair suggestions. Values, budgets, paths, witness contents and the wrapped argv after `--` are never fuzzy-normalized.
+
+Additional aliases include `test`/`eval`/`start`/`测试` → `exec`, `suggest`/`route`/`规划` → `advise`, and `falsify`/`counterexample`/`证伪` → `reject`. `verify`/`prove`/`证明` expand to `formal verify`; `check`/`核查` to `formal check`; `snapshot`/`存档` to `checkpoint save`. Existing `run` and `plan` keep their original meanings. Root supports `-w`, `-d`, `--dir`; exec supports `-t`, `-o`, `-c`, `-l`; reject supports `-m`, `-e`. Suggestions do not authorize execution.
+
+Use `hypergraph --input proof-graph.json` for the existing bounded AND/OR dependency analysis. `--audit-files` checks declared file hashes; neither graph reachability nor a `SUPPORTED` label proves mathematics. Full results are retained; `--json` exposes them. Truncation returns exit code 2.
+
+An optional `exec --guard policy.json` checks comparable metrics or replays frozen milestones before allowing promotion. `reject --domain domain.json` records only explicitly justified parameter exclusions. Both use existing artifacts and checkpoints; see [regression guards](regression-guards.md).
 
 ## Performance and design provenance
 

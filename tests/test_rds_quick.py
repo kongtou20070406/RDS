@@ -61,7 +61,7 @@ class QuickTests(unittest.TestCase):
         self.script()
         result = json.loads(self.job().stdout)
         self.assertEqual(result['run_status'], 'SUCCEEDED')
-        self.assertIn('Formal: UNKNOWN', result['badge'])
+        self.assertNotIn('badge', result)
         self.assertEqual(result['ledger_checkpoints'], 0)
         self.assertLess(len(json.dumps(result)), 1300)
         record = Path(result['record']).read_bytes()
