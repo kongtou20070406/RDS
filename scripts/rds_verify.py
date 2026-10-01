@@ -69,6 +69,7 @@ REGISTRY = RuleRegistry((
     ProofRule("network.interval_margin", ("network_margin",), "rds_nn_verify"),
     ProofRule("tensor.exact_identity", ("tensor_identity",), "rds_tensor_verify"),
     ProofRule("tensor.exact_bounds", ("tensor_bounds",), "rds_tensor_verify"),
+    ProofRule("geometry.unit_disk_quadtree", ("unit_disk_cover",), "rds_disk_cover_verify"),
 ))
 
 
@@ -371,7 +372,7 @@ class LeanFormalEngine:
             tried = set()
             compatible = {"interval": {"network_bounds", "network_margin"},
                           "lean4": {"lean_obligation", "statistical_obligation"},
-                          "rational": {"lean_obligation"},
+                          "rational": {"lean_obligation", "unit_disk_cover"},
                           "gershgorin": {"matrix_spectral_bound"},
                           "spectral_radius": {"matrix_spectral_exact"},
                           "scale_invariance": {"scale_equivariance"}}

@@ -59,12 +59,44 @@ are rejected. No stochastic training or IEEE rounding semantics are implied.
 | `network_margin` | `network.interval_margin` | Target output exceeds every other output by at least the declared margin throughout the input box |
 | `tensor_identity` | `tensor.exact_identity` | Two concrete exact tensor computations have the same shape and values |
 | `tensor_bounds` | `tensor.exact_bounds` | All values of a concrete tensor computation lie within closed bounds |
+| `unit_disk_cover` | `geometry.unit_disk_quadtree` | Every point of the closed unit disk lies within a declared equal-radius disk; coverage/upper bound only |
 
 Examples are in `examples/formal/`. Affine specs have `model.matrix` and
 `model.bias`, plus `threshold` and/or `point` for the selected kind. Spectral
 specs have `matrix` and a positive `threshold`. A spectral radius below 1 does
 not prove a one-step spectral-norm or infinity-norm contraction. In particular,
 `[[1/2,100],[0,1/2]]` is spectrally stable while its infinity norm exceeds 1.
+
+Disk-cover specs contain exactly `schema: 1`, `kind: "unit_disk_cover"`,
+`centers` (1..256 pairs of exact rational strings), and `radius_squared` (a
+positive exact rational string). A finite full dyadic quadtree partitions
+`[-1,1]^2`; every closed leaf is strictly outside the unit disk or has all four
+corners in one declared covering disk. Exact corner inequalities and convexity
+cover the whole leaf, including boundaries. Replay independently checks the
+full partition and all inequalities, binds the original declaration and checker
+sources, and never accepts finite point sampling. This proves an upper bound
+only; it proves neither a matching lower bound nor global optimality, and places
+no symmetry restriction on centers. A failed enclosure search is UNKNOWN.
+An exact single-disk containment rule also accepts the equality case: with
+`s=||c||^2` and `delta=radius_squared-1-s`, require `delta>=0` and
+`delta^2>=4s`, equivalent to `radius_squared>=(1+||c||)^2`. This permits the
+one-center unit-disk cover at radius 1 without endlessly refining tangent
+boundary cells. Four centers `(+-1/2,+-1/2)` have a four-leaf certificate at
+`radius_squared=1/2`. Neither case alone proves its matching global lower bound.
+
+The existing `rule` and `rational` tactics support this exact Python domain.
+The standalone bounded generator/checker is also callable:
+
+```text
+python -B scripts/rds_disk_cover_verify.py --spec cover.json --output proof.json
+python -B scripts/rds_disk_cover_verify.py --spec cover.json --certificate proof.json --output replay.json
+```
+
+Search is limited to depth 32 and 24,000 leaves; `--max-depth`/`--max-leaves`
+can lower those bounds. Certificates remain within the generic 2 MiB limit.
+Near-tight covers may need a different proof or a larger rigorously covered
+radius to give finite whole-cell margins; numerical search never overrides
+these checks.
 
 Network specs have `model.input_dim`, ordered `linear`/`relu` layers and
 `input_box`. Linear layers declare `weight` and `bias`. Bounds use
