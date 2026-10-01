@@ -11,3 +11,4 @@ __pycache__/
 *.zip
 obq-*.mjs
 dist/
+formal/.lake/

@@ -6,28 +6,29 @@ RDS separates a mathematical proposition from the experiment that tests utility 
 
 ## Implementation status
 
-Current `main` includes the mathematical implementation introduced by [PR #2](https://github.com/kongtou20070406/research-direction-selector/pull/2) at `995e8eb`, together with the Advisor/dashboard integration. The table retains the older `f020b2c` base for historical comparison. Check the actual ref before using an interface; a roadmap entry is not an installed capability.
+This checkout builds on the mathematical implementation introduced by [PR #2](https://github.com/kongtou20070406/research-direction-selector/pull/2) at `995e8eb`, together with the Advisor/dashboard integration. The table retains the older `f020b2c` base for historical comparison. Check the actual ref before using an interface; a roadmap entry is not an installed capability.
 
-| Area | Historical base (`f020b2c`) | Current `main` (implementation from `995e8eb`) | Further work |
+| Area | Historical base (`f020b2c`) | Current checkout | Further work |
 | --- | --- | --- | --- |
 | Ordinary scalar execution | Restricted rational AST and paired MSE; `AST_ONLY` admission. | Preserved. | Remains distinct from mathematical verification. |
 | Declared scalar boundary | Optional SymPy; `SYMBOLIC_CHECKED`; unsupported cases yield `UNKNOWN`. | Typed statements, an exact affine-rational certificate generator and a separate checker. | Extend coverage while preserving statement and evidence bindings. |
 | Certificate reuse | No independently checked certificate path. | Bound scalar certificates and a rebuildable generic proof cache; hits are independently checked. Solving stays outside the short reservation write transaction. | Preserve dependency bindings as adapters expand. |
 | Network properties | No network verifier. | Registered rational Linear/ReLU bounds, margins and positive-scale equivariance. | Broader operators and explicit export/runtime correspondence. |
 | Matrix and dynamics properties | `dynamics` is unsupported and returns `UNKNOWN`. | Registered rational affine contraction/fixed-point checks and scoped spectral-radius checks. | Broader dynamics and norms with separate sound checkers. |
-| Native Lean | No native Lean adapter. | Registered fixed-template closed Rat `eq`/`lt`/`le` obligations, checked by an explicitly configured Lean4 executable. | mathlib and quantified model/property adapters. |
+| Native Lean | No native Lean adapter. | Closed Rat templates plus the optional pinned mathlib library and conditional Ville/Hoeffding/DPI theorem audits. | Instantiated statistical protocols and checked empirical applicability. |
 | Framework, tensors and exports | No general theorem command or model export. | `formal` CLI, finite theorem modules, concrete exact tensor checks and a restricted Python model-export API. | General symbolic tensors and further checked translations. |
 
-The interfaces below are included in `main`. The [pinned implementation contract](https://github.com/kongtou20070406/research-direction-selector/blob/995e8eb98f75697ef1ce43a9991f0686e5c29caa/references/formal_framework.md) records their source revision; use the installed revision's registrations and tests. The initial PR commit `8eadae9` covered only the scalar certificate path and is not the interface snapshot described here.
+The interfaces below describe this checkout. The [original implementation contract](https://github.com/kongtou20070406/research-direction-selector/blob/995e8eb98f75697ef1ce43a9991f0686e5c29caa/references/formal_framework.md) records the earlier source revision; use the installed revision's registrations and tests. The initial PR commit `8eadae9` covered only the scalar certificate path and is not the interface snapshot described here.
 
 ## Declaration and independent checking
 
-The implementation included in `main` uses `scripts/rds_verify.py` and the `formal` CLI, with finite schema-1 specifications. Its trusted registry contains 12 atomic mathematical kinds plus finite theorem-module composition, distinct from the 23-node methodology catalog. JSON cannot register executable rules or user axioms. Atomic declarations select a rule through `kind`; named module declarations use `by.rule`, not a top-level `rule_id`.
+The implementation uses `scripts/rds_verify.py` and the `formal` CLI, with finite schema-1 specifications. Its trusted atomic rule registry and finite theorem-module composition are distinct from the methodology catalog. JSON cannot register executable rules or user axioms. Atomic declarations select a rule through `kind`; named module declarations use `by.rule`, not a top-level `rule_id`.
 
 | Specification kind | Framework rule / supported obligation |
 | --- | --- |
 | `scalar_threshold` | `scalar.threshold_separation`: defined closed-domain control bound and a rational treatment witness. |
 | `lean_obligation` | `lean.rational_relation`: native Lean checking of a fixed-template closed rational `eq`, `lt` or `le` proposition. |
+| `statistical_obligation` | `lean.statistical_obligation`: native audit of a pinned conditional Ville, Hoeffding or Markov mutual-information DPI theorem; empirical application remains `UNKNOWN`. |
 | `affine_contraction` / `affine_fixed_point` / `affine_dynamics` | `matrix.infinity_contraction` / `matrix.fixed_point` / `dynamics.affine`: induced infinity norm, a specified fixed point, or both. |
 | `matrix_spectral_bound` / `matrix_spectral_exact` | `matrix.gershgorin` / `matrix.spectral_radius`: triangular matrices are decided exactly; other matrices use a sufficient bound for the former and remain `UNKNOWN` for the latter. An inconclusive sufficient bound remains `UNKNOWN`. |
 | `scale_equivariance` | `network.positive_homogeneity`: the supported Linear/ReLU model's declared positive-scale identity; distinct from scale invariance. |
@@ -61,7 +62,7 @@ The registered `lean_obligation` adapter accepts exactly `schema`, `kind`, `rela
 {"schema":1,"kind":"lean_obligation","relation":"lt","left":"1/2","right":"3/4"}
 ```
 
-Set `RDS_LEAN_EXECUTABLE` to an existing absolute native toolchain binary, replacing the example path below. The adapter does not download Lean and rejects elan and `.elan/bin` shims.
+The adapter discovers already installed native binaries, preferring the pinned package toolchain; it does not download Lean and rejects elan and `.elan/bin` shims. Optionally set `RDS_LEAN_EXECUTABLE` to an existing absolute native toolchain binary, replacing the example path below. Invalid explicit configuration remains `UNKNOWN`. When no native binary is installed, closed rational relations degrade to independently replayed exact Python certificates with `CERTIFICATE_CHECKED` assurance.
 
 ```powershell
 $env:RDS_LEAN_EXECUTABLE = 'C:\path\to\native-toolchain\bin\lean.exe'
@@ -71,9 +72,9 @@ python -B scripts/rds_cli.py --root . formal check --spec examples/formal/lean_o
 
 The adapter renders a fixed `RDS.obligation` theorem using Lean's Rat definitions and `by decide`, invokes the native binary with `--trust=0`, and requires the exact empty-axiom audit. Independent checking re-renders the expected source and calls Lean again, checking the declaration/source bindings, executable fingerprint and version. This is another native check of the generated template, not replay of a stored `.olean` proof object or trust in cached stdout.
 
-A checked atomic result reports `LEAN_KERNEL_CHECKED`, `backend: lean4_closed_rational` and `semantics: closed_Lean_Rat_relation`. This adapter currently produces only PASS or UNKNOWN: false propositions, unavailable tools, compilation failure and resource limits are UNKNOWN, not checked refutations. A theorem module containing native obligations still reports outer `CERTIFICATE_CHECKED`; that label does not mean every leaf was checked by Lean. Arbitrary Lean text, user tactics, general mathlib translation and proofs about executed training graphs are not supported.
+A native closed rational atomic result reports `LEAN_KERNEL_CHECKED`, `backend: lean4_closed_rational` and `semantics: closed_Lean_Rat_relation`. False propositions, compilation failure and resource limits are UNKNOWN, not checked refutations. A mixed theorem module reports outer `CERTIFICATE_CHECKED`; a module with only native leaves can report `LEAN_KERNEL_CHECKED`. Neither label removes its unresolved application premises. Arbitrary Lean text, user tactics, general mathlib translation and proofs about executed training graphs are not supported. The separately built [native statistical library](lean-native.md) audits conditional laws under an allowlist of mathlib's foundational axioms and preserves unresolved application premises, including inside theorem modules.
 
-The bounded tactic names are `rule`, `gershgorin`, `spectral_radius`, `scale_invariance`, `lean4` and `interval`. `rule` selects the registered backend; `lean4` applies only to `lean_obligation`. Other named tactics select their compatible kinds. Empty or duplicate chains are rejected, incompatible tactics are UNKNOWN, and explicit `--tactics` bypasses the default disk cache.
+The bounded tactic names are `rule`, `gershgorin`, `spectral_radius`, `scale_invariance`, `lean4` and `interval`. `rule` selects the registered backend; `lean4` applies to `lean_obligation` and `statistical_obligation`. Other named tactics select their compatible kinds. Empty or duplicate chains are rejected, incompatible tactics are UNKNOWN, and explicit `--tactics` bypasses the default disk cache.
 
 ### Historical prototype: a separate experimental path
 
