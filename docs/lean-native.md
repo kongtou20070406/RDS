@@ -32,6 +32,11 @@ labelled `CERTIFICATE_CHECKED`, rather than `LEAN_KERNEL_CHECKED`. Unsupported
 statistical checks remain `UNKNOWN`; SymPy or AST checks cannot certify a
 probability theorem.
 
+Each statistical kernel invocation has a 60-second deadline, a 4 GiB Lean
+memory limit, one worker thread and a 64 KiB output limit. Resource exhaustion
+returns `UNKNOWN`; it does not permit fallback or admission. Closed rational
+checks retain their separate 3-second, 512 MiB limits.
+
 The Python CI matrix needs no Lean installation. A separate native Lean job builds
 the fixed package, audits axioms, and runs the native adapter tests.
 

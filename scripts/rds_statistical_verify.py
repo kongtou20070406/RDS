@@ -144,8 +144,8 @@ def _native_check(spec, source):
                 "Native Lean version does not match the Formal toolchain")
         path = Path(folder) / "Obligation.lean"
         path.write_text(source, encoding="utf-8")
-        code, stdout = lean._run([str(executable), "--trust=0", "--memory=2048", "--threads=1", str(path)],
-                                folder, lean_path=paths, timeout_seconds=20)
+        code, stdout = lean._run([str(executable), "--trust=0", "--memory=4096", "--threads=1", str(path)],
+                                folder, lean_path=paths, timeout_seconds=60)
     require(code == 0, "Lean did not prove the selected conditional statistical theorem: " + stdout[:2048])
     axioms = _axioms(stdout)
     return {"lean_version": version.strip(), "lean_executable_sha256": fingerprint,
