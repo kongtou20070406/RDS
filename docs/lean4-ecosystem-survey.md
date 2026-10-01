@@ -358,6 +358,10 @@ RDS 最值得照搬的组织方式是：同一性质 AST 同时驱动训练/验�
 
 **NNV**：核查快照 [`376568b`](https://github.com/verivital/nnv/commit/376568b449535a779f751dd2def774a0ed94ead8)（2026-06-29）。当前 NNV 3.0 相关材料覆盖 Star/ImageStar 等 reachable-set 分析及神经控制系统；核心代码 [MIT](https://github.com/verivital/nnv/blob/376568b449535a779f751dd2def774a0ed94ead8/code/LICENSE)。工具实际依赖 MathWorks MATLAB 及多项 toolbox，并有 Python ONNX 转换辅助；这不是 Matplotlib，也不是一个独立纯 Python checker。本次未确认输出集合已有 Lean kernel replay。[官方 README 与环境要求](https://github.com/verivital/nnv/tree/376568b449535a779f751dd2def774a0ed94ead8)、[Python 转换工具](https://github.com/verivital/nnv/tree/376568b449535a779f751dd2def774a0ed94ead8/code/nnv/tools/onnx2nnv_python)
 
+### 补充：有理证书的理论设计
+
+Gokavarapu 的 *Proof-Carrying Verification for ReLU Networks via Rational Certificates* 最新为 v2（2026-01-12）。它针对 ReLU 网络和线性安全规格，给出 Farkas 不可行性与线性蕴含检查算法，并讨论证书归一化、组合和稀疏性。文中的“proof kernel”指精确有理运算检查算法；正文未报告 Lean 形式化，摘要页与全文未提供作者代码仓库，证据主要是数学证明与显式算例。可参考其证书接口设计，尚不能视作可直接复用的 Lean checker，也没有据此确认运行性能。[版本记录](https://arxiv.org/abs/2512.24339)、[原文](https://arxiv.org/html/2512.24339v2)
+
 ### 7. RDS 最小可复用验收设计
 
 以下是建议的下一步实验，不是已完成实现或时间实测。

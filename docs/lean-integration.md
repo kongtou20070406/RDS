@@ -4,7 +4,7 @@
 
 RDS primarily automates assistance to human research: investigate evidence, propose and select experiments, arrange execution, assess results, and resume after reflection. Lean4 compatibility supports suitable mathematical subproblems within that loop. The current narrow adapter uses Lean's Rat definitions; wider integration should reuse Lean4 and [mathlib](https://github.com/leanprover-community/mathlib4), while RDS supplies model/property adapters, experiment obligations and evidence bindings. RDS should not recreate Lean's logic or treat a Python method named `linarith` as Lean's arithmetic tactic.
 
-This page separates the implemented narrow interface from the broader integration design. Current `main` includes the native closed-rational adapter introduced by [PR #2](https://github.com/kongtou20070406/research-direction-selector/pull/2) at `995e8eb`. The older `f020b2c` base did not contain this adapter; broader model/mathlib integration remains future work.
+This page separates the implemented interfaces from the broader integration design. Current `main` includes the native closed-rational adapter and the pinned [Lean/mathlib statistical library](lean-native.md) for Ville, Hoeffding and mutual-information DPI. General model translation and empirical applicability proofs remain future work.
 
 ## Implemented closed-rational interface
 
@@ -14,7 +14,7 @@ This page separates the implemented narrow interface from the broader integratio
 {"schema":1,"kind":"lean_obligation","relation":"lt","left":"1/2","right":"3/4"}
 ```
 
-Use current `main` or v5.5.0-rc.2. Replace the path below with an existing absolute native Lean4 toolchain binary. The adapter does not download a toolchain and rejects elan and `.elan/bin` shims.
+Use current `main`. Replace the path below with an existing absolute native Lean4 toolchain binary. The adapter does not download a toolchain and rejects elan and `.elan/bin` shims.
 
 ```powershell
 $env:RDS_LEAN_EXECUTABLE = 'C:\path\to\native-toolchain\bin\lean.exe'
@@ -24,7 +24,7 @@ python -B scripts/rds_cli.py --root . formal check --spec examples/formal/lean_o
 
 The fixed template uses Lean's Rat definitions and `by decide` for `RDS.obligation`. The adapter invokes Lean with `--trust=0` and requires the exact empty-axiom audit. Independent checking re-renders the expected template, checks statement/source bindings, executable fingerprint and version, and calls Lean again. It does not replay a saved `.olean` proof object or accept cached stdout as proof.
 
-An accepted atomic result is PASS / `LEAN_KERNEL_CHECKED`, with `backend: lean4_closed_rational` and `semantics: closed_Lean_Rat_relation`. False propositions, missing tools, compilation failure and resource limits currently produce UNKNOWN / `NONE`, not checked refutations. CLI exit codes are 0/1/2 for PASS/FAIL/UNKNOWN; this native adapter does not currently produce FAIL. A finite theorem module containing native leaves still has outer `CERTIFICATE_CHECKED`.
+An accepted native atomic result is PASS / `LEAN_KERNEL_CHECKED`, with `backend: lean4_closed_rational` and `semantics: closed_Lean_Rat_relation`. Failed native compilation and resource limits produce UNKNOWN, not checked refutations. When no native binary is installed, supported closed-rational relations can instead use the exact Python checker, with the distinct `CERTIFICATE_CHECKED` assurance. Statistical library obligations require the native compiler and built library and remain UNKNOWN when these are unavailable. CLI exit codes are 0/1/2 for PASS/FAIL/UNKNOWN: exit 0 or selecting `--tactics lean4` alone does not establish native checking. A finite theorem module has `LEAN_KERNEL_CHECKED` only when every required nonempty leaf has that assurance; otherwise accepted modules retain `CERTIFICATE_CHECKED`.
 
 `formal check` accepts a framework certificate or a complete framework result and reconstructs its conclusion. The lower-level native checker accepts its domain certificate and repeats the native check. These formats are distinct. Arbitrary Lean text, user tactics, general mathlib translation and proofs of an executed training graph remain unsupported; the mathematical side condition does not establish utility or causality. See [all registered kinds and evidence boundaries](formal-verification.md) and the [versioned implementation contract](https://github.com/kongtou20070406/research-direction-selector/blob/995e8eb98f75697ef1ce43a9991f0686e5c29caa/references/formal_framework.md).
 

@@ -206,3 +206,15 @@
 [PR #16](https://github.com/kongtou20070406/research-direction-selector/pull/16) 已发布 `6a7144226fb7c130372ba39cbf08eb865393e0c7`，此前 Windows 原生全库结果为 487 项、4 跳过、零失败。GitHub run `36815292354` 的四组 Python 矩阵通过，原生 Lean job `110218921148` 的 build/axiom audit 通过，但 Ville 真实统计重放在 2 GiB 上限触发 `lean::memory_exception`，该 CI 目前失败。原始失败已交给负责人修复，未跳过或降格为成功，未合并该失败状态。
 
 空投随后询问是否应强制 Lean 依赖。总控建议标准完整版要求 Lean 与匹配 Mathlib，保留显式 Python 精简模式，并对要求内核证明的功能执行依赖缺失阻断。此处记录的是安装策略建议；当前尚未将它写成已实现的默认安装器。应先完成原生跨平台问题和匹配版本验收。
+
+## 八、最终集成审查（2026-10-01）
+
+本章更新前面的阶段快照。Lean [PR #16](https://github.com/kongtou20070406/research-direction-selector/pull/16) 最终源码为 `a2314f764bf78ef762e20f6dc07e1d2536edb0fa`，已经合入远端 main，合并提交为 `a7c6dea7d2db45eb913c2270c22b4d9320566828`。交付固定 **Lean/mathlib 4.33.1**；最新稳定 4.34.1 已调查，但未冒称通过本轮兼容验收。统计子进程调整为 4 GiB / 60 秒，仍保留 `--trust=0`、单线程、输出上限、来源绑定和公理审计。
+
+初次修复的成功 CI 仍出现缓存引起的 native 跳过，负责人保留原始日志后又修正工作流，不能把那次成功状态当作最终证据。最终 [run 36816660392](https://github.com/kongtou20070406/research-direction-selector/actions/runs/36816660392) 的五个作业成功；Linux 适配器 **22 项**、统计义务 **14 项**均实际执行，零跳过、零失败，构建及 16 个公开定理的公理审计通过。允许公理仅为 `propext`、`Classical.choice`、`Quot.sound`。
+
+Advisor [PR #15](https://github.com/kongtou20070406/research-direction-selector/pull/15) 已更新至 `3a988852364ed9bcdc252479e1927ecc7586a312`。原始全量自开发日志报告 472 项、468 通过、4 项环境跳过；定向 12 项全部通过。总控从 GitHub 独立确认 [run 36816820188](https://github.com/kongtou20070406/research-direction-selector/actions/runs/36816820188) 成功。原先只保留 hash 和同一请求重复收费的两项审查意见已进入修复；最终审查及合并后组合证据另记，不以旧版证据代替。
+
+资源改动及本综述已发布 [PR #17](https://github.com/kongtou20070406/research-direction-selector/pull/17)，当前集成树含上述两线与资源规划。代码级联合审查确认 Advisor 在 checker 前原子保守扣费，生成与重放共享外层 allowance deadline；Lean 内部放宽到 60 秒不绕过该期限。超时清理进程树并留存证据；统计 `application_status=UNKNOWN` 不能获得经验准入。费用中的 CPU/GPU 估计仍不等于实际用量，控制器并不承诺整个 API 的硬截止时间。
+
+依赖策略的事实边界也已核对：目前没有 `required-native` 安装模式或 `doctor` 命令。`--tactics lean4` 和退出码 0 都可能来自精确有理数 Python fallback，完整版验收须检查 `LEAN_KERNEL_CHECKED` 并独立重放；Frontier 原生准入与统计义务已有对应门禁。已修订英文/中文接入文档中的过期描述。不会以此次文档修正声称自动安装器已实现。

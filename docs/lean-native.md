@@ -5,6 +5,15 @@ The optional `formal/` Lake project fixes Lean **4.33.1** and mathlib **v4.33.1*
 run RDS. Runtime verification discovers already installed native binaries and
 never installs a toolchain, resolves Lake dependencies, or downloads a cache.
 
+A deployment offering the complete native formal capability must provision this
+matching Lean/mathlib pair and the built `Formal` library. A Python-only setup is
+a reduced-capability installation. There is currently no `required-native`
+installation mode or `doctor` command: acceptance must inspect
+`assurance: LEAN_KERNEL_CHECKED`, independently replay the certificate, and retain
+`application_status: UNKNOWN` when empirical premises are unresolved. A successful
+CLI exit or `--tactics lean4` alone is insufficient because exact rational fallback
+has its own successful result. Pin upgrades require a fresh build and replay.
+
 ## Build and replay
 
 Build the library explicitly, with the toolchain declared in `formal/lean-toolchain`:
