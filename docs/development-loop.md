@@ -28,7 +28,7 @@ For the complete public regression suite, add `--all-tests`. This includes bench
 
 ## Theory before a CPU probe
 
-The programmatic `RDSAdvisor.execute_theory_probe(run_spec, formal, committed=...)`
+The programmatic `RDSAdvisor.execute_theory_probe(run_spec, formal, theory_allowance=..., committed=...)`
 checks an explicit declarative obligation with the existing independent certificate
 checker before calling `ProjectStore.register`. `FAIL` and `UNKNOWN` return without
 creating a run or reserving empirical budget. A supplied result is replayed; its
@@ -55,11 +55,31 @@ A proven side condition does not prove that executable code implements the model
 or guarantee improvement from an already optimal starting point. A failed
 manipulation check requires inspecting that correspondence; a flat trajectory
 cannot by itself establish an optimizer or data-distribution cause. `UNKNOWN`
-blocks this probe without refuting the mathematics. Theory-check wall time is
-reported separately from the empirical process cost. This scalar acceptance case
-does not measure autonomous research quality. The hard project budget covers
-empirical subprocesses, not the complete controller/theory workflow; total observed
-controller time is reported without claiming an enforced end-to-end budget.
+blocks this probe without refuting the mathematics. Before checking, the same
+project budget atomically charges a finite `theory_allowance` with every contract
+resource dimension. Generation and independent replay share one owned subprocess
+wall deadline; timeout terminates its process tree and returns `UNKNOWN`. Empirical
+admission then checks the remaining shared budget. For example, an allowance may
+be `{"wall_seconds": 10, "cpu_seconds": 3, "gpu_seconds": 0}` when those are the
+contract dimensions. These are explicitly supplied conservative charges, not
+measured CPU/GPU usage or a suggestion that cheaper research is always better.
+
+Unused theory allowance is not refunded, including after rejection or controller
+crash; this avoids orphan reservations and double settlement. Append-only events
+bind its attempt, request and intended empirical manifest, retain observed check
+wall time and charge any observed wall overrun. The actual CPU/GPU measurement
+remains unknown. The hard deadline covers the complete checker subprocess;
+SQLite admission and evidence collection have overhead, so an exact OS deadline
+for every controller instruction is not claimed. This scalar acceptance case does
+not measure autonomous research quality.
+
+The same unchanged manifest/request has one durable claim, so concurrent callers
+cannot both pay for its check. Independent run identities can still check in
+parallel. The request binds the checker version, selected native executable and
+explicit allowance; a revised request can be reviewed under a new bounded claim.
+`ProjectStore.theory_record(attempt_id)` reads the complete recorded gate and
+bounded original worker stdout/stderr, even if later empirical admission failed.
+It exposes evidence for review and never grants admission from a stored PASS.
 
 Blocked checks also save structured verification-request decisions in the existing
 checkpoint ledger. The next selection pass suppresses an unchanged repeat before
