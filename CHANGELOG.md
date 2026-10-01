@@ -1,9 +1,14 @@
 # Changelog
 
-## 5.8.0 — 2026-10-01
+## 5.8.0 — Unreleased
 
+- Add explicit sourced theory-reformulation requests and compact bridges beyond the current graph. Relation labels are optional; reuse the current model, original goal and declared premises instead of duplicating fields. Preserve mappings and dates, and distinguish verified, counterexample and unresolved proof-check results without inferring containment, applicability, scientific gains or execution authority.
+- Preload eight scoped theory-tool cards and expose bounded tag-based shortlists plus single-card lookup. Load relevant details on demand; a match does not close prerequisites or authorize a run, and historical requests retain catalogue-availability checks.
+- Guide stalled proxy/task comparisons toward necessary-constraint review and deciding authorized checks, with elementary dynamical counterexamples. Broader state-space formulations and published sequence-model results are options to audit, not guarantees for an image-restoration task.
+- Add bounded descriptive probes for explicit residual/Jacobian exports and fixed-horizon refinement snapshots, with optional NumPy and unavailable-backend reporting. Snapshot statistics do not identify minimal state dimension, global stability, causality or task gain.
 - Add an advisory research-choice review that distinguishes a single supplied procedure from conditional rival comparison, exposes absent/overlapping predictions, unresolved application premises and truncated searches, and optionally reviews the project's sourced goal predicates independently of readiness. Retain the review in scoped choices and compact digests; keep theory obligations, authorization and scientific verdicts intact.
 - Report actual oversized-context bytes and a scoped-manifest repair hint without weakening limits or silently dropping evidence. Add regressions for local proxy success with failed task quality and prediction-scope transfer failures.
+- Add explicit lossless compaction of repeated declared code-hash maps into deduplicated canonical manifests, retaining original input, other fact data and measured byte counts in a new directory. Preserve the facts cap and review changed request identities; manifest digests do not verify actual code or authorize execution.
 - Support scoped `OBLIGATION_CHECK` actions with verified/counterexample/unresolved branches, alongside existing empirical comparisons. Bind direction-search source changes in execution identity; readiness and process success remain separate from proof.
 - Make authorized certificate-producing computation an active route for lengthy theoretical work. Bring selected backend readiness, feasibility, evidence-strength and research-continuity rules into native RDS guidance without depending on external mathematics Skills or forcing theory and experiments through the same acceptance gate.
 - Preserve CLI invocation counts during brief SQLite contention with a bounded wait; remove the fresh-log journal initialization race and retain existing journal modes.

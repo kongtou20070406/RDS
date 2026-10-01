@@ -84,6 +84,30 @@ class SelectionReviewTests(unittest.TestCase):
         self.assertEqual(result['ranking']['pareto_front'], ['route:probe'])
         self.assertEqual(result['selection_review']['assurance'], 'INPUT_REPORTED_NOT_SCIENTIFIC_VERIFICATION')
 
+    def test_unknown_prerequisite_ranking_does_not_compare_ready_directions(self):
+        for include_ready in (False, True):
+            with self.subTest(include_ready=include_ready):
+                graph, context = self.paired({'bias': ['positive'], 'state-support': ['negative']})
+                for node in graph['nodes']:
+                    node['executable']['preconditions'] = [{'fact': 'gate', 'value': True}]
+                    query_cost = deepcopy(context['costs']['probe'])
+                    query_cost['value'] = 0
+                    context['costs'][f"query:{node['id']}:gate"] = query_cost
+                if include_ready:
+                    independent = deepcopy(graph['nodes'][0])
+                    independent['id'] = 'independent'
+                    independent['executable']['preconditions'] = []
+                    independent['executable']['action']['id'] = 'independent'
+                    graph['nodes'].append(independent)
+                    context['costs']['independent'] = deepcopy(context['costs']['probe'])
+                result = search_directions(graph, context)
+                self.assertEqual([c['status'] for c in result['candidates'][:2]], ['NEEDS_EVIDENCE'] * 2)
+                self.assertEqual(result['ranking']['dominance'][0]['better'], 'route:probe')
+                review = result['selection_review']
+                self.assertEqual(review['ready_graph_directions'], int(include_ready))
+                self.assertEqual(review['basis'], 'REVIEW_ONLY' if include_ready else 'NO_READY_DIRECTION')
+                self.assertEqual(review['authorization'], 'UNCHANGED')
+
     def test_shared_pass_fail_predictions_do_not_distinguish_causes(self):
         graph, context = self.paired({'bias': ['positive', 'negative'], 'state-support': ['positive', 'negative']})
         result = search_directions(graph, context)

@@ -213,8 +213,10 @@ def review_selection(search, context):
                               unresolved_pairs=len(disc["unresolved_pairs"]))
         candidates.append(report)
     basis = "NO_READY_DIRECTION" if not ready else "SCOPED_OBLIGATION" if obligations else "REVIEW_ONLY"
-    # Existing ranking already checks scope, rival identity, coverage and cost units.
-    if search.get("ranking", {}).get("dominance"):
+    # Ranking can also compare conditional routes whose prerequisites remain open.
+    ready_ids = {c["id"] for c in ready}
+    if any(row["better"] in ready_ids and row["worse"] in ready_ids
+           for row in search.get("ranking", {}).get("dominance", [])):
         basis = "CONDITIONAL_COMPARISON"
     review = {"basis": basis, "ready_graph_directions": len(ready), "candidates": candidates, "flags": flags,
               "assurance": "INPUT_REPORTED_NOT_SCIENTIFIC_VERIFICATION", "authorization": "UNCHANGED"}

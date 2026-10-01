@@ -8,6 +8,70 @@ def _text(value):
     return isinstance(value, str) and bool(value.strip()) and len(value) <= 2000
 
 
+def _theory_bridge(proposal, gap, defined, frontier, nodes):
+    """Check an explicit relation definition, never infer a theory hierarchy."""
+    from rds_frontier import _source, _metadata, _date
+    bridge = proposal.get("theory_bridge")
+    if not isinstance(bridge, dict):
+        return None, ["Theory reformulation requires theory_bridge"]
+    errors = []
+    bridge = deepcopy(bridge)
+    bridge.setdefault("kind", "unspecified")
+    bridge.setdefault("source_model", gap.get("current_model"))
+    bridge.setdefault("preserved_claim", f"Original goal {gap['target']}; preservation unverified")
+    bridge.setdefault("applicability_conditions", proposal.get("assumptions"))
+    bridge.setdefault("changed_assumptions", [])
+    kind = bridge["kind"]
+    if not _text(kind):
+        errors.append("Theory bridge kind, when supplied, must be a short description")
+    if bridge["source_model"] != gap.get("current_model"):
+        errors.append("Theory bridge must preserve the gap's current_model")
+    candidate = bridge.get("candidate_model")
+    if not isinstance(candidate, str) or candidate not in defined or candidate == gap.get("current_model"):
+        errors.append("Theory bridge requires a distinct defined candidate_model")
+    for field in ("mapping", "preserved_claim"):
+        if not _text(bridge.get(field)):
+            errors.append(f"Theory bridge requires {field}")
+    for field in ("changed_assumptions", "applicability_conditions"):
+        values = bridge.get(field)
+        minimum = 0 if field == "changed_assumptions" else 1
+        if not isinstance(values, list) or not minimum <= len(values) <= 16 or not all(_text(v) for v in values):
+            errors.append(f"Theory bridge requires {minimum}..16 {field}")
+    if kind == "approximation":
+        for field in ("domain", "error_bound"):
+            if not _text(bridge.get(field)):
+                errors.append(f"Approximation requires an explicit {field}")
+    cutoff = frontier.get("as_of")
+    for record in [bridge, *[node for node in nodes if isinstance(node, dict)]]:
+        if not _source(record.get("source")):
+            errors.append("Theory bridge and new nodes require source locators")
+        else:
+            try:
+                _metadata(record["source"], "theory source")
+            except ValueError as exc:
+                errors.append(str(exc))
+        when = record.get("available_on")
+        if cutoff and when is None:
+            errors.append("Theory bridge/new node has UNKNOWN_AVAILABILITY at as_of")
+        elif when is not None:
+            try:
+                if cutoff and _date(when, "theory available_on") > _date(cutoff, "as_of"):
+                    errors.append("Theory bridge/new node is a FUTURE_RECORD at as_of")
+                else:
+                    _date(when, "theory available_on")
+            except ValueError as exc:
+                errors.append(str(exc))
+    if errors:
+        return None, errors
+    fields = ("kind", "source_model", "candidate_model", "mapping", "preserved_claim",
+              "changed_assumptions", "applicability_conditions", "available_on", "domain", "error_bound")
+    result = {key: deepcopy(bridge[key]) for key in fields if key in bridge}
+    from rds_frontier import _ref
+    result.update(source=_ref("theory_bridge", {"id": proposal["id"], "source": bridge["source"]})["source"],
+                  relation_status="PROPOSED", applicability_status="UNKNOWN", preservation_status="UNKNOWN")
+    return result, []
+
+
 def formal_gate(statement, certificate=None, *, generate=False):
     """Replay a declared side condition; never infer it from graph relatedness."""
     if not isinstance(statement, dict):
@@ -60,9 +124,12 @@ def review_proposals(frontier, spec, pack):
         seen.add(pid)
         gap = gaps.get(proposal.get("gap_id")) if isinstance(proposal.get("gap_id"), str) else None
         formal_gap = gap is not None and gap.get("kind") == "FORMAL_OBLIGATION"
+        theory_gap = gap is not None and gap.get("kind") == "THEORY_REFORMULATION"
         errors = []
         if gap is None:
             errors.append("gap_id is not an open gap in this frontier result")
+        if "theory_bridge" in proposal and not theory_gap:
+            errors.append("Theory bridge requires a goal.reformulation frontier gap")
         nodes, relations = proposal.get("new_nodes", []), proposal.get("relations", [])
         if (not isinstance(nodes, list) or len(nodes) > 16 or not isinstance(relations, list)
                 or not (0 if formal_gap else 1) <= len(relations) <= 32):
@@ -76,6 +143,15 @@ def review_proposals(frontier, spec, pack):
                 errors.append("New nodes require fresh IDs, known kinds and labels")
             else:
                 defined.add(node["id"])
+        bridge = None
+        if theory_gap:
+            bridge, bridge_errors = _theory_bridge(proposal, gap, defined, frontier, nodes)
+            errors.extend(bridge_errors)
+            if bridge is not None:
+                kinds = {node["id"]: node.get("kind") for node in spec.get("nodes", [])}
+                kinds.update({node["id"]: node.get("kind") for node in nodes if isinstance(node, dict) and "id" in node and isinstance(node["id"], str)})
+                if kinds.get(bridge["candidate_model"]) not in ("model", "concept"):
+                    errors.append("Candidate theory must name a model or concept node")
         adjacency = defaultdict(set)
         for edge in available_edges:
             if edge.get("status") == "SUPPORTED" and (gap is None or not gap.get("relations")
@@ -92,7 +168,8 @@ def review_proposals(frontier, spec, pack):
             if proposal.get("formal_obligation") != gap.get("formal_obligation"):
                 errors.append("Formal proposal must preserve the gap's exact obligation")
         elif gap is not None:
-            starts = [anchor for anchor in gap["anchors"] if anchor != gap["target"]]
+            starts = ([gap["current_model"]] if theory_gap else
+                      [anchor for anchor in gap["anchors"] if anchor != gap["target"]])
             visited = {(anchor, False) for anchor in starts}
             pending = list(visited)
             while pending:
@@ -104,18 +181,39 @@ def review_proposals(frontier, spec, pack):
                         pending.append(state)
             if (gap["target"], True) not in visited:
                 errors.append("Proposed relations do not bridge a gap anchor to its target using its required relation types")
+            if theory_gap and bridge is not None:
+                candidate = bridge["candidate_model"]
+                after = {(candidate, False)}
+                pending = list(after)
+                while pending:
+                    node, used = pending.pop()
+                    for child, proposed in adjacency[node]:
+                        state = (child, used or proposed)
+                        if state not in after:
+                            after.add(state)
+                            pending.append(state)
+                if not any((candidate, first) in visited and (gap["target"], second) in after
+                           and (first or second) for first in (False, True) for second in (False, True)):
+                    errors.append("Candidate theory must lie on the proposed current_model-to-goal path")
         assumptions = proposal.get("assumptions")
         if not isinstance(assumptions, list) or not 1 <= len(assumptions) <= 16 or not all(_text(x) for x in assumptions):
             errors.append("Declare 1..16 assumptions")
+        test = proposal.get("test")
+        proof_check = theory_gap and isinstance(test, dict) and test.get("kind") == "proof_check"
         prediction = proposal.get("prediction")
-        if (not isinstance(prediction, dict) or not isinstance(prediction.get("observable"), str)
+        if not proof_check and (not isinstance(prediction, dict) or not isinstance(prediction.get("observable"), str)
                 or prediction["observable"] not in defined or not _text(prediction.get("if_proposal"))
                 or not _text(prediction.get("if_rival"))
                 or prediction["if_proposal"].strip() == prediction["if_rival"].strip()):
             errors.append("Prediction requires a defined observable and distinct proposal/rival outcomes")
-        test = proposal.get("test")
         if not isinstance(test, dict) or not all(_text(test.get(key)) for key in ("protocol", "measurement", "stop_condition")):
             errors.append("Test requires protocol, measurement and stop_condition")
+        if theory_gap and isinstance(test, dict):
+            if test.get("kind", "empirical") not in ("empirical", "proof_check"):
+                errors.append("Reformulation test kind must be empirical or proof_check")
+            if proof_check and (not isinstance(test.get("outcomes"), list)
+                                or sorted(test["outcomes"], key=str) != ["counterexample", "unresolved", "verified"]):
+                errors.append("Proof check requires verified/counterexample/unresolved outcomes")
         positive, negative = proposal.get("next_if_positive"), proposal.get("next_if_negative")
         if not _text(positive) or not _text(negative) or positive.strip() == negative.strip():
             errors.append("Positive and negative results must change different next decisions")
@@ -131,12 +229,28 @@ def review_proposals(frontier, spec, pack):
                 {"from": edge["from"], "to": edge["to"], "relation": edge["relation"], "status": "PROPOSED"}
                 for edge in relations]}
             report.update(assumptions=deepcopy(assumptions),
-                          prediction={key: prediction[key] for key in ("observable", "if_proposal", "if_rival")},
                           test={key: test[key] for key in ("protocol", "measurement", "stop_condition")},
                           next_if_positive=positive, next_if_negative=negative,
                           evidence_refs=deepcopy(gap["evidence_refs"]), original_decision=gap.get("decision"))
-            gate = formal_gate(proposal.get("formal_obligation"),
-                               proposal.get("formal_certificate"), generate=True)
+            if not proof_check:
+                report["prediction"] = {key: prediction[key] for key in ("observable", "if_proposal", "if_rival")}
+            if theory_gap:
+                report["theory_bridge"] = bridge
+                report["test"]["kind"] = test.get("kind", "empirical")
+                if proof_check:
+                    report["test"]["outcomes"] = list(test["outcomes"])
+                from rds_frontier import _ref
+                report["evidence_refs"] += [_ref("theory_bridge", {"id": pid, "source": proposal["theory_bridge"]["source"]})]
+                report["evidence_refs"] += [_ref("node", node) for node in nodes]
+                for output_node, input_node in zip(report["subgraph"]["nodes"], nodes):
+                    output_node["source"] = _ref("node", input_node)["source"]
+                    if "available_on" in input_node:
+                        output_node["available_on"] = input_node["available_on"]
+                gate = {"status": "UNKNOWN", "assurance": "NONE", "admitted": False,
+                        "reason": "Review the exact mapping and application premises through a separately bound check"}
+            else:
+                gate = formal_gate(proposal.get("formal_obligation"),
+                                   proposal.get("formal_certificate"), generate=True)
             report["formal_gate"] = gate
             if isinstance(proposal.get("formal_obligation"), dict):
                 report["formal_obligation"] = deepcopy(proposal["formal_obligation"])

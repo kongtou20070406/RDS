@@ -16,7 +16,7 @@ DEFAULT_LIMITS = {"max_gaps": 12, "max_nodes": 128, "max_edges": 512,
                   "max_combinations": 256, "max_power": 2, "max_terms": 3}
 LIMIT_CAPS = {"max_gaps": 64, "max_nodes": 512, "max_edges": 4096,
               "max_combinations": 4096, "max_power": 6, "max_terms": 6}
-FAMILIES = ("MISSING_BRIDGE", "MODEL_FAILURE", "DIMENSIONAL_BRIDGE", "TRANSFER_GAP", "FORMAL_OBLIGATION")
+FAMILIES = ("MISSING_BRIDGE", "MODEL_FAILURE", "DIMENSIONAL_BRIDGE", "TRANSFER_GAP", "FORMAL_OBLIGATION", "THEORY_REFORMULATION")
 PROPOSAL_FIELDS = ["assumptions", "relations", "prediction", "test",
                    "next_if_positive", "next_if_negative"]
 MAX_METADATA_BYTES = 1024
@@ -193,6 +193,20 @@ def discover_frontier(spec):
             _require(isinstance(relations, list) and 1 <= len(relations) <= 32
                      and all(_text(relation) for relation in relations)
                      and len(set(relations)) == len(relations), f"Goal {goal['id']} requires 1..32 distinct relations")
+        if "reformulation" in goal:
+            request = goal["reformulation"]
+            _require(isinstance(request, dict) and _text(request.get("current_model"))
+                     and request["current_model"] in all_nodes and _text(request.get("reason"))
+                     and _source(request.get("source")),
+                     f"Goal {goal['id']} reformulation requires current_model, reason and source")
+            _metadata(request["source"], f"Goal {goal['id']} reformulation.source")
+            if "signals" in request:
+                signals = request["signals"]
+                _require(isinstance(signals, list) and len(signals) <= 32
+                         and all(_text(signal) and len(signal) <= 80 for signal in signals),
+                         "Reformulation signals require at most 32 short strings")
+            if "available_on" in request:
+                _date(request["available_on"], "reformulation.available_on")
     for observation in records["observations"]:
         _require(_text(observation.get("model")) and _text(observation.get("node"))
                  and observation["model"] in all_nodes and observation["node"] in all_nodes,
@@ -308,6 +322,22 @@ def discover_frontier(spec):
             paths[path_key] = (_walk([target], reverse), forward)
         ancestors, forward = paths[path_key]
         goal_ranges.append({"goal": goal, "nodes": (_walk(goal["anchors"], forward) & ancestors) | {target}})
+        if "reformulation" in goal:
+            request = {**goal["reformulation"], "id": goal["id"]}
+            current = request["current_model"]
+            if available("reformulations", request, 0) and usable("reformulations", request, [current]):
+                family_gaps["THEORY_REFORMULATION"].append(_gap("THEORY_REFORMULATION", goal,
+                    [current], target, [_ref("goal", goal), _ref("reformulation", request),
+                        *[_ref("node", nodes[rid]) for rid in dict.fromkeys([current, *goal["anchors"], target])]],
+                    "An explicit review requests a broader or alternative formulation; no theory is declared exhausted.",
+                    f"Which sourced reformulation of {_describe(nodes[current])} addresses {request['reason']} "
+                    f"while preserving the goal {_describe(nodes[target])}? State the map, changed assumptions "
+                    "and a deciding proof check or comparison; wider scope alone is not evidence of gain.",
+                    goal_id=goal["id"], decision=goal["decision"], current_model=current,
+                    original_anchors=list(goal["anchors"]), review_reason=request["reason"],
+                    required_proposal_fields=["theory_bridge", "assumptions", "relations", "test",
+                                              "next_if_positive", "next_if_negative"],
+                    execution_authorized=False))
         missing = [anchor for anchor in goal["anchors"] if anchor not in ancestors]
         if not missing:
             continue
@@ -470,6 +500,23 @@ def discover_frontier(spec):
                 result["gaps"].append(pending[kind].popleft())
     if any(pending.values()):
         truncated("gap limit")
+    # Retrieve only for emitted, explicitly scoped requests. Never load the
+    # catalogue into ordinary advice or feed contemporary tools to old cutoffs.
+    tool_reviews = {}
+    for gap in result["gaps"]:
+        if gap["kind"] != "THEORY_REFORMULATION":
+            continue
+        request = next(goal["reformulation"] for goal in eligible["goals"] if goal["id"] == gap["goal_id"])
+        signals = tuple(dict.fromkeys(request.get("signals", [])))
+        if signals:
+            if signals not in tool_reviews:
+                from rds_theory_tools import shortlist
+                tool_reviews[signals] = shortlist(list(signals), limit=3)
+            tools = tool_reviews[signals]
+            if cutoff and _date(tools["available_on"], "catalogue.available_on") > cutoff:
+                gap["theory_tools"] = {"status": "UNAVAILABLE_AT_CUTOFF", "cards": []}
+            else:
+                gap["theory_tools"] = deepcopy(tools)
     used_proposals = {pid for gap in result["gaps"] for pid in gap.get("proposal_ids", [])}
     result["program_proposals"] = [proposal for pid, proposal in proposals.items() if pid in used_proposals]
     result["statistics"] = {"nodes_used": len(nodes), "edges_used": len(edges),

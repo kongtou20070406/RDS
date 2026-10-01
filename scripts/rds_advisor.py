@@ -837,7 +837,7 @@ def _json(value, cap=MAX_LOOP_BYTES):
     try:
         raw = json.dumps(value, ensure_ascii=False, sort_keys=True, allow_nan=False, separators=(",", ":"))
         size = len(raw.encode("utf-8"))
-        _require(size <= cap, f"Advisor loop JSON exceeds byte limit ({size} > {cap}); use a scoped context and shared manifest digest/source locator while retaining full originals")
+        _require(size <= cap, f"Advisor loop JSON exceeds byte limit ({size} > {cap}); use a scoped context and shared manifest digest/source locator while retaining full originals. For repeated code file-hash maps: scripts/rds_context_compact.py --input CONTEXT --output-dir NEW_DIRECTORY")
         strict_json(raw)
         return raw
     except (TypeError, RecursionError, UnicodeError, OverflowError) as exc:

@@ -77,6 +77,16 @@ Optionally add the project's **existing** task acceptance predicates to `decisio
 
 Large provenance maps belong in their original source manifest. Use its digest and locator in a scoped context rather than repeating the full file map in every fact. Oversized loop input retains the same byte cap and now reports the actual size plus a repair hint; no facts are silently dropped or compressed into stronger evidence.
 
+For repeated declared file-hash maps, use the native compactor before submitting a new context:
+
+```powershell
+python -B scripts/rds_context_compact.py --input context.json --output-dir NEW_DIRECTORY
+```
+
+The output directory must be new. Only filename-to-SHA256 maps at `facts.*.binding.code_sha256` or `facts.*.bindings.code_sha256` are replaced by their canonical manifest digest; other fact data, sources and scopes remain intact. Identical maps share one complete `manifests/<digest>.json`. The directory retains the full original bytes in `source.json`, the new `context.json`, and `summary.json` with changed JSON pointers, manifest locators and measured facts bytes. For example, repeated 100-file maps can share one manifest rather than repeating all entries. Byte reduction is not a measured token saving.
+
+Input remains capped at 2 MiB, and compacted facts must still fit the engine's unchanged 262144-byte cap; an unrelated oversized context needs a scoped redesign. This records declared identity and changes representation, without verifying actual files, strengthening evidence or granting permission. The new representation changes the request fingerprint: review and record it as a new request, preserving earlier frozen contexts and records. Read the current task's needed manifests on demand.
+
 Before expensive execution, check the actual data/shape inventory and instrument the methods that really execute; inferred call counts remain derived counts. Require a nonvacuous wiring probe under its declared premises, rather than a universal nonzero-gradient assertion that can fail legitimately. On failure, preserve valid partial observations with their narrower scope and identify the first failed stage; launch success, terminal execution, evidence validity, manipulation and task acceptance are separate results.
 
 Native selected-capability checks need no external Skill:

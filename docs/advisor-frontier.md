@@ -33,6 +33,16 @@ python benchmark/advisor-frontier/run.py
 
 输出 gap 包含 `anchors/target/question/why/evidence_refs/required_proposal_fields`，状态为 `OPEN`，科学支持保持 `UNKNOWN_SCIENTIFIC_SUPPORT`。成本未知时保持 `cost.status=UNKNOWN`。这些字段提供审查入口，不是建议成功率、科学优先级或自动运行授权。
 
+## 主动拓宽理论路线
+
+可选 `goal.reformulation` 声明 `current_model`、`reason`、`source` 与 `available_on`，请求 `THEORY_REFORMULATION`。它保留原目标与下一决定；即使图已经可达、没有数值残差，也能请求更宽的表述，不要求先失败三次。当前模型必须是可用节点；请求及新候选的来源、时间、输入大小与枚举上限仍受检查。`as_of` 下来源日期缺失或来自未来不能进入当时的路线，截断不表示没有其他理论。
+
+回复的 `proposal.theory_bridge` 只必需 `candidate_model/mapping/source`；当前模型、原目标和已有前提可复用，补充条件按需声明。`kind` 可省略，默认 `unspecified`；四种常见关系只是示例，也允许其他短标签，不强迫分类或排名。明确声明 `approximation` 时仍须填 `domain/error_bound`。候选必须实际进入当前模型到原目标的提案路径；不能附一个孤立新概念，借旧路径声称已拓宽。理论映射与解释/预测边分开，不自动合成包含层级。
+
+可选 `goal.reformulation.signals` 为相关理论工具的查询标签，如 `trajectory_degradation/local_global_gap`。程序只在可用的改写 gap 上附最多三张[预载工具](theory-reformulation.md#按需查预载工具)摘要卡；它是 TAG_MATCH_ONLY，前提尚未检查，不自动分配 GPU 或执行。`as_of` 早于工具目录可用日期时不使用该目录，保持历史证据边界。
+
+经验检查保留不同预测；`test.kind=proof_check` 声明 `test.outcomes=["verified","counterexample","unresolved"]`，已核验/反例分别对应正负后续决定，未解决保持停止条件，不强制编造一个 rival 理论。定义完整仍只是 `NEEDS_EVIDENCE`：适用性 UNKNOWN、新关系 PROPOSED、执行未授权。无关的 Lean PASS 不会让理论路线进入可执行候选池。详细字段、反例与边界见[理论改写](theory-reformulation.md)。
+
 ## AI 回复与新节点
 
 AI 可以提出原图不存在的概念，不限于已有规则动作。将回复保存为 `{"schema_version":1,"proposals":[...]}`，再通过同一输入检查：
@@ -41,7 +51,7 @@ AI 可以提出原图不存在的概念，不限于已有规则动作。将回�
 python scripts/rds_cli.py advise --frontier research-graph.json --frontier-proposals proposed-bridges.json
 ```
 
-每条 proposal 需有唯一 `id`、当前 `gap_id`、`relations`、`assumptions`、`prediction`、`test`、`next_if_positive` 和 `next_if_negative`。可选 `new_nodes` 声明新 `id/kind/label`；relation 用 `from/to/relation` 连接已定义节点。`prediction` 指定可观测 node ID，以及 `if_proposal/if_rival` 两种不同预测；`test` 需说明 `protocol/measurement/stop_condition`。正负结果必须对应不同的下一决定。
+每条 proposal 需有唯一 `id`、当前 `gap_id`、`relations`、`assumptions`、`test`、`next_if_positive` 和 `next_if_negative`。可选 `new_nodes` 声明新 `id/kind/label`；relation 用 `from/to/relation` 连接已定义节点。默认经验模式的 `prediction` 指定可观测 node ID，以及 `if_proposal/if_rival` 两种不同预测；`test` 需说明 `protocol/measurement/stop_condition`。显式证明检查改用三类结果分支。正负结果必须对应不同的下一决定；理论改写的新节点还须保留来源及可用日期。
 
 程序将截止时点内的原有 `SUPPORTED` 路径与新边组合，检查是否至少使用一条新边连接断口；解释任务的 `explains` 限定同样适用，纯 `related_to` 不能冒充解释。未来边、超出节点/边搜索上限的记录和自签成功字段不能关闭断口。缺定义返回 `NEEDS_DEFINITION`；结构满足返回 `NEEDS_EVIDENCE`，所有新边仍为 `PROPOSED`。它不采用规则、不修改输入、不运行实验，也不证明两段不同预测文字实际可判别。来源定位仍是 `INPUT_REPORTED`，需要原始记录导入和适用条件核验才能加强证据。
 
