@@ -14,7 +14,7 @@
 - Add opt-in exact comparable-metric guards and bounded frozen-certificate milestone replay. FAIL/UNKNOWN prevents promotion while preserving the executed run; reserve guard and child work within one wall allowance. Reject withdrawn/incompatible baselines and backend/assurance substitutions.
 - Retain explicitly justified negative parameter intervals in the scoped checkpoint ledger. Advisor checks witness integrity and unchanged facts, scope, goal revision, action family and undeclared parameters before suppressing a nearby repeat; a point witness never creates a universal interval.
 - Expose bounded AND/OR proof dependency analysis through the common CLI and aliases. Distinguish all-premise dependencies, alternative proof paths, direct-evidence obligations and truncation from scientific proof.
-- Replace fixed progress badges with a Skill instruction to report a short factual progress sentence at meaningful advances or blockers; no extra display calls or per-invocation cards.
+- Report meaningful advances or blockers in one compact factual RDS line, with evidenced choice/execution/proof stages and an actual evidence hash prefix. Keep unknown and inapplicable stages explicit; no extra display calls or per-invocation cards.
 
 - Record local CLI invocation starts/exits automatically, across projects. Add `usage` with daily counts, inclusive date ranges, command/mode totals and JSON output; distinguish untracked history and preserve command behavior when logging fails. Keep prompts and argument payloads out of the log.
 

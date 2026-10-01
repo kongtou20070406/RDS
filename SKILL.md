@@ -28,7 +28,7 @@ Separate task gain, mechanism and search-policy evidence. Published, proxy, orac
 
 Check what executed computation changes: a knob name or mathematical side condition does not establish a mechanism. Preserve raw observations and failures. Missing evidence stays unknown; hashes bind artifacts and exit code 0 records execution, not science. Self-signed success creates no evidence or authority.
 
-During RDS-guided work, briefly tell the user what advanced and the next step or blocker at meaningful progress points. Ground RDS-use claims in actual calls and results. Use one plain-language sentence; no fixed status card, badge, per-call report or extra call just for display. Unknown evidence stays unknown.
+At meaningful advances or blockers, report one short factual line such as `RDS｜选路✓→执行✓｜证明?｜<sha8>`, with the concrete advance/next step when useful. Mark `选路✓` only for a recorded scoped choice consumed before execution, `执行✓` for a successful bound receipt, and `证明✓` for the reported claim with its premises checked; execution, local tests or narrower lemmas do not prove the goal. Use `?` for unknown, `—` for inapplicable stages and an actual receipt/certificate/saved-record hash prefix; omit absent fields. No per-call report or extra call just for display.
 
 ## Continuity and preferences
 
