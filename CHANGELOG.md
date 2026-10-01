@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 5.8.0 — 2026-10-01
 
 - Support scoped `OBLIGATION_CHECK` actions with verified/counterexample/unresolved branches, alongside existing empirical comparisons. Bind direction-search source changes in execution identity; readiness and process success remain separate from proof.
 - Make authorized certificate-producing computation an active route for lengthy theoretical work. Bring selected backend readiness, feasibility, evidence-strength and research-continuity rules into native RDS guidance without depending on external mathematics Skills or forcing theory and experiments through the same acceptance gate.
@@ -33,7 +33,7 @@
 
 - Track rule-replay input exposure in the project's existing RSI records. An optional `confirmation_campaign` rejects reuse of exposed heldout payloads by a different frozen evaluation, including case/campaign relabeling; failed and timed-out grading retain exposure. Frozen-pair replay, finite regression acceptance and rollback remain available. Add a scoped RSI evolution guide for decision rules, verifier capabilities and research policies. This guard does not attest independent sealing or scientific-policy gains.
 
-These compatible new CLI features require the next MINOR release under `docs/versioning.md`; the current published 5.7.0 tag is unchanged.
+These compatible feature additions use the MINOR increment under `docs/versioning.md`. CLI and Skill versions are aligned to 5.8.0; 5.7.0 ledgers remain readable while changed execution bindings still require review or a new contract.
 
 ## 5.7.0 — 2026-10-01
 
