@@ -31,7 +31,22 @@ jobs:
           test: 'false'
           lint: 'false'
           use-mathlib-cache: 'true'
+          use-github-cache: 'false'
           axiom-audit: 'true'
           axiom-audit-root: Formal
+      - name: Require native replay environment
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+          sys.path.insert(0, 'scripts')
+          import rds_lean_verify as lean
+          import rds_statistical_verify as stats
+          executable, _ = lean._executable()
+          for module, *_ in stats.THEOREMS.values():
+              stats._library(module)
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as stream:
+              stream.write(f'RDS_LEAN_EXECUTABLE={executable}\n')
+          PY
       - run: python -B -m unittest discover -s tests -p 'test_rds_lean*.py' -v
       - run: python -B -m unittest discover -s tests -p 'test_rds_statistical_obligations.py' -v
