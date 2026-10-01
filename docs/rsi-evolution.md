@@ -1,6 +1,6 @@
 # Evolve RDS from research failures
 
-RSI improves RDS's own rules, tools and search policy. For the current disk-covering research, use a small failure-driven loop: preserve the original failure, freeze one candidate change and its parent, compare them using the same acceptance standard, then adopt a scoped improvement or retain the rejection. Tool development, failures, comparison and confirmation consume the same research deadline as the mathematics. Do not turn a passing software check into a scientific-performance claim.
+RSI improves RDS's own rules, tools and search policy. Use a small failure-driven loop: preserve the original failure, identify the reusable missing capability, freeze one candidate change and its parent, compare them using the same acceptance standard, then adopt a scoped improvement or retain the rejection. Task-specific cases validate the capability; avoid encoding one current task or numerical instance into the general mechanism. Tool development, failures, comparison and confirmation consume the authorized research budget. Do not turn a passing software check into a scientific-performance claim.
 
 ## Three objects, three adoption meanings
 
@@ -33,11 +33,11 @@ A useful improvement can expand capability without lowering the current best rad
 
 For capability accumulation, retain working parents and their measured scope. Use the current accepted parent first. If actual stagnation warrants branching, predeclare a bounded alternative parent and branch budget; do not revive the same rejected intervention without changed evidence, scope or computation. Archive diversity is a candidate method, not a guaranteed improvement.
 
-## Apply this to n = 1 through 100
+## Example: a staged disk-covering curriculum
 
 Treat successive n as a **development curriculum**. Previously solved values, known constructions and previously inspected cases remain regression/development material. Adjacent n are related tasks, not automatically independent confirmation. Publish which inputs and feedback influenced each edit.
 
-The current human instruction is strict sequential completion: n = 1 through 4 are recorded as complete, and n = 5 is the active problem. Advance to n + 1 only after establishing all obligations for n: the exact radius, a nonzero integer polynomial with every coefficient and a rational isolating interval, exact centers, coverage of the entire closed disk, and an unrestricted global lower bound equal to that radius. Record missing obligations separately; a coverage PASS cannot authorize this progression. Do not launch the earlier n = 100 campaign while this route is selected. Published results may be used after checking their original statements and assumptions; distinguish a cited theorem from an independent proof, which the user prefers. This is the research protocol, not a newly implemented automatic mathematical gate.
+When the human chooses strict sequential completion, advance to n + 1 only after establishing the requested obligations for n: the exact radius, a nonzero integer polynomial with every coefficient and a rational isolating interval, exact centers, coverage of the entire closed disk, and an unrestricted global lower bound equal to that radius. Record missing obligations separately; a coverage PASS cannot authorize this progression. If a later human instruction chooses a direct n = 100 proof route, follow that active contract and retain the earlier curriculum as history. Published results may be used after checking their original statements and assumptions; distinguish cited theorems from independent proofs. This example is a research protocol, not an automatic mathematical gate or a universal requirement to solve small instances first.
 
 Start with the exact small-n results and the counterexample to an invalid covering argument. Accumulate full-domain coverage checking, exact rational/interval handling, boundary handling, counterexample reporting and reusable construction tools only when each resolves an actual blocker. A full-partition covering certificate proves an upper bound; proving the globally optimal radius requires a lower bound over all allowed centers, independent of a chosen symmetry or combinatorial family.
 
