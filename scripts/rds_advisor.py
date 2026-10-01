@@ -91,6 +91,33 @@ class RDSAdvisor:
         self.literature_load_errors = []
         self.literature_principles = self._load_scientific_principles()
 
+    def execute_theory_probe(self, run_spec, formal, *, committed=None):
+        """Check a declared side condition before reserving a project probe.
+
+        Uses the existing verifier and transactional runner. A proof concerns the
+        declared model; the probe still needs an empirical manipulation check.
+        Ordinary project commands remain available through ProjectStore.
+        """
+        from rds_probe import declarative_probe, formal_requirement
+        from rds_project import ProjectStore
+
+        # Freeze the request used for both checking and execution. A committed
+        # result is replayed, never trusted for its caller-supplied PASS label.
+        manifest = strict_json(_json(run_spec))
+        requirement = formal_requirement({"formal": strict_json(_json(formal))})
+        if requirement is None or requirement["kind"] != "declarative":
+            raise ValueError("Theory probes require an explicit declarative formal obligation")
+        started = time.monotonic()
+        gate = declarative_probe(requirement, committed)
+        result = {"formal_gate": gate, "theory_wall_seconds": time.monotonic() - started,
+                  "run_spec": manifest, "receipt": None}
+        if gate["status"] != "PASS" or gate.get("application_status", "PASS") != "PASS":
+            return result
+        store = ProjectStore(self.root_dir)
+        store.register(manifest)
+        result["receipt"] = store.execute(manifest["id"])
+        return result
+
     def _load_scientific_principles(self) -> List[Dict[str, Any]]:
         paths = [self.root_dir / "references/scientific_tuning_principles.json",
                  Path(__file__).resolve().parent.parent / "references/scientific_tuning_principles.json"]
