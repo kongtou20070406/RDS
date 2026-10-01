@@ -1,13 +1,14 @@
 """Replay closed rational obligations in an explicitly selected Lean 4 kernel.
 
 This adapter is a mathematical subtask of RDS. It accepts neither user Lean
-source nor tactics, and says nothing about a training run or model export. An
-installed native binary must be selected explicitly; elan is never invoked.
+source nor tactics, and says nothing about a training run or model export.
+Only installed native binaries are used; elan/download wrappers are never run.
 """
 import hashlib
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -23,6 +24,12 @@ MAX_OUTPUT_BYTES = 65536
 THEOREM = "RDS.obligation"
 AXIOM_AUDIT = "'RDS.obligation' does not depend on any axioms"
 RELATIONS = {"eq": "=", "lt": "<", "le": "≤"}
+FALLBACK_BACKEND = "rds_python_closed_rational"
+FORMAL_ROOT = Path(__file__).resolve().parents[1] / "formal"
+
+
+class NoNativeLean(ValueError):
+    """No installed toolchain; unlike invalid explicit configuration, may fall back."""
 
 
 def render_source(spec):
@@ -55,9 +62,28 @@ def render_source(spec):
 
 
 def _executable():
-    raw = os.environ.get("RDS_LEAN_EXECUTABLE")
-    require(raw, "Set RDS_LEAN_EXECUTABLE to an existing native Lean 4 binary")
-    path = Path(raw)
+    if "RDS_LEAN_EXECUTABLE" in os.environ:
+        raw = os.environ["RDS_LEAN_EXECUTABLE"]
+        require(raw, "RDS_LEAN_EXECUTABLE must select an existing native Lean 4 binary")
+        candidates = [Path(raw)]
+    else:
+        suffix = ".exe" if os.name == "nt" else ""
+        toolchains = Path.home() / ".elan" / "toolchains"
+        candidates = []
+        toolchain = FORMAL_ROOT / "lean-toolchain"
+        if toolchain.is_file():
+            name = toolchain.read_text(encoding="utf-8").strip().replace("/", "--").replace(":", "---")
+            candidates.append(toolchains / name / "bin" / ("lean" + suffix))
+        for command in ("lean", "lake"):
+            found = shutil.which(command)
+            if found:
+                candidates.append(Path(found).with_name("lean" + suffix))
+        candidates.extend(sorted(toolchains.glob("*/bin/lean" + suffix), reverse=True))
+        candidates = [path for path in candidates if path.is_file() and
+                      path.resolve().parent != (Path.home() / ".elan" / "bin").resolve()]
+        if not candidates:
+            raise NoNativeLean("No installed native Lean 4 toolchain; automatic downloads are disabled")
+    path = candidates[0]
     require(path.is_absolute() and path.is_file(), "Lean executable must be an existing absolute path")
     path = path.resolve()
     # Explicitly reject the usual automatic-download shims as well as elan.
@@ -69,11 +95,14 @@ def _executable():
     return path, fingerprint
 
 
-def _run(command, cwd):
+def _run(command, cwd, lean_path=None, timeout_seconds=None):
     """Enforce time and output budgets while draining the child pipe."""
     env = os.environ.copy()
     for key in ("LEAN_PATH", "LEAN_SRC_PATH", "LEAN_SYSROOT"):
         env.pop(key, None)
+    if lean_path is not None:
+        env["LEAN_PATH"] = os.pathsep.join(str(path) for path in lean_path)
+    timeout = TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
     process = subprocess.Popen(command, cwd=cwd, stdin=subprocess.DEVNULL,
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                shell=False, env=env)
@@ -97,11 +126,11 @@ def _run(command, cwd):
     reader = threading.Thread(target=drain, daemon=True)
     reader.start()
     try:
-        process.wait(timeout=TIMEOUT_SECONDS)
+        process.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait()
-        raise ValueError("Lean check exceeded the 3-second time budget") from None
+        raise ValueError(f"Lean check exceeded the {timeout}-second time budget") from None
     finally:
         reader.join(timeout=1)
     require(not reader.is_alive(), "Lean output reader did not finish within its budget")
@@ -132,14 +161,34 @@ def _certificate(spec, source, checked):
             "source_sha256": digest(source.encode("utf-8")), "source": source,
             "lean_version": checked["lean_version"],
             "lean_executable_sha256": checked["lean_executable_sha256"],
-            "theorem": THEOREM, "axioms": [], "semantics": SEMANTICS}
+            "theorem": THEOREM, "axioms": [], "semantics": SEMANTICS,
+            "assurance": "LEAN_KERNEL_CHECKED"}
+
+
+def _fallback_certificate(spec):
+    # The same strict renderer validates the entire declaration before Fraction
+    # replay. False closed relations remain UNKNOWN, not scientific refutations.
+    render_source(spec)
+    left, right = rational(spec["left"]), rational(spec["right"])
+    require({"eq": left == right, "lt": left < right, "le": left <= right}[spec["relation"]],
+            "Closed rational relation is false")
+    return {"schema": 1, "backend": FALLBACK_BACKEND, "version": VERSION,
+            "verdict": "PASS", "spec_sha256": digest(spec),
+            "left": str(left), "right": str(right), "relation": spec["relation"],
+            "assurance": "CERTIFICATE_CHECKED", "semantics": "closed_exact_rational_relation"}
 
 
 def verify(spec):
     """Generate and natively check a bounded mathematical proof obligation."""
     try:
         source = render_source(spec)
-        checked = _native_check(source)
+        try:
+            checked = _native_check(source)
+        except NoNativeLean as exc:
+            certificate = _fallback_certificate(spec)
+            return {"status": "PASS", "assurance": "CERTIFICATE_CHECKED",
+                    "backend": FALLBACK_BACKEND, "semantics": certificate["semantics"],
+                    "certificate": certificate, "reason": str(exc) + "; exact rational replay only"}
         certificate = _certificate(spec, source, checked)
         return {"status": "PASS", "assurance": "LEAN_KERNEL_CHECKED",
                 "backend": BACKEND, "semantics": SEMANTICS, "certificate": certificate,
@@ -159,6 +208,8 @@ def check_certificate(spec, certificate):
         require(type(certificate.get("schema")) is int and certificate["schema"] == 1 and
                 type(certificate.get("version")) is int and certificate["version"] == VERSION,
                 "Unsupported certificate schema or version")
+        if certificate.get("backend") == FALLBACK_BACKEND:
+            return certificate == _fallback_certificate(spec)
         source = render_source(spec)
         require(certificate.get("source") == source and
                 certificate.get("source_sha256") == digest(source.encode("utf-8")) and

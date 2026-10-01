@@ -127,12 +127,13 @@ def formal_gate(hypothesis, source):
     require(completed.returncode == 0, "Formal gate failed: " + completed.stdout.decode("utf-8", errors="replace"))
     probe = strict_json(completed.stdout.decode("utf-8"))
     require(probe.get("status") == "PASS", "Formal gate " + probe.get("status", "UNKNOWN") + ": " + probe.get("reason", "no boundary crossing"))
+    require(probe.get("application_status", "PASS") == "PASS", "Formal application assumptions remain UNKNOWN")
     return probe
 
 
 def cached_admission(state, binding, hypothesis, source):
     """Existing admitted certificates are an optional, independently checked cache."""
-    from rds_formal_kernel import check_certificate
+    from rds_probe import declarative_probe, formal_probe
 
     formal = formal_requirement(hypothesis)
     if formal is None:
@@ -146,12 +147,11 @@ def cached_admission(state, binding, hypothesis, source):
         certificate = probe.get("certificate")
         if probe.get("status") == "PASS" and isinstance(certificate, dict) and certificate.get("verdict") == "PASS":
             if formal["kind"] == "declarative":
-                from rds_verify import check_certificate as check_declarative
-                valid = check_declarative(formal["statement"], certificate)
+                checked = declarative_probe(formal, probe)
             else:
-                valid = check_certificate(parse_source(source), formal, certificate)
-            if valid:
-                return probe
+                checked = formal_probe(parse_source(source), formal, probe)
+            if checked.get("status") == "PASS" and checked.get("application_status", "PASS") == "PASS":
+                return checked
     return None
 
 
@@ -408,6 +408,8 @@ def validate_plan(plan, state, rds, admission=None):
         probe = cached_admission(state, binding, hypothesis, binding["source"])
         if probe is None:
             probe = formal_gate(hypothesis, binding["source"])
+    require(probe.get("status") == "PASS", "Formal gate " + probe.get("status", "UNKNOWN"))
+    require(probe.get("application_status", "PASS") == "PASS", "Formal application assumptions remain UNKNOWN")
     return {**binding, "admission_probe": probe}
 
 
@@ -478,11 +480,28 @@ def cmd_expose(args, rds):
 
 
 def cmd_run(args, rds):
+    # Slow proof replay runs outside either SQLite transaction. The charging
+    # transaction rechecks liveness and the exact binding it was replayed for.
+    with rds.snapshot() as (_, snapshot):
+        candidate = snapshot["plans"][args.id]
+        if candidate["run_status"] != "RESERVED":
+            return {"run_id": candidate["run_id"], "run_status": candidate["run_status"], "idempotent": True}
+        expected_binding = candidate["binding"]
+        expected_hypothesis = snapshot["hypotheses"][candidate["spec"]["hypothesis_id"]]
+    hypothesis = expected_hypothesis["spec"]
+    formal = formal_requirement(hypothesis)
+    probe = expected_binding["admission_probe"]
+    if formal and formal["kind"] == "declarative":
+        from rds_probe import declarative_probe
+        probe = declarative_probe(formal, probe)
     with rds.transaction() as (db, state):
         plan = state["plans"][args.id]
         if plan["run_status"] != "RESERVED":
             return {"run_id": plan["run_id"], "run_status": plan["run_status"], "idempotent": True}
         binding, spec = plan["binding"], plan["spec"]
+        require(binding == expected_binding, "Admission binding changed while formal verification was running")
+        require(state["hypotheses"][spec["hypothesis_id"]] == expected_hypothesis,
+                "Hypothesis binding changed while formal verification was running")
         require(engine_id() == binding["engine_sha256"], "Verifier changed after admission")
         require(digest(read_bounded(binding["source_path"], 8192)) == binding["source_sha256"],
                 "Source changed after plan lock")
@@ -491,6 +510,9 @@ def cmd_run(args, rds):
                 "Hypothesis binding failure")
         if spec["purpose"] == "confirm":
             require(clean_confirmation(state, spec["split_id"]), "Confirmation contaminated after admission")
+        binding = {**binding, "admission_probe": probe}
+        require(probe.get("status") == "PASS", "Formal gate " + probe.get("status", "UNKNOWN"))
+        require(probe.get("application_status", "PASS") == "PASS", "Formal application assumptions remain UNKNOWN")
         # Charge once before execution. No refund after start or a lost runner.
         for key, value in spec["resources"].items():
             state["budget"]["reserved"][key] -= value
@@ -504,7 +526,6 @@ def cmd_run(args, rds):
         exposure["seq"] = rds.event(db, "DATA_ACCESS_COMMITTED", **exposure)
         state["exposures"].append(exposure)
         dataset_path = state["contract"]["splits"][spec["split_id"]]["path"]
-        hypothesis = state["hypotheses"][spec["hypothesis_id"]]["spec"]
         run_id = plan["run_id"]
         baseline_key = digest({
             "control_ast": state["contract"]["baseline_control_ast"],
