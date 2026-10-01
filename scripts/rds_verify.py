@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 import sys
 
-from rds_verify_types import MAX_CERTIFICATE_BYTES, SEMANTICS, canonical, digest, require
+from rds_verify_types import MAX_CERTIFICATE_BYTES, SEMANTICS, bounded_json, canonical, digest, require
 
 MAX_THEOREMS = 64
 MAX_NODES = 100000
@@ -23,6 +23,7 @@ class ProofRule:
     kinds: tuple
     module: str
     version: str = "1"
+    support_files: tuple = ()
 
     def generate(self, statement):
         return importlib.import_module(self.module).verify(statement)
@@ -40,6 +41,9 @@ class RuleRegistry:
     def __init__(self, rules):
         self.by_name, self.by_kind = {}, {}
         for rule in rules:
+            require(isinstance(rule.support_files, tuple) and all(isinstance(name, str) and
+                    re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*\.py", name) for name in rule.support_files),
+                    "Proof rule support files must be local Python basenames")
             require(rule.name not in self.by_name, "Duplicate proof rule")
             self.by_name[rule.name] = rule
             for kind in rule.kinds:
@@ -70,37 +74,20 @@ REGISTRY = RuleRegistry((
     ProofRule("tensor.exact_identity", ("tensor_identity",), "rds_tensor_verify"),
     ProofRule("tensor.exact_bounds", ("tensor_bounds",), "rds_tensor_verify"),
     ProofRule("geometry.unit_disk_quadtree", ("unit_disk_cover",), "rds_disk_cover_verify"),
+    ProofRule("geometry.unit_disk_rational_voronoi", ("unit_disk_rational_voronoi",),
+              "rds_rational_voronoi_verify", support_files=("rds_unit_disk_voronoi_core.py",)),
 ))
 
 
 def _bounded_json(value):
-    """Reject oversized/deep in-memory inputs before recursion or serialization."""
-    stack, nodes, text_bytes = [(value, 0)], 0, 0
-    while stack:
-        item, depth = stack.pop()
-        nodes += 1
-        require(nodes <= MAX_NODES and depth <= MAX_DEPTH, "Declaration resource limit exceeded")
-        if isinstance(item, dict):
-            require(all(isinstance(k, str) for k in item), "JSON object keys must be strings")
-            stack.extend((k, depth + 1) for k in item)
-            stack.extend((v, depth + 1) for v in item.values())
-        elif isinstance(item, list):
-            stack.extend((v, depth + 1) for v in item)
-        elif isinstance(item, str):
-            text_bytes += len(item.encode("utf-8"))
-            require(text_bytes <= MAX_CERTIFICATE_BYTES, "Declaration exceeds byte limit")
-        else:
-            require(item is None or type(item) in (int, bool), "Declarations require exact JSON values")
-            if type(item) is int:
-                require(item.bit_length() <= 4096, "Declared integer exceeds resource limit")
-    require(len(canonical(value).encode("utf-8")) <= MAX_CERTIFICATE_BYTES,
-            "Declaration exceeds byte limit")
+    bounded_json(value, max_nodes=MAX_NODES, max_depth=MAX_DEPTH)
 
 
 def verifier_id():
     """Bind certificates/cache to the checker implementation and runtime."""
     here = Path(__file__).resolve().parent
     names = {rule.module + ".py" for rule in REGISTRY.by_name.values()}
+    names.update(name for rule in REGISTRY.by_name.values() for name in rule.support_files)
     names.update({"rds_verify.py", "rds_verify_types.py", "rds_formal_kernel.py", "rds_probe.py"})
     return digest({"sources": {name: digest((here / name).read_bytes()) for name in sorted(names)},
                    "python": sys.version,
@@ -108,7 +95,8 @@ def verifier_id():
 
 
 def rules():
-    return [{"name": rule.name, "statement_kinds": list(rule.kinds), "version": rule.version}
+    return [{"name": rule.name, "statement_kinds": list(rule.kinds), "version": rule.version,
+             "support_files": list(rule.support_files)}
             for rule in REGISTRY.by_name.values()] + [
                 {"name": "logic.and_intro", "statement_kinds": ["all"], "version": "1"}]
 
@@ -372,7 +360,7 @@ class LeanFormalEngine:
             tried = set()
             compatible = {"interval": {"network_bounds", "network_margin"},
                           "lean4": {"lean_obligation", "statistical_obligation"},
-                          "rational": {"lean_obligation", "unit_disk_cover"},
+                          "rational": {"lean_obligation", "unit_disk_cover", "unit_disk_rational_voronoi"},
                           "gershgorin": {"matrix_spectral_bound"},
                           "spectral_radius": {"matrix_spectral_exact"},
                           "scale_invariance": {"scale_equivariance"}}

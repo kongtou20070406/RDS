@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Let trusted proof rules declare supporting source files for verifier identity binding, and share bounded exact-JSON admission across framework/domain checkers. Bound containers before expansion; retain existing Boolean/null semantics with stricter domain options.
+
+- Add the separate `geometry.unit_disk_rational_voronoi` certificate rule: bounded rational inputs, exact full-disk Voronoi/circle extrema and frozen source-bound replay. Preserve the original core for certificate compatibility; support the rational tactic and retain the existing quadtree rule. Coverage establishes a construction upper bound only.
+
 - Track rule-replay input exposure in the project's existing RSI records. An optional `confirmation_campaign` rejects reuse of exposed heldout payloads by a different frozen evaluation, including case/campaign relabeling; failed and timed-out grading retain exposure. Frozen-pair replay, finite regression acceptance and rollback remain available. Add a scoped RSI evolution guide for decision rules, verifier capabilities and research policies. This guard does not attest independent sealing or scientific-policy gains.
 
 ## 5.7.0 — 2026-10-01

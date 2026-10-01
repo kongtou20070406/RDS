@@ -140,6 +140,15 @@ Unknown modules expose partial statuses but no complete module certificate.
 domain generator and an independent checker in reviewed Python source. JSON
 cannot register code, shell commands, causal assertions or user-written axioms.
 
+Trusted rules can also declare `ProofRule.support_files` as local Python
+basenames. These explicitly declared dependencies participate in the verifier
+identity and are exposed by `formal rules`; JSON declarations cannot add them.
+Declare the complete dependency set when extending a checker. This is explicit
+source binding, not automatic import discovery or automatic soundness review.
+Framework and domain validators share `rds_verify_types.bounded_json`, which
+bounds containers before expanding them and rejects floating values before
+serialization; domains can require stricter Boolean/null admission.
+
 `LeanFormalEngine` accepts finite chains of `rule`, `gershgorin`,
 `spectral_radius`, `scale_invariance`, `lean4` and `interval`. Each tactic only
 handles its compatible statement kinds. The scaling tactic proves the stated
@@ -233,3 +242,14 @@ Current preparation references are [Lean proof validation and axiom auditing](ht
 [alpha-beta-CROWN](https://github.com/Verified-Intelligence/alpha-beta-CROWN).
 ONNX, Vehicle and CROWN are not integrated RDS backends. Keep empirical research
 evidence separate from mathematical model certificates when adding them.
+
+## Rational Voronoi whole-disk coverage
+
+The optional `geometry.unit_disk_rational_voronoi` rule uses statement kind
+`unit_disk_rational_voronoi`. Exact Voronoi clipping and complete circle extrema
+certify an upper bound for the declared rational centers, including the entire
+closed boundary. The core and adapter are source-bound; frozen checking uses
+recorded coverers and exact radical comparisons. The `rational` tactic supports
+this rule alongside the existing quadtree rule. See the [coverage proof and
+capability bounds](../docs/rational-voronoi-cover.md); global optimality needs its
+own unrestricted lower-bound proof.
