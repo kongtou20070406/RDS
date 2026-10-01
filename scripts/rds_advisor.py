@@ -514,13 +514,14 @@ class RDSAdvisor:
             if "decision" not in context:
                 return recommendations  # Pure frontier queries do not need unrelated ML advice or rule libraries.
         if context and (not isinstance(context, dict) or "decision" in context or "frontier" not in context):
-            from rds_advisor_search import search_directions
+            from rds_advisor_search import search_directions, review_selection
             options = {"templates": state["advisor_templates"]} if state.get("advisor_templates") else {}
             if isinstance(state["advisor_context"], dict):
                 options.update({key: state["advisor_context"][key] for key in ("max_depth", "max_candidates")
                                 if key in state["advisor_context"]})
             search = search_directions(judgment_graph, state["advisor_context"], **options)
             loop_review = self._review_loop_history(state, context, search)
+            search["selection_review"] = review_selection(search, context)
             recommendations.append(_advice("STRATEGIC_RESEARCH_ADVICE", type="EXECUTABLE_DIRECTION_SEARCH", urgency="REVIEW",
                 reason="按明确的下一决策、带来源事实和图中结构化前置条件组合有界候选。",
                 search=search, observations=search["candidates"], limitations=search["limitations"],
@@ -835,7 +836,8 @@ def _text(value):
 def _json(value, cap=MAX_LOOP_BYTES):
     try:
         raw = json.dumps(value, ensure_ascii=False, sort_keys=True, allow_nan=False, separators=(",", ":"))
-        _require(len(raw.encode("utf-8")) <= cap, "Advisor loop JSON exceeds byte limit")
+        size = len(raw.encode("utf-8"))
+        _require(size <= cap, f"Advisor loop JSON exceeds byte limit ({size} > {cap}); use a scoped context and shared manifest digest/source locator while retaining full originals")
         strict_json(raw)
         return raw
     except (TypeError, RecursionError, UnicodeError, OverflowError) as exc:

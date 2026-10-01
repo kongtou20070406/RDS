@@ -172,6 +172,8 @@ class QuickTests(unittest.TestCase):
         search = next(r for r in after['recommendations'] if r.get('type') == 'EXECUTABLE_DIRECTION_SEARCH')['search']
         self.assertEqual(search['candidates'], [])
         self.assertEqual(search['blocked_candidates'][-1]['loop_review']['kind'], 'REPEAT_REJECTED_ROUTE')
+        self.assertEqual(search['selection_review']['ready_graph_directions'], 0)
+        self.assertEqual(search['selection_review']['basis'], 'NO_READY_DIRECTION')
         self.context['facts']['x']['source'] = {'path': 'new-witness.json', 'sha256': 'f' * 64}
         self.context_path.write_text(json.dumps(self.context), encoding='utf-8')
         reopened = json.loads(self.advise().stdout)
@@ -190,6 +192,7 @@ class QuickTests(unittest.TestCase):
             rows = db.execute('SELECT id,body FROM checkpoints ORDER BY rowid').fetchall()
         self.assertEqual([r[0] for r in rows], ['exec-before-first', 'exec-after-first'])
         self.assertNotIn('execution', json.loads(rows[0][1])['decision'])
+        self.assertEqual(json.loads(rows[0][1])['decision']['selection_review']['basis'], 'REVIEW_ONLY')
         self.assertEqual(json.loads(rows[1][1])['decision']['execution']['run_status'], 'SUCCEEDED')
         witness = self.root / 'witness.json'
         witness.write_text('{}', encoding='utf-8')

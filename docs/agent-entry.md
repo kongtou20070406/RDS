@@ -67,6 +67,18 @@ The program implements the domain-specific producer/checker; RDS supplies bindin
 
 Before a material computation, identify its mathematical structure, intended result and smallest sufficient implementation. Check only the selected backend's actual capability, estimate runtime/memory/expression growth and keep existing resource limits. Missing capabilities need an available fallback or concrete blocker. Distinguish numerical evidence, bounded checking, exact calculation, proof certificates and native formal verification. Arbitrary precision or CAS success alone does not raise evidence strength; another implementation is useful when it addresses a discrepancy or the required verification strength. Deliver the actual requested result when feasible, keeping large artifacts on disk with a compact summary.
 
+### Review the research choice
+
+Advisor returns `search.selection_review` alongside the existing readiness and cost ranking. It reports a single supplied graph direction, absent or overlapping rival predictions, unresolved prediction premises and search truncation. `READY` still means that the configured procedure's prerequisites are satisfied; it does not show that this is the best research direction. A single scoped proof obligation needs no invented rival experiment. Composed intervention plans remain a separate review scope.
+
+For empirical comparisons, use the existing action `discrimination` fields: explicit rival IDs, same-scope predicted outcome labels, their source and any application conditions. Only supported conditional coverage at comparable sourced costs can establish the existing Pareto relation. Naming two rivals or giving both the same pass/fail predictions supplies no causal discrimination. When local manipulation repeatedly passes but task quality fails, investigate the missing local-to-task or source-to-target bridge rather than treating the proxy as sufficient or claiming the whole hypothesis family disproved.
+
+Optionally add the project's **existing** task acceptance predicates to `decision.goal_conditions`; for example `[{"fact":"quality_gain","op":"gte","value":0.05}]`, where both the metric and threshold come from the actual project protocol. Advisor evaluates the sourced current facts separately from procedural readiness. Missing evidence stays `UNKNOWN`; `FALSE` identifies an open goal bridge, and even `TRUE` remains `INPUT_REPORTED`. This review supplies neither execution permission nor a scientific certificate and does not block an authorized attempt to improve a currently failing goal. `advise --record` retains the review with the choice; `--brief` exposes its basis and a few warning kinds while the full record stays in CAS.
+
+Large provenance maps belong in their original source manifest. Use its digest and locator in a scoped context rather than repeating the full file map in every fact. Oversized loop input retains the same byte cap and now reports the actual size plus a repair hint; no facts are silently dropped or compressed into stronger evidence.
+
+Before expensive execution, check the actual data/shape inventory and instrument the methods that really execute; inferred call counts remain derived counts. Require a nonvacuous wiring probe under its declared premises, rather than a universal nonzero-gradient assertion that can fail legitimately. On failure, preserve valid partial observations with their narrower scope and identify the first failed stage; launch success, terminal execution, evidence validity, manipulation and task acceptance are separate results.
+
 Native selected-capability checks need no external Skill:
 
 ```powershell

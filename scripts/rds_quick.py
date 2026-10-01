@@ -84,6 +84,13 @@ def choice(advice, context, candidate_id=None):
               'scope': deepcopy(decision['scope']), 'candidate': deepcopy(candidate),
               'outcome': 'plan_locked', 'evidence': deepcopy(context.get('facts', {})),
               'scientific_support': 'UNKNOWN'}
+    for recommendation in advice.get('recommendations', []):
+        search = recommendation.get('search', {})
+        if any(c.get('id') == candidate['id'] for c in search.get('candidates', [])) and 'selection_review' in search:
+            record['selection_review'] = deepcopy(search['selection_review'])
+            break
+    if 'goal_conditions' in decision:
+        record['goal_conditions'] = deepcopy(decision['goal_conditions'])
     if 'method_constraints' in context:
         record['method_constraints'] = deepcopy(context['method_constraints'])
     return record
@@ -430,7 +437,15 @@ def brief(root, value, version, formal=False):
     if 'recommendations' in value:
         summary['gaps'] = sum(len(r.get('frontier', {}).get('gaps', [])) for r in value['recommendations'])
         summary['candidates'] = [c.get('id') for r in value['recommendations'] for c in r.get('search', {}).get('candidates', [])][:3]
-        summary['flags'] = [f.get('kind') for r in value['recommendations'] for f in r.get('review', {}).get('flags', [])][:3]
+        selection = next((r['search']['selection_review'] for r in value['recommendations']
+                          if 'selection_review' in r.get('search', {})), None)
+        flags = [f.get('kind') for r in value['recommendations'] for f in r.get('review', {}).get('flags', [])]
+        if selection is not None:
+            summary['selection_basis'] = selection['basis']
+            flags += [f['kind'] for f in selection['flags']]
+            if 'goal' in selection:
+                summary['goal_input_status'] = selection['goal']['status']
+        summary['flags'] = list(dict.fromkeys(flags))[:3]
     if 'job_root' in value:
         summary['job_root'] = value['job_root']
         summary['run_status'] = (value.get('receipt') or {}).get('run_status', 'UNKNOWN')

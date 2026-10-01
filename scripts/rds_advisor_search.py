@@ -183,6 +183,57 @@ def _discrimination(action, facts):
             "issues": issues}
 
 
+def review_selection(search, context):
+    """Expose what the supplied directions can decide; never invent utility."""
+    ready = [c for c in search.get("candidates", []) if c.get("status") == "READY"]
+    flags, candidates = [], []
+    if search.get("truncation", {}).get("truncated"):
+        flags.append({"kind": "SEARCH_TRUNCATED", "next": "Review the omitted search scope before claiming a best route."})
+    obligations = all(c.get("action", {}).get("kind") == "OBLIGATION_CHECK" for c in ready)
+    if len(ready) == 1 and not obligations:
+        flags.append({"kind": "SINGLE_CONFIGURED_DIRECTION", "next": "Only one ready graph direction was supplied; review a serious alternative when it could change the decision."})
+    for c in ready:
+        report = {"id": c["id"], "basis": "SCOPED_OBLIGATION"}
+        if c.get("action", {}).get("kind") != "OBLIGATION_CHECK":
+            disc = c.get("discrimination")
+            if disc is None:
+                report["basis"] = "PROCEDURE_ONLY"
+                flags.append({"kind": "RIVAL_PREDICTIONS_MISSING", "candidate": c["id"],
+                              "next": "Bind same-scope rival predictions to observed outcomes, or describe this as a premise/procedure check."})
+            elif not disc["valid_prediction_support"]:
+                report["basis"] = "PREDICTION_PREMISES_UNRESOLVED"
+                flags.append({"kind": "PREDICTION_PREMISES_UNRESOLVED", "candidate": c["id"],
+                              "next": "Resolve the prediction's evidence and scope conditions before using its rival coverage."})
+            elif not disc["conditional_distinguishing_pairs"]:
+                report["basis"] = "NONDISCRIMINATING"
+                flags.append({"kind": "RIVAL_PREDICTIONS_OVERLAP", "candidate": c["id"],
+                              "next": "Find an observation with different rival predictions; shared pass/fail labels do not distinguish causes."})
+            else:
+                report.update(basis="CONDITIONAL_RIVAL_TEST", distinguishing_pairs=len(disc["conditional_distinguishing_pairs"]),
+                              unresolved_pairs=len(disc["unresolved_pairs"]))
+        candidates.append(report)
+    basis = "NO_READY_DIRECTION" if not ready else "SCOPED_OBLIGATION" if obligations else "REVIEW_ONLY"
+    # Existing ranking already checks scope, rival identity, coverage and cost units.
+    if search.get("ranking", {}).get("dominance"):
+        basis = "CONDITIONAL_COMPARISON"
+    review = {"basis": basis, "ready_graph_directions": len(ready), "candidates": candidates, "flags": flags,
+              "assurance": "INPUT_REPORTED_NOT_SCIENTIFIC_VERIFICATION", "authorization": "UNCHANGED"}
+    decision = context.get("decision")
+    if isinstance(decision, dict) and "goal_conditions" in decision:
+        goals = decision["goal_conditions"]
+        if not (isinstance(goals, list) and 1 <= len(goals) <= 32 and all(
+                isinstance(g, dict) and isinstance(g.get("fact"), str) and g["fact"].strip() for g in goals)):
+            raise ValueError("decision.goal_conditions must be 1 to 32 explicit fact predicates")
+        facts = context.get("facts", {})
+        if not isinstance(facts, dict):
+            raise ValueError("Context facts must be an object for decision.goal_conditions")
+        reports = [evaluate_condition(g, facts) for g in goals]
+        review["goal"] = {"status": _all(reports), "conditions": reports, "assurance": "INPUT_REPORTED"}
+        if review["goal"]["status"] != TRUE:
+            flags.append({"kind": "GOAL_BRIDGE_OPEN", "next": "Keep task acceptance separate from local/procedure success; choose a check or intervention that can close this declared gap."})
+    return review
+
+
 def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nodes=128,
                       templates=None, max_combinations=128, max_compose_depth=2):
     """Compose source-labelled checks and tests for the supplied next decision.
@@ -220,6 +271,7 @@ def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nod
                 graph, context, chosen_templates, max_candidates=max_candidates, max_depth=max_compose_depth,
                 max_combinations=max_combinations,
                 search_limits={"max_candidates": max_candidates, "max_depth": max_depth, "max_nodes": max_nodes})
+        result["selection_review"] = review_selection(result, context)
         return result
     if len(raw_nodes) > max_nodes:
         result["truncation"].update(truncated=True)

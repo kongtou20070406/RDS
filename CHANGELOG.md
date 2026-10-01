@@ -2,6 +2,8 @@
 
 ## 5.8.0 — 2026-10-01
 
+- Add an advisory research-choice review that distinguishes a single supplied procedure from conditional rival comparison, exposes absent/overlapping predictions, unresolved application premises and truncated searches, and optionally reviews the project's sourced goal predicates independently of readiness. Retain the review in scoped choices and compact digests; keep theory obligations, authorization and scientific verdicts intact.
+- Report actual oversized-context bytes and a scoped-manifest repair hint without weakening limits or silently dropping evidence. Add regressions for local proxy success with failed task quality and prediction-scope transfer failures.
 - Support scoped `OBLIGATION_CHECK` actions with verified/counterexample/unresolved branches, alongside existing empirical comparisons. Bind direction-search source changes in execution identity; readiness and process success remain separate from proof.
 - Make authorized certificate-producing computation an active route for lengthy theoretical work. Bring selected backend readiness, feasibility, evidence-strength and research-continuity rules into native RDS guidance without depending on external mathematics Skills or forcing theory and experiments through the same acceptance gate.
 - Preserve CLI invocation counts during brief SQLite contention with a bounded wait; remove the fresh-log journal initialization race and retain existing journal modes.
