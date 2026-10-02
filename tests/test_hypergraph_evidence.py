@@ -100,6 +100,34 @@ class ReceiptEvidenceTests(unittest.TestCase):
         # OR alternative e1 keeps C and D alive: one retracted derivation preserves support.
         self.assertEqual(result["goals"]["D"]["status"], "DECLARED_SUPPORTED")
 
+    def test_grounded_receipt_never_crosses_project_roots(self):
+        """One project's grounded receipt must not support another project's binding."""
+        proj_a = self.default_root         # holds RECEIPT_SHA (SUCCEEDED)
+        proj_b = Path(self.tmp.name) / "project-b"
+        (proj_b / ".rds").mkdir(parents=True)
+        db = sqlite3.connect(proj_b / ".rds" / "project.sqlite3")
+        db.executescript("""
+            CREATE TABLE contract(id INTEGER PRIMARY KEY,sha256 TEXT NOT NULL,body TEXT NOT NULL);
+            CREATE TABLE receipts(run_id TEXT PRIMARY KEY,sha256 TEXT NOT NULL,body TEXT NOT NULL);
+        """)
+        db.commit()
+        db.close()
+
+        nodes = [{"id": "good", "status": "SUPPORTED", "source": "src-good",
+                  "evidence": {"receipt": {"project_root": str(proj_a), "sha256": RECEIPT_SHA}}},
+                 {"id": "bad", "status": "SUPPORTED", "source": "src-bad",
+                  "evidence": {"receipt": {"project_root": str(proj_b), "sha256": RECEIPT_SHA}}}]
+        spec = {"schema": 1, "nodes": nodes, "hyperedges": [], "goals": []}
+        result = analyze_hypergraph(spec, audit_receipts_enabled=True)
+
+        statuses = {row["receipt"]["project_root"]: row["status"]
+                    for row in result["receipt_audit"]["audits"]}
+        self.assertEqual(statuses[str(proj_a)], "GROUNDED")
+        self.assertEqual(statuses[str(proj_b)], "RECEIPT_NOT_FOUND")
+        self.assertEqual(result["declared_supported_closure"], ["good"])
+        self.assertEqual(result["receipt_blocked_node_ids"], ["bad"])
+        self.assertFalse(result["receipt_audit"]["all_receipts_grounded"])
+
     def test_sole_route_retraction_leaves_no_support_and_no_guilty_premise(self):
         spec = spec_with(node_evidence={"receipt": {"project_root": str(self.default_root), "sha256": MISSING_SHA}},
                          second_route=False)
