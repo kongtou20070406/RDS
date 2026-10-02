@@ -78,7 +78,8 @@ def _pointer(document, pointer):
         require("~" not in segment.replace("~0", "").replace("~1", ""), "invalid JSON pointer escape")
         key = segment.replace("~1", "/").replace("~0", "~")
         if isinstance(result, list):
-            require(key.isdigit() and (key == "0" or not key.startswith("0")), "invalid array index")
+            # RFC 6901 indexes are ASCII; Unicode digits would alias one element under a second locator.
+            require(key.isascii() and key.isdigit() and (key == "0" or not key.startswith("0")), "invalid array index")
             result = result[int(key)]
         else:
             result = result[key]
