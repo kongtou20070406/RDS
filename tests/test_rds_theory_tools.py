@@ -156,10 +156,17 @@ class TheoryToolTests(unittest.TestCase):
             self.assertEqual(written_res["status"], "WRITTEN")
             self.assertTrue(out_file.exists())
             self.assertIn("ContinuousStateSpace", out_file.read_text(encoding="utf-8"))
+            original = out_file.read_bytes()
+            with self.assertRaises(FileExistsError):
+                tools.scaffold_operator("contraction_target_bias", out_file)
+            self.assertEqual(out_file.read_bytes(), original)
+            with self.assertRaises(ValueError):
+                tools.scaffold_operator("state_space_refinement", "")
 
         # Test operator
         test_res = tools.test_operator("state_space_refinement")
-        self.assertEqual(test_res["test_result"]["status"], "PASS")
+        self.assertEqual(test_res["test_result"]["status"], "UNKNOWN")
+        self.assertTrue(test_res["test_result"]["diagnostic_pass"])
 
         # Unknown card operator
         with self.assertRaises(ValueError):
@@ -179,8 +186,10 @@ class TheoryToolTests(unittest.TestCase):
 
             # --test-operator
             res_test = subprocess.run(command + ["--test-operator", "state_space_refinement"], cwd=folder, capture_output=True, encoding="utf-8", timeout=10)
-            self.assertEqual(res_test.returncode, 0, res_test.stderr)
-            self.assertEqual(json.loads(res_test.stdout)["test_result"]["status"], "PASS")
+            # A completed finite diagnostic is not an asymptotic proof.
+            self.assertEqual(res_test.returncode, 2, res_test.stderr)
+            self.assertEqual(json.loads(res_test.stdout)["test_result"]["status"], "UNKNOWN")
+            self.assertTrue(json.loads(res_test.stdout)["test_result"]["diagnostic_pass"])
 
             # --scaffold --out
             target = Path(folder) / "generated.py"
@@ -188,10 +197,66 @@ class TheoryToolTests(unittest.TestCase):
             self.assertEqual(res_scaff.returncode, 0, res_scaff.stderr)
             self.assertEqual(json.loads(res_scaff.stdout)["status"], "WRITTEN")
             self.assertTrue(target.exists())
+            original = target.read_bytes()
+            repeated = subprocess.run(command + ["--scaffold", "state_space_refinement", "--out", str(target)],
+                                      cwd=folder, capture_output=True, encoding="utf-8", timeout=10)
+            self.assertEqual(repeated.returncode, 2)
+            self.assertEqual(json.loads(repeated.stdout)["status"], "INVALID_INPUT")
+            self.assertEqual(target.read_bytes(), original)
+
+            unused = Path(folder) / "unused.py"
+            for mode in (["--id", "local_jacobian"], ["--signals", "step_sensitivity"],
+                         ["--list-operators"], ["--test-operator", "contraction_target_bias"]):
+                invalid = subprocess.run(command + mode + ["--out", str(unused)], cwd=folder,
+                                         capture_output=True, encoding="utf-8", timeout=10)
+                self.assertEqual(invalid.returncode, 2)
+                self.assertEqual(json.loads(invalid.stdout)["status"], "INVALID_INPUT")
+                self.assertFalse(unused.exists())
 
             # Invalid operator ID
             bad = subprocess.run(command + ["--test-operator", "nonexistent"], cwd=folder, capture_output=True, timeout=10)
             self.assertEqual(bad.returncode, 2)
+
+    def test_checker_failure_sets_nonzero_cli_exit(self):
+        with patch.object(sys, "argv", ["rds_theory_tools.py", "--test-operator", "structural_preflight"]), \
+                patch.object(tools, "test_operator", return_value={"test_result": {"status": "FAIL"}}), \
+                patch("builtins.print"):
+            self.assertEqual(tools.main(), 1)
+
+    def test_actual_exported_modules_run_self_checks_and_reject_negative_cases(self):
+        command = [sys.executable, "-B", str(ROOT / "scripts/rds_theory_tools.py")]
+        with tempfile.TemporaryDirectory() as folder:
+            modules = {}
+            for entry in tools.list_operators():
+                card_id = entry["card_id"]
+                target = Path(folder) / (card_id + ".py")
+                exported = subprocess.run(command + ["--scaffold", card_id, "--out", str(target)], cwd=folder,
+                                          capture_output=True, encoding="utf-8", timeout=10)
+                self.assertEqual(exported.returncode, 0, exported.stderr)
+                # Isolated execution cannot import the checkout's operator module.
+                checked = subprocess.run([sys.executable, "-I", "-B", str(target)], cwd=folder,
+                                         capture_output=True, encoding="utf-8", timeout=10)
+                self.assertEqual(checked.returncode, 0, checked.stderr)
+                report = json.loads(checked.stdout)
+                self.assertEqual(report["self_test_status"], "PASS")
+                self.assertEqual(report["positive"]["status"], "UNKNOWN" if card_id == "state_space_refinement" else "PASS")
+                namespace = {"__name__": "exported_operator"}
+                exec(compile(target.read_text(encoding="utf-8"), str(target), "exec"), namespace)
+                modules[card_id] = namespace
+
+            state = modules["state_space_refinement"]["ContinuousStateSpaceOperator"](state_dim=1)
+            with self.assertRaises(ValueError):
+                state.discretize_zoh(float("nan"))
+            contraction = modules["contraction_target_bias"]["ContractionDynamicsOperator"]
+            with self.assertRaises(ValueError):
+                contraction.analyze_system([[float("nan")]], [0])
+            structural = modules["structural_preflight"]["StructuralPreflightOperator"]
+            result = structural.preflight_callable(lambda x: [0], sample_args=([1, 2, 3],),
+                                                   expected_shapes={"x": (3,)}, expected_output_shape=(3,))
+            self.assertEqual(result["status"], "FAIL")
+            rational = modules["exact_symbolic_constraints"]["RationalCertificateOperator"]
+            result = rational.certify_interval_bound([0, 1, -1], (0, 1), (0, "20/81"))
+            self.assertNotEqual(result["status"], "PASS")
 
 
 if __name__ == "__main__":
