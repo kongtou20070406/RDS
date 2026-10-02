@@ -733,7 +733,31 @@ class BoundedFiniteModelOperator:
         property_name: str = "associative"
     ) -> Dict[str, Any]:
         """Verifies an algebraic property on a Cayley operation table."""
+        if not elements:
+            # Every property holds vacuously on an empty domain, so no bounded
+            # finite evidence exists: report UNKNOWN instead of a false PASS.
+            return {
+                "status": "UNKNOWN",
+                "assurance": "EMPTY_DOMAIN",
+                "property": property_name,
+                "domain_size": 0,
+                "combinations_checked": 0
+            }
         elem_set = set(elements)
+        missing = [(a, b) for a in elements for b in elements if (a, b) not in op_table]
+        if missing:
+            # Missing entries would compare as None-vs-None inside the property
+            # loops and fabricate equalities: an undefined operation is not a
+            # verification, so report UNKNOWN for the uncovered combinations.
+            return {
+                "status": "UNKNOWN",
+                "assurance": "INCOMPLETE_TABLE",
+                "property": property_name,
+                "domain_size": len(elements),
+                "combinations_checked": 0,
+                "missing_entry": {"a": missing[0][0], "b": missing[0][1]},
+                "missing_entry_count": len(missing)
+            }
         # Check closure
         for (a, b), c in op_table.items():
             if c not in elem_set:
@@ -1009,9 +1033,15 @@ def _bounded_finite_model_self_test():
     broken = dict(v4)
     broken[("a", "b")] = "e"
     negative = BoundedFiniteModelOperator.verify_cayley_property(elems, broken, "associative")
+    empty_domain = BoundedFiniteModelOperator.verify_cayley_property([], {}, "associative")
+    incomplete = BoundedFiniteModelOperator.verify_cayley_property(["a", "b"], {("a", "a"): "a"}, "commutative")
     assert report["status"] == "PASS"
     assert negative["status"] == "FAIL" and "counterexample" in negative
-    return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
+    assert empty_domain["status"] == "UNKNOWN" and empty_domain["assurance"] == "EMPTY_DOMAIN"
+    assert incomplete["status"] == "UNKNOWN" and incomplete["assurance"] == "INCOMPLETE_TABLE"
+    return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"],
+            "empty_domain_status": empty_domain["status"],
+            "incomplete_table_status": incomplete["status"]}
 
 
 def _reduction_self_test():

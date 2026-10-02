@@ -296,6 +296,20 @@ class OperatorUnitTests(unittest.TestCase):
         self.assertEqual(search_res["assurance"], "COUNTEREXAMPLE_FOUND")
         self.assertEqual(search_res["witness"], 7)
 
+        # Empty domain: properties hold vacuously, so this is UNKNOWN, never PASS.
+        res_empty = ops.BoundedFiniteModelOperator.verify_cayley_property([], {}, "associative")
+        self.assertEqual(res_empty["status"], "UNKNOWN")
+        self.assertEqual(res_empty["assurance"], "EMPTY_DOMAIN")
+
+        # Partial table: entries missing from elements x elements must not be
+        # treated as equal None-vs-None and fabricate a PASS.
+        res_partial = ops.BoundedFiniteModelOperator.verify_cayley_property(
+            ["a", "b"], {("a", "a"): "a"}, "associative")
+        self.assertEqual(res_partial["status"], "UNKNOWN")
+        self.assertEqual(res_partial["assurance"], "INCOMPLETE_TABLE")
+        self.assertEqual(res_partial["missing_entry"], {"a": "a", "b": "b"})
+        self.assertEqual(res_partial["missing_entry_count"], 3)
+
     def test_explicit_reduction_transfer_operator(self):
         # 1. Full bidirectional reduction
         res_full = ops.ExplicitReductionTransferOperator.verify_reduction(
