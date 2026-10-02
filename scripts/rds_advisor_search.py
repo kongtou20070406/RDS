@@ -185,8 +185,13 @@ def _discrimination(action, facts):
             "issues": issues}
 
 
-def _dependency_review(context):
-    """Consume the existing bounded AND/OR analyzer only when a map is supplied."""
+def _dependency_review(context, *, audit_receipts=False, audit_files=False):
+    """Consume the existing bounded AND/OR analyzer only when a map is supplied.
+
+    ``audit_receipts``/``audit_files`` mirror the analyzer CLI flags: receipt
+    grounding and byte checks change which records the closure may use. Both
+    stay read-only; a run or file bytes are never statement verification.
+    """
     if "dependency_map" not in context:
         return None
     try:
@@ -195,7 +200,28 @@ def _dependency_review(context):
         if len(raw) > 128 * 1024:
             raise ValueError("dependency_map exceeds 128 KiB; retain only the current decision map")
         from rds_hypergraph import analyze_hypergraph
-        result = analyze_hypergraph(spec)
+        try:
+            result = analyze_hypergraph(spec, audit_receipts_enabled=audit_receipts) if audit_receipts \
+                else analyze_hypergraph(spec)
+        except TypeError:
+            # Analyzer without the receipts slice: no receipt audit is possible,
+            # and a binding it cannot check must not be silently trusted.
+            result = analyze_hypergraph(spec)
+        if audit_files:
+            from rds_hypergraph import audit_sources
+            result["source_file_audit"] = audit_sources(spec)
+        if "receipt_blocked_node_ids" not in result:
+            # Analyzer without the receipts slice: a binding it cannot check must
+            # not be silently trusted, whether or not an audit was requested.
+            result["receipt_blocked_node_ids"] = [
+                record["id"] for kind in ("nodes", "hyperedges") for record in spec.get(kind, [])
+                if isinstance(record, dict) and record.get("evidence") is not None]
+            result["receipt_audit"] = {"assurance": "RECEIPT_EXECUTION_NOT_STATEMENT_VERIFICATION",
+                                       "audits": [], "grounded_receipt_sha256s": [],
+                                       "all_receipts_grounded": False,
+                                       "status": UNKNOWN,
+                                       "reason": "the installed analyzer cannot audit receipts; "
+                                                 "declared bindings stay fail-closed"}
         return {**result, "input_sha256": hashlib.sha256(raw).hexdigest(),
                 "status": "INCOMPLETE" if result["truncated"] else "ANALYZED",
                 "authorization": "UNCHANGED"}
@@ -204,7 +230,7 @@ def _dependency_review(context):
                 "assurance": "INPUT_REPORTED_DEPENDENCY_ANALYSIS_NOT_PROOF"}
 
 
-def _operation_dependency(context):
+def _operation_dependency(context, *, audit_receipts=False, audit_files=False):
     """Own one map snapshot and reuse its analysis only within this operation."""
     snapshot = dict(context)
     snapshot["dependency_map"] = deepcopy(context["dependency_map"])
@@ -212,10 +238,31 @@ def _operation_dependency(context):
 
     def review():
         if not cached:
-            cached.append(_dependency_review(snapshot))
+            cached.append(_dependency_review(snapshot, audit_receipts=audit_receipts,
+                                             audit_files=audit_files))
         return deepcopy(cached[0])
 
     return review
+
+
+def _blocked_bindings(dependency):
+    """Records whose checked evidence must not be relied on, with the repair token.
+
+    Receipt-blocked nodes come from ``receipt_blocked_node_ids`` (fail-closed even
+    when the caller never enabled the audit); a source-file ``MISMATCH`` adds the
+    affected record regardless of its declared label. Every entry carries the
+    direct-evidence/RECEIPT_REVALIDATION repair token the analyzer already names.
+    """
+    blocked = []
+    for ident in dependency.get("receipt_blocked_node_ids") or []:
+        blocked.append({"token": "node:" + ident, "kind": "RECEIPT_REVALIDATION",
+                        "reason": "declared receipt is not grounded in its named ledger"})
+    audit = dependency.get("source_file_audit") or {}
+    for row in audit.get("audits", []):
+        if row.get("status") == "MISMATCH":
+            blocked.append({"token": row["kind"] + ":" + row["id"], "kind": "EVIDENCE_REPAIR",
+                            "reason": "declared source file bytes no longer match the recorded sha256"})
+    return blocked
 
 
 def _mapped_path(spec, dependency, action):
@@ -232,6 +279,20 @@ def _mapped_path(spec, dependency, action):
     edges = dependency["reported_hyperedges"]
     rule_start = None if path[0] in nodes else next((e for e in edges if 'rule:' + e['id'] == path[0]), None)
     node_path = path[1:] if rule_start is not None else path
+    blocked = _blocked_bindings(dependency)
+    # Refuse the path only when it actually relies on a blocked record: the
+    # start token, any crossed node, or any edge used by the mapped steps.
+    blocked_tokens = {b["token"] for b in blocked}
+    touched = {'node:' + n for n in node_path} | {'rule:' + rule_start['id']} if rule_start is not None else {'node:' + n for n in node_path}
+    for left, right in zip(node_path, node_path[1:]):
+        touched.update('rule:' + e['id'] for e in edges if e['status'] != 'CONTRADICTED'
+                       and left in e['premises'] and e['conclusion'] == right
+                       and right not in e['premises'])
+    if blocked_tokens & touched:
+        first = min((b for b in blocked if b["token"] in touched), key=lambda b: b["token"])
+        return {**report, "reason": "The path relies on a record whose checked evidence is not grounded; "
+                                    f"repair {first['token']} ({first['reason']}) before relying on this route.",
+                "blocked_bindings": [b for b in blocked if b["token"] in touched]}
     # A downstream conclusion cannot justify a prerequisite of this same path,
     # even when a different OR route could independently prove that conclusion.
     downstream = set(node_path if rule_start is not None else node_path[1:])
@@ -399,11 +460,12 @@ def _next_move(review, search):
                       "Unknown evidence or a scoped failure does not establish a capacity lower bound."}
 
 
-def review_selection(search, context, *, _dependency=None):
+def review_selection(search, context, *, _dependency=None, audit_receipts=False, audit_files=False):
     """Expose what the supplied directions can decide; never invent utility."""
     ready = [c for c in search.get("candidates", []) if c.get("status") == "READY"]
     flags, candidates = [], []
-    dependency = _dependency() if _dependency is not None else _dependency_review(context)
+    dependency = _dependency() if _dependency is not None else \
+        _dependency_review(context, audit_receipts=audit_receipts, audit_files=audit_files)
     if search.get("truncation", {}).get("truncated"):
         flags.append({"kind": "SEARCH_TRUNCATED", "next": "Review the omitted search scope before claiming a best route."})
     obligations = all(c.get("action", {}).get("kind") == "OBLIGATION_CHECK" for c in ready)
@@ -478,7 +540,8 @@ def review_selection(search, context, *, _dependency=None):
 
 def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nodes=128,
                       templates=None, max_combinations=128, max_compose_depth=2,
-                      _dependency=None, _defer_selection_review=False):
+                      _dependency=None, _defer_selection_review=False,
+                      audit_receipts=False, audit_files=False):
     """Compose source-labelled checks and tests for the supplied next decision.
 
     Nodes opt in via executable.decisions, preconditions, satisfied_when, action.
@@ -510,7 +573,7 @@ def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nod
         chosen_templates = templates if templates is not None else context.get("templates")
         dependency = _dependency
         if dependency is None and chosen_templates is not None and "dependency_map" in context:
-            dependency = _operation_dependency(context)
+            dependency = _operation_dependency(context, audit_receipts=audit_receipts, audit_files=audit_files)
         if chosen_templates is not None:
             from rds_experiments import compose_experiments
             result["experiment_composition"] = compose_experiments(
@@ -518,7 +581,8 @@ def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nod
                 max_combinations=max_combinations, _dependency=dependency,
                 search_limits={"max_candidates": max_candidates, "max_depth": max_depth, "max_nodes": max_nodes})
         if not _defer_selection_review:
-            result["selection_review"] = review_selection(result, context, _dependency=dependency)
+            result["selection_review"] = review_selection(result, context, _dependency=dependency,
+                                                          audit_receipts=audit_receipts, audit_files=audit_files)
         return result
     if len(raw_nodes) > max_nodes:
         result["truncation"].update(truncated=True)

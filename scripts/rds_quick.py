@@ -106,9 +106,13 @@ def choice(advice, context, candidate_id=None):
         if advice.get('objective_binding') is not None:
             require(guarded_context.get('objective_binding') == advice['objective_binding'],
                     'Goal-link guard: advice objective binding differs from the current checked context')
-        dependency = _dependency_review(guarded_context)
+        dependency = _dependency_review(guarded_context, audit_receipts=True, audit_files=True)
         contribution = _goal_contribution(candidate.get('action', {}), guarded_context, dependency)
         mapped = (contribution or {}).get('graph_path', {})
+        if mapped.get('status') != 'DECLARED_CONNECTED_PATH' and mapped.get('blocked_bindings'):
+            binding = mapped['blocked_bindings'][0]
+            require(False, 'Goal-link guard: this route relies on a binding whose checked evidence is not grounded; '
+                           'repair ' + binding['token'] + ' (' + binding['reason'] + ') before dispatch')
         require(dependency is not None and mapped.get('status') == 'DECLARED_CONNECTED_PATH'
                 and mapped.get('goal_review', {}).get('blocker_sets_complete') is True,
                 'Goal-link guard needs a complete actual dependency map and a connected original-goal path')
