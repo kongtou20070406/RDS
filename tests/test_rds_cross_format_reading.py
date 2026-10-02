@@ -56,7 +56,7 @@ class CrossFormatReadingTests(unittest.TestCase):
                       if derived else None)
 
     def cli(self, *args):
-        state = self.root / ".rds"
+        state = self.root.resolve() / ".rds"
         before_paths = set(state.rglob("*"))
         before_bytes = {path: path.read_bytes() for path in before_paths if path.is_file()}
         result = subprocess.run([sys.executable, "-B", str(CLI), "--root", str(self.root), *args],
@@ -67,7 +67,7 @@ class CrossFormatReadingTests(unittest.TestCase):
         if "--brief" in args:
             # Brief intentionally caches the full advice; no research ledger is created.
             record = Path(answer["record"])
-            expected = self.root / ".rds" / "cas" / (answer["sha256"] + ".json")
+            expected = state / "cas" / (answer["sha256"] + ".json")
             self.assertEqual(record, expected)
             raw = record.read_bytes()
             self.assertEqual(digest(raw), answer["sha256"])
