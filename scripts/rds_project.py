@@ -80,14 +80,23 @@ def number(value, name, positive=False):
     return float(value)
 
 
-def load_json(path):
+def load_json(path, *, max_bytes=None, expected_sha256=None):
     def pairs(items):
         result = {}
         for key, value in items:
             require(key not in result, f"Duplicate JSON key: {key}")
             result[key] = value
         return result
-    return json.loads(Path(path).read_text(encoding="utf-8"), object_pairs_hook=pairs,
+    if max_bytes is None and expected_sha256 is None:
+        source = Path(path).read_text(encoding='utf-8')
+    else:
+        with Path(path).open('rb') as stream:
+            raw = stream.read(max_bytes + 1) if max_bytes is not None else stream.read()
+        require(max_bytes is None or len(raw) <= max_bytes, 'Maintenance context exceeds byte limit')
+        require(expected_sha256 is None or hashlib.sha256(raw).hexdigest() == expected_sha256,
+                'Maintenance context binding changed')
+        source = raw.decode('utf-8')
+    return json.loads(source, object_pairs_hook=pairs,
                       parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
 
 
@@ -253,9 +262,7 @@ class ProjectStore:
         require(any(b['role'] == 'config' and b['path'] == ref['path'] and b['sha256'] == ref['sha256']
                     for b in contract['bindings']), 'Maintenance context must be a frozen config binding')
         path = self._path(ref['path'])
-        require(path.stat().st_size <= 128 * 1024, 'Maintenance context exceeds 128 KiB')
-        require(file_sha(path) == ref['sha256'], 'Maintenance context binding changed')
-        context = load_json(path)
+        context = load_json(path, max_bytes=128 * 1024, expected_sha256=ref['sha256'])
         binding = check_context(self.root, context)
         require(binding and context.get('objective_binding') == binding
                 and binding['sha256'] == contract['objective_sha256'], 'Maintenance objective binding differs')
