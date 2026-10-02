@@ -4,6 +4,7 @@ from datetime import date, datetime, timedelta, timezone
 import os
 from pathlib import Path
 import sqlite3
+import sys
 import time
 
 COMMANDS = {"init", "hypothesis", "gate", "plan", "run", "data", "decide", "status",
@@ -105,6 +106,21 @@ def _start(argv, version):
         return cursor.lastrowid
 
 
+def _log_failure(phase, exc):
+    """Expose incomplete recording without printing paths, payloads or changing the command."""
+    global _last_error
+    _last_error = str(exc)
+    code = getattr(exc, "sqlite_errorname", None)
+    kind = type(exc).__name__ + ("/" + code if isinstance(code, str) else "")
+    outcome = "start record not confirmed" if phase == "start" else "exit record not confirmed"
+    try:
+        print(f"[RDS-USAGE-DEGRADED] {phase} logging failed ({kind}); {outcome}; "
+              "original command result is preserved", file=sys.stderr)
+    except Exception:
+        # Even an unavailable diagnostic stream cannot replace the command's result/exception.
+        pass
+
+
 def run_logged(function, argv, version):
     """Record starts and exits; log failures never change the command's result."""
     global _last_error
@@ -113,7 +129,7 @@ def run_logged(function, argv, version):
     try:
         token = _start(argv, version)
     except (OSError, sqlite3.Error, ValueError) as exc:
-        _last_error = str(exc)
+        _log_failure("start", exc)
     try:
         result = function()
         code = result if type(result) is int else 0
@@ -134,7 +150,7 @@ def run_logged(function, argv, version):
                     connection.execute("UPDATE calls SET exit_code=?,elapsed_ms=? WHERE id=?",
                                        (code, round((time.perf_counter() - started) * 1000, 3), token))
             except (OSError, sqlite3.Error, ValueError) as exc:
-                _last_error = str(exc)
+                _log_failure("finish", exc)
 
 
 def summarize(*, days=14, since=None, until=None):
