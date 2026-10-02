@@ -101,4 +101,4 @@ Confirm new tests are discoverable by [CI](.github/workflows/test.yml), which ru
 
 Use minimal public or labelled synthetic fixtures. Real adapter tests should retain the original format and relevant failure behavior; sanitize only what must be private, and disclose the transformation. Do not commit `.rds/`, private sessions/logs/datasets, credentials or tokens. Publish only material you may share, retaining useful source identity or public references.
 
-This repository currently has **no `LICENSE` file**. Distribution licensing is pending; do not infer permission from a badge, roadmap or another project's license. If a license is added, use the actual file in the revision you are using.
+This repository is licensed under the [Apache License 2.0](LICENSE). Use the actual `LICENSE` file in the revision you are using; a badge, roadmap or another project's license does not replace its terms.
