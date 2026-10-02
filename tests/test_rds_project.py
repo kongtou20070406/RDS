@@ -1211,6 +1211,29 @@ class StopPolicyAndMaintenanceTests(unittest.TestCase):
         self.assertIn('current ready', result.stderr)
         self.assertEqual(store.snapshot(), before)
 
+    def test_execution_policy_observes_valid_maintenance_receipt_after_deadline(self):
+        (self.root / 'code.py').write_text('print("synthetic repair check", flush=True)\n', encoding='utf-8')
+        protocol = json.loads((self.root / 'protocol.json').read_text(encoding='utf-8'))
+        protocol['code_sha256'] = file_sha(self.root / 'code.py')
+        (self.root / 'protocol.json').write_text(canonical(protocol), encoding='utf-8')
+        for binding in self.contract['bindings']:
+            if binding['role'] in {'code', 'protocol'}:
+                binding['sha256'] = file_sha(self.root / binding['path'])
+        self.contract['execution_policy'] = {'schema': 1, 'max_attempts': 2}
+        store = self.contract_with(stop_policy={'schema': 1, 'wall_seconds': 30,
+                                               'progress': {'window_seconds': 10, 'min_bytes': 0}},
+                                   maintenance_allowance={'schema': 1, 'wall_seconds': 5, 'max_uses': 4})
+        receipt = self.run_spec(self.spec(timeout=2, maintenance=True))
+        self.assertEqual(receipt['run_status'], 'SUCCEEDED')
+        before = store.snapshot()
+        with patch('rds_project.time.time', return_value=time.time() + 31), patch('rds_project.subprocess.Popen') as launch:
+            observed = ProjectStore(self.root).execute('r1')
+        launch.assert_not_called()
+        self.assertFalse(observed['execution_started'])
+        self.assertEqual(observed['sha256'], receipt['sha256'])
+        self.assertEqual(observed['assessment'], {'task_gain': 'UNKNOWN', 'mechanism': 'UNKNOWN', 'purpose': 'MAINTENANCE'})
+        self.assertEqual(store.snapshot(), before)
+
 
 if __name__ == "__main__":
     unittest.main()

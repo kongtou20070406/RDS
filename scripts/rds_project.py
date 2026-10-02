@@ -799,7 +799,7 @@ class ProjectStore:
                             break
                     time.sleep(min(0.05, max(0.001, run["manifest"]["timeout_seconds"] - elapsed)))
                 exit_code = process.wait()
-                if policy_deadline is not None and time.monotonic() >= policy_deadline:
+                if not timeout and stop_reason is None and policy_deadline is not None and time.monotonic() >= policy_deadline:
                     stop_reason = 'CAMPAIGN_DEADLINE'
                 status = "COMPLETED" if exit_code == 0 and not timeout and not stop_reason else "FAILED"
                 if timeout:
