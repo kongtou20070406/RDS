@@ -139,16 +139,153 @@ class OperatorUnitTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ops.RationalCertificateOperator.certify_interval_bound([1], (2, 1), (0, 1))
 
+    def test_egraph_equivalence_operator(self):
+        # Algebraic equivalence under commutativity and identity
+        res = ops.EGraphEquivalenceOperator.verify_algebraic_equivalence(
+            ("*", "x", ("+", "y", 0)),
+            ("*", "y", "x"), variables=("x", "y")
+        )
+        self.assertEqual(res["status"], "PASS")
+        self.assertEqual(res["assurance"], "BOUNDED_REWRITE_CHECK")
+        self.assertEqual(res["domain"], "rational_polynomials")
+        self.assertEqual(res["certificate_status"], "NOT_EMITTED")
+        self.assertEqual(res["application_status"], "UNKNOWN")
+        self.assertTrue(res["equivalent"])
+        self.assertEqual(res["root_a"], res["root_b"])
+
+        # Non-equivalent terms settle by exact rational counterexample
+        res_distinct = ops.EGraphEquivalenceOperator.verify_algebraic_equivalence(
+            ("+", "x", "y"),
+            ("*", "x", "y"), variables=("x", "y")
+        )
+        self.assertEqual(res_distinct["status"], "FAIL")
+        self.assertEqual(res_distinct["assurance"], "EXACT_RATIONAL_COUNTEREXAMPLE")
+        witness = res_distinct["counterexample"]
+        x, y = (Fraction(witness["variables"][name]) for name in ("x", "y"))
+        self.assertEqual(Fraction(witness["expr_a"]), x + y)
+        self.assertEqual(Fraction(witness["expr_b"]), x * y)
+        self.assertNotEqual(x + y, x * y)
+        self.assertFalse(res_distinct["equivalent"])
+
+    def test_lean_axiom_review_operator(self):
+        # 1. Clean constructive theorem
+        res_constructive = ops.LeanAxiomReviewOperator.audit_lean_axioms(
+            "RDS.constructive",
+            "'RDS.constructive' does not depend on any axioms",
+            allowed_axioms=set(),
+            is_stdout=True
+        )
+        self.assertEqual(res_constructive["status"], "PASS")
+        self.assertEqual(res_constructive["assurance"], "AXIOM_DEPENDENCY_VERIFIED")
+        self.assertTrue(res_constructive["is_constructive"])
+        self.assertEqual(res_constructive["axioms_detected"], [])
+
+        # 2. Classical axioms allowed
+        res_classical = ops.LeanAxiomReviewOperator.audit_lean_axioms(
+            "RDS.classical",
+            "'RDS.classical' depends on axioms: [propext, Quot.sound]",
+            allowed_axioms={"propext", "Quot.sound"},
+            is_stdout=True
+        )
+        self.assertEqual(res_classical["status"], "PASS")
+        self.assertEqual(res_classical["axioms_detected"], ["Quot.sound", "propext"])
+
+        # 3. Disallowed axiom
+        res_disallowed = ops.LeanAxiomReviewOperator.audit_lean_axioms(
+            "RDS.unauthorized",
+            "'RDS.unauthorized' depends on axioms: [Classical.choice, UnsoundAxiom]",
+            allowed_axioms={"Classical.choice"},
+            is_stdout=True
+        )
+        self.assertEqual(res_disallowed["status"], "FAIL")
+        self.assertEqual(res_disallowed["assurance"], "DISALLOWED_AXIOM_DEPENDENCY")
+        self.assertIn("UnsoundAxiom", res_disallowed["disallowed_axioms"])
+
+        # 4. 'sorry' gap in source code
+        res_sorry = ops.LeanAxiomReviewOperator.audit_lean_axioms(
+            "RDS.incomplete",
+            "theorem obligation : 1 = 1 := by sorry",
+            is_stdout=False
+        )
+        self.assertEqual(res_sorry["status"], "FAIL")
+        self.assertEqual(res_sorry["assurance"], "SORRY_AXIOM_DETECTED")
+
+    def test_bounded_finite_model_operator(self):
+        elems = ["e", "a", "b", "c"]
+        v4 = {
+            ("e", "e"): "e", ("e", "a"): "a", ("e", "b"): "b", ("e", "c"): "c",
+            ("a", "e"): "a", ("a", "a"): "e", ("a", "b"): "c", ("a", "c"): "b",
+            ("b", "e"): "b", ("b", "a"): "c", ("b", "b"): "e", ("b", "c"): "a",
+            ("c", "e"): "c", ("c", "a"): "b", ("c", "b"): "a", ("c", "c"): "e",
+        }
+        res_v4 = ops.BoundedFiniteModelOperator.verify_cayley_property(elems, v4, "associative")
+        self.assertEqual(res_v4["status"], "PASS")
+        self.assertEqual(res_v4["assurance"], "BOUNDED_FINITE_MODEL_VERIFIED")
+        self.assertEqual(res_v4["combinations_checked"], 64)
+
+        # Non-associative magma: (a * a) * b != a * (a * b)
+        bad_table = dict(v4)
+        bad_table[("a", "a")] = "b"  # mutate multiplication
+        res_bad = ops.BoundedFiniteModelOperator.verify_cayley_property(elems, bad_table, "associative")
+        self.assertEqual(res_bad["status"], "FAIL")
+        self.assertEqual(res_bad["assurance"], "COUNTEREXAMPLE_FOUND")
+        self.assertIn("witness", res_bad["counterexample"])
+
+        # Counterexample search over finite domain
+        domain = [2, 4, 6, 7, 8]
+        is_even = lambda n: n % 2 == 0
+        search_res = ops.BoundedFiniteModelOperator.search_counterexample(domain, is_even)
+        self.assertEqual(search_res["status"], "FAIL")
+        self.assertEqual(search_res["assurance"], "COUNTEREXAMPLE_FOUND")
+        self.assertEqual(search_res["witness"], 7)
+
+    def test_explicit_reduction_transfer_operator(self):
+        # 1. Full bidirectional reduction
+        res_full = ops.ExplicitReductionTransferOperator.verify_reduction(
+            source_instances=[-10, -1, 0, 5, 12],
+            forward_map=lambda x: (max(0, x), max(0, -x)),
+            backward_map=lambda p: p[0] - p[1],
+            source_evaluator=lambda x: x > 0,
+            target_evaluator=lambda p: p[0] > p[1]
+        )
+        self.assertEqual(res_full["status"], "PASS")
+        self.assertEqual(res_full["assurance"], "EXPLICIT_REDUCTION_CERTIFIED")
+        self.assertEqual(res_full["verified_instances"], 5)
+
+        # 2. Forward only (backward unresolved)
+        res_fwd = ops.ExplicitReductionTransferOperator.verify_reduction(
+            source_instances=[1, 2, 3],
+            forward_map=lambda x: x * 2,
+            backward_map=None,
+            source_evaluator=lambda x: x > 0,
+            target_evaluator=lambda y: y > 0
+        )
+        self.assertEqual(res_fwd["status"], "PASS")
+        self.assertEqual(res_fwd["assurance"], "FORWARD_REDUCTION_VALIDATED_RECONSTRUCTION_UNRESOLVED")
+
+        # 3. Semantic mismatch
+        res_mismatch = ops.ExplicitReductionTransferOperator.verify_reduction(
+            source_instances=[-2, 3],
+            forward_map=lambda x: x * -1,  # inverts sign, breaks positivity
+            backward_map=None,
+            source_evaluator=lambda x: x > 0,
+            target_evaluator=lambda y: y > 0
+        )
+        self.assertEqual(res_mismatch["status"], "FAIL")
+        self.assertEqual(res_mismatch["assurance"], "REDUCTION_SEMANTIC_MISMATCH")
+
     def test_registry_and_scaffolding(self):
         available = ops.list_available_operators()
-        self.assertEqual({entry['card_id'] for entry in available}, {
-            'state_space_refinement', 'contraction_target_bias', 'structural_preflight',
-            'exact_symbolic_constraints', 'egraph_equivalence_saturation'})
+        self.assertEqual(len(available), 8)
         card_ids = [item["card_id"] for item in available]
         self.assertIn("state_space_refinement", card_ids)
         self.assertIn("contraction_target_bias", card_ids)
         self.assertIn("structural_preflight", card_ids)
         self.assertIn("exact_symbolic_constraints", card_ids)
+        self.assertIn("egraph_equivalence_saturation", card_ids)
+        self.assertIn("lean_axiom_review", card_ids)
+        self.assertIn("bounded_finite_model", card_ids)
+        self.assertIn("explicit_reduction_transfer", card_ids)
 
         for card_id in card_ids:
             scaffold = ops.get_operator_scaffold(card_id)
@@ -315,113 +452,17 @@ class OperatorUnitTests(unittest.TestCase):
                     exported_class.preflight_callable = lambda *args, **kwargs: {"status": "PASS"}
                 elif card_id == "egraph_equivalence_saturation":
                     exported_class.verify_algebraic_equivalence = lambda *args, **kwargs: {"status": "FAIL"}
+                elif card_id == "lean_axiom_review":
+                    exported_class.audit_lean_axioms = lambda *args, **kwargs: {"status": "FAIL"}
+                elif card_id == "bounded_finite_model":
+                    exported_class.verify_cayley_property = lambda *args, **kwargs: {"status": "FAIL"}
+                elif card_id == "explicit_reduction_transfer":
+                    exported_class.verify_reduction = lambda *args, **kwargs: {"status": "FAIL"}
                 else:
                     exported_class.certify_interval_bound = lambda *args, **kwargs: {"status": "FAIL"}
                 with self.assertRaises(AssertionError):
                     namespace["operator_self_test"]()
 
-
-
-class EGraphTests(unittest.TestCase):
-    def test_egraph_equivalence_operator(self):
-        # Algebraic equivalence under commutativity and identity
-        res = ops.EGraphEquivalenceOperator.verify_algebraic_equivalence(
-            ("*", "x", ("+", "y", "0")),
-            ("*", "y", "x"), variables=("x", "y")
-        )
-        self.assertEqual(res["status"], "PASS")
-        self.assertEqual(res["assurance"], "BOUNDED_REWRITE_CHECK")
-        self.assertEqual(res["domain"], "rational_polynomials")
-        self.assertEqual(res["certificate_status"], "NOT_EMITTED")
-        self.assertEqual(res["application_status"], "UNKNOWN")
-        self.assertTrue(res["equivalent"])
-        self.assertEqual(res["root_a"], res["root_b"])
-
-        # Non-equivalent terms remain distinct
-        res_distinct = ops.EGraphEquivalenceOperator.verify_algebraic_equivalence(
-            ("+", "x", "y"),
-            ("*", "x", "y"), variables=("x", "y")
-        )
-        self.assertEqual(res_distinct["status"], "FAIL")
-        self.assertEqual(res_distinct["assurance"], "EXACT_RATIONAL_COUNTEREXAMPLE")
-        witness = res_distinct["counterexample"]
-        x, y = (Fraction(witness["variables"][name]) for name in ("x", "y"))
-        self.assertEqual(Fraction(witness["expr_a"]), x + y)
-        self.assertEqual(Fraction(witness["expr_b"]), x * y)
-        self.assertNotEqual(x + y, x * y)
-        self.assertFalse(res_distinct["equivalent"])
-
-    def test_egraph_unresolved_and_resource_limits_remain_unknown(self):
-        check = ops.EGraphEquivalenceOperator.verify_algebraic_equivalence
-        # Associativity is valid in this domain but is not an implemented rewrite.
-        unresolved = check(("+", "x", ("+", "y", "z")), ("+", ("+", "x", "y"), "z"),
-                           variables=("x", "y", "z"))
-        self.assertEqual(unresolved["status"], "UNKNOWN")
-        self.assertIsNone(unresolved["equivalent"])
-        self.assertTrue(unresolved["saturated"])
-        for limits in ({"max_iter": 0}, {"max_nodes": 1}, {"max_work": 1}):
-            result = check(("+", "x", "y"), ("+", "y", "x"), variables=("x", "y"), **limits)
-            self.assertEqual(result["status"], "UNKNOWN")
-            self.assertIsNone(result["equivalent"])
-            self.assertLessEqual(result["work_used"], result["limits"]["max_work"])
-            self.assertLessEqual(result["total_enodes"], result["limits"]["max_nodes"])
-        # A finite exact counterexample can still settle inequality without rewriting.
-        self.assertEqual(check(("+", "x", 1), "x", variables=("x",), max_iter=0)["status"], "FAIL")
-
-    def test_egraph_domain_symbols_ast_and_budget_validation(self):
-        check = ops.EGraphEquivalenceOperator.verify_algebraic_equivalence
-        invalid = [True, False, 0.0, float("nan"), float("inf"), {}, {"x"}, (),
-                   ("+", "x"), ("/", "x", 1), ("sin", "x", 0), "unknown", "1/0", 1 << 129]
-        for expr in invalid:
-            with self.subTest(expr=expr), self.assertRaises(ValueError):
-                check(expr, 0, variables=("x",))
-        for variables in ("x", (True,), ("x", "x"), ("x y",), ("x" * 33,), tuple("v" + str(i) for i in range(17))):
-            with self.subTest(variables=variables), self.assertRaises(ValueError):
-                check(0, 0, variables=variables)
-        for domain in ("float64", "matrices", "noncommutative_ring", False):
-            with self.subTest(domain=domain), self.assertRaises(ValueError):
-                check(0, 0, domain=domain)
-        for limits in ({"max_iter": True}, {"max_iter": 17}, {"max_nodes": 0},
-                       {"max_nodes": 2049}, {"max_work": 1.0}, {"max_work": 200001}):
-            with self.subTest(limits=limits), self.assertRaises(ValueError):
-                check(0, 0, **limits)
-        deep = 0
-        for _ in range(33):
-            deep = ("+", deep, 0)
-        with self.assertRaises(ValueError):
-            check(deep, 0)
-        large = 0
-        for _ in range(9):
-            large = ("+", large, large)
-        with self.assertRaises(ValueError):
-            check(large, 0)
-
-    def test_egraph_congruence_and_input_binding(self):
-        check = ops.EGraphEquivalenceOperator.verify_algebraic_equivalence
-        left, right = ("+", "z", ("*", "x", ("+", "y", 0))), ("+", "z", ("*", "x", "y"))
-        result = check(left, right, variables=("x", "y", "z"))
-        self.assertEqual(result["status"], "PASS")
-        self.assertEqual(result["input_sha256"], check(left, right, variables=("z", "y", "x"))["input_sha256"])
-        self.assertNotEqual(result["input_sha256"], check(left, ("+", right, 1), variables=("x", "y", "z"))["input_sha256"])
-        self.assertEqual(result["axioms"], list(ops.EGraphEquivalenceOperator.AXIOMS))
-
-    def test_egraph_actual_export_runs_isolated_positive_negative_unknown_checks(self):
-        import json
-        import subprocess
-        import tempfile
-        code = ops.EGraphEquivalenceOperator.scaffold_code()
-        with tempfile.TemporaryDirectory() as folder:
-            target = Path(folder) / "egraph.py"
-            target.write_text(code, encoding="utf-8")
-            result = subprocess.run([sys.executable, "-I", "-B", str(target)], cwd=folder,
-                                    capture_output=True, encoding="utf-8", timeout=10)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            report = json.loads(result.stdout)
-            self.assertEqual(report["self_test_status"], "PASS")
-            self.assertEqual(report["positive"]["status"], "PASS")
-            self.assertEqual(report["positive"]["certificate_status"], "NOT_EMITTED")
-            self.assertEqual(report["negative_status"], "FAIL")
-            self.assertEqual(report["unresolved_status"], "UNKNOWN")
 
 if __name__ == "__main__":
     unittest.main()

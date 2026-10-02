@@ -115,6 +115,45 @@
       "sources": ["https://github.com/egraphs-good/egg", "https://github.com/egraphs-good/egglog"],
       "runnable_operator": "AVAILABLE",
       "operator_id": "egraph_equivalence"
+    },
+    {
+      "id": "lean_axiom_review",
+      "title": "Lean axiom and environment audit",
+      "tags": ["proof_bottleneck"],
+      "required_inputs": ["encoded proposition", "theorem identifier", "allowed axioms set"],
+      "conditions": ["The proposition is expressed in supported closed syntax or registered statement schema.", "Allowed axioms (e.g. empty set for constructive/computable arithmetic, or standard classical axioms) are explicitly declared."],
+      "diagnostic": "Review actual Lean axioms via #print axioms or native Lean audit. If proof depends on disallowed axioms (e.g. Classical.choice, propext, or sorry), refuse promotion; surface missing premises or seek axiom-free constructive reduction.",
+      "limitations": ["Axiom audit verifies formal dependency of the encoded theorem, not correspondence to physical reality or empirical task success.", "Missing Lean toolchain falls back to deterministic AST parser audit."],
+      "capability": {"availability": "NATIVE_BOUNDED_ENTRYPOINT", "backend": "Lean 4 #print axioms audit with safe AST parser fallback", "entrypoint": "scripts/rds_operators.py:LeanAxiomReviewOperator; scripts/rds_lean_verify.py", "prerequisites": ["supported proposition schema", "explicit allowed axiom set"]},
+      "sources": ["https://lean-lang.org/doc/reference/latest/Axioms/", "https://lean-lang.org/doc/reference/latest/ValidatingProofs/"],
+      "runnable_operator": "AVAILABLE",
+      "operator_id": "lean_axiom_review"
+    },
+    {
+      "id": "bounded_finite_model",
+      "title": "Bounded finite model and counterexample search",
+      "tags": ["proof_bottleneck", "equation_unknown"],
+      "required_inputs": ["finite domain elements", "operation Cayley table or algebraic law", "conjecture predicate"],
+      "conditions": ["The domain is finite and explicitly bounded (e.g. small group Z_n, S_n, or finite algebraic structure).", "Conjecture predicate is decidable on all elements in the bounded domain."],
+      "diagnostic": "Exhaustively checks conjecture over all domain elements or Cayley table tuples. If violation found, produces minimal reproducible counterexample witness to refute the unbounded or general claim; if all pass, certifies bounded property without claiming universal unconstrained theorem.",
+      "limitations": ["Bounded finite verification does not prove universal claims on infinite domains.", "Small-order verification cannot rule out asymptotic or large-cardinality counterexamples."],
+      "capability": {"availability": "NATIVE_BOUNDED_ENTRYPOINT", "backend": "pure-Python exhaustive finite domain search and Cayley table checker", "entrypoint": "scripts/rds_operators.py:BoundedFiniteModelOperator", "prerequisites": ["finite domain elements and operations", "decidable predicate"]},
+      "sources": ["https://gap-packages.github.io/smallgrp/doc/chap1.html", "https://sgslogic.net/t20/sosoa/promo.html"],
+      "runnable_operator": "AVAILABLE",
+      "operator_id": "bounded_finite_model"
+    },
+    {
+      "id": "explicit_reduction_transfer",
+      "title": "Explicit reduction and representation transfer",
+      "tags": ["proof_bottleneck"],
+      "required_inputs": ["source problem / proposition", "target problem / proposition", "forward map / reduction", "backward certificate map"],
+      "conditions": ["Explicit mapping f: Source -> Target and reconstruction g: Target -> Source.", "Preservation of solution/validity equivalence: Valid(x) iff Valid(f(x))."],
+      "diagnostic": "Checks that reduction preserves exact semantics and bounds on sample instances. Tracks open transfer obligations (e.g., unproved backward implication or domain constraint mismatch) so that unclosed transfer does not masquerade as a solved theorem.",
+      "limitations": ["Verifying finite sample instances of a reduction does not prove correctness of the reduction in full generality.", "Translating a problem to another domain does not guarantee computational tractability."],
+      "capability": {"availability": "NATIVE_BOUNDED_ENTRYPOINT", "backend": "symbolic reduction mapping validator and certificate transport", "entrypoint": "scripts/rds_operators.py:ExplicitReductionTransferOperator", "prerequisites": ["source and target schema", "forward and inverse mapping implementations"]},
+      "sources": ["https://sgslogic.net/t20/sosoa/promo.html", "https://github.com/kongtou20070406/RDS/blob/main/docs/theory-reformulation.md"],
+      "runnable_operator": "AVAILABLE",
+      "operator_id": "explicit_reduction_transfer"
     }
   ]
 }

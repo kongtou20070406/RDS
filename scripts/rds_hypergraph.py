@@ -14,7 +14,6 @@ import hashlib
 import heapq
 import json
 from pathlib import Path
-from rds_accelerator import compute_hypergraph_closure
 
 ASSURANCE = "INPUT_REPORTED_DEPENDENCY_ANALYSIS_NOT_PROOF"
 DEFAULT_LIMITS = {"max_nodes": 256, "max_hyperedges": 512,

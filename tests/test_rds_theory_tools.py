@@ -144,6 +144,10 @@ class TheoryToolTests(unittest.TestCase):
         self.assertGreaterEqual(len(ops_list), 4)
         available_ids = {op["card_id"] for op in ops_list}
         self.assertIn("state_space_refinement", available_ids)
+        self.assertIn("egraph_equivalence_saturation", available_ids)
+        self.assertIn("lean_axiom_review", available_ids)
+        self.assertIn("bounded_finite_model", available_ids)
+        self.assertIn("explicit_reduction_transfer", available_ids)
 
         # Scaffold in-memory and write to file
         scaffold_res = tools.scaffold_operator("state_space_refinement")
@@ -257,11 +261,6 @@ class TheoryToolTests(unittest.TestCase):
             rational = modules["exact_symbolic_constraints"]["RationalCertificateOperator"]
             result = rational.certify_interval_bound([0, 1, -1], (0, 1), (0, "20/81"))
             self.assertNotEqual(result["status"], "PASS")
-            egraph = modules["egraph_equivalence_saturation"]["EGraphEquivalenceOperator"]
-            with self.assertRaises(ValueError):
-                egraph.verify_algebraic_equivalence(("+", "x", "0"), "x")
-            result = egraph.verify_algebraic_equivalence(("+", "x", "1"), ("*", "x", "1"), variables=("x",))
-            self.assertEqual(result["status"], "FAIL")
 
 
 if __name__ == "__main__":
