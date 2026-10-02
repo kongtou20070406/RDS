@@ -11,6 +11,7 @@ SUPPORTED closure never uses those hypothetical evidence atoms.
 import argparse
 from copy import deepcopy
 import hashlib
+import heapq
 import json
 from pathlib import Path
 from rds_accelerator import compute_hypergraph_closure
@@ -132,23 +133,76 @@ def audit_sources(spec, base_dir=None):
             "all_requested_files_match": all(row["status"] == "MATCH" for row in rows)}
 
 
+def _supported_closure(nodes, edges):
+    """Declared closure with the original scan-order first derivation witnesses."""
+    closure = {ident for ident, node in nodes.items() if node["status"] == "SUPPORTED"}
+    derivations, conflicts, pending = {}, set(), []
+    # Forward-ordered graphs finish in one scan, then one bounded heap pass.
+    for i, edge in enumerate(edges):
+        head = edge["conclusion"]
+        if edge["status"] != "SUPPORTED" or head in closure:
+            continue
+        if not all(tail in closure for tail in edge["premises"]):
+            pending.append(i)
+        elif nodes[head]["status"] == "CONTRADICTED":
+            conflicts.add(edge["id"])
+        else:
+            closure.add(head)
+            derivations[head] = edge["id"]
+    # Without new support, the first pass already reached the fixed point.
+    if pending and derivations:
+        missing, waiting, ready = {}, {}, []
+        for i in pending:
+            edge = edges[i]
+            if edge["conclusion"] in closure:
+                continue
+            tails = [tail for tail in edge["premises"] if tail not in closure]
+            missing[i] = len(tails)
+            for tail in tails:
+                waiting.setdefault(tail, []).append(i)
+            if not tails:
+                ready.append((1, i))
+        heapq.heapify(ready)
+        while ready:
+            turn, i = heapq.heappop(ready)
+            edge = edges[i]
+            head = edge["conclusion"]
+            if nodes[head]["status"] == "CONTRADICTED":
+                conflicts.add(edge["id"])
+            elif head not in closure:
+                closure.add(head)
+                derivations[head] = edge["id"]
+                for j in waiting.pop(head, ()):
+                    missing[j] -= 1
+                    if missing[j] == 0:
+                        # Earlier rules wait for the next virtual ordered scan.
+                        heapq.heappush(ready, (turn + (j <= i), j))
+    return closure, derivations, conflicts
+
+
+def _goal_relevance(edges, goals):
+    """Reverse reachability through supported and proposed rules only."""
+    incoming = {}
+    for edge in edges:
+        if edge["status"] != "CONTRADICTED":
+            incoming.setdefault(edge["conclusion"], []).append(edge)
+    relevant_nodes, relevant_edges = set(goals), set()
+    pending = list(goals)
+    while pending:
+        for edge in incoming.get(pending.pop(), ()):
+            relevant_edges.add(edge["id"])
+            for tail in edge["premises"]:
+                if tail not in relevant_nodes:
+                    relevant_nodes.add(tail)
+                    pending.append(tail)
+    return relevant_nodes, relevant_edges
+
+
 def analyze_hypergraph(spec):
     """Least declared closure and complete minimal missing-evidence sets, or UNKNOWN."""
     nodes, edges, goals, limits = _validate(spec)
-    initial_supported = {ident for ident, node in nodes.items() if node["status"] == "SUPPORTED"}
-    closure, derivations, conflicts = compute_hypergraph_closure(list(nodes.values()), edges, initial_supported)
-
-    relevant_nodes, relevant_edges = set(goals), set()
-    changed = True
-    while changed:
-        changed = False
-        for edge in edges:
-            if edge["status"] == "CONTRADICTED" or edge["conclusion"] not in relevant_nodes:
-                continue
-            relevant_edges.add(edge["id"])
-            before = len(relevant_nodes)
-            relevant_nodes.update(edge["premises"])
-            changed |= len(relevant_nodes) != before
+    closure, derivations, conflicts = _supported_closure(nodes, edges)
+    relevant_nodes, relevant_edges = _goal_relevance(edges, goals)
 
     incoming = {edge["conclusion"] for edge in edges}
     direct = {ident for ident, node in nodes.items()

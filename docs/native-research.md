@@ -48,6 +48,33 @@ Kinds include lemma, algebraic-root, geometry and note. Polynomial coefficients,
 
 Assets are bounded to 8 MiB each, objectives to 64 KiB, dependencies to 64 names and native records to 2048 entries. Exact retrieval checks record and CAS integrity. Status and catalog reads do not hash every historical asset. Default CLI output is a small digest pointing to the full record; `--json` exposes full metadata.
 
+## Discover and apply a capability
+
+At a consequential blocker, describe the required input, operation and output and the original-goal obligation it would address. Inspect the reported reason before calling it a capability gap: missing data, unavailable backends, implementation errors and exhausted search bounds need different next steps. Repeated UNKNOWN alone does not diagnose a missing ability.
+
+Find accumulated local functions before rebuilding them:
+
+```text
+python -B scripts/rds_cli.py --root <project> rsi list
+python -B scripts/rds_cli.py --root <project> rsi list --name <exact-tool-name>
+```
+
+The default digest shows at most three names and function entries, sorted by name, with `tool_count`, `omitted_tools` and the full record locator. This order is not a relevance ranking. `--name` filters exactly, including the full `--json` output; an unknown name returns an empty catalogue. `recorded_registration` reports a historical local adoption, while `reuse_checked=false` means this lookup has not revalidated it. Function identifiers longer than 128 characters have `entry=null` and `entry_omitted=true`; retrieve the exact identifier from the record rather than calling a truncated name. Listing neither executes the function nor rehashes every source asset.
+
+Open only the selected tool's source/validation details as needed. If no local function fits, use the bounded [theory-tool lookup](theory-reformulation.md#按需查预载工具与可运行算子脚手架) for a relevant method and check its prerequisites. A catalogue miss means no matching recorded tool, not that no method exists. Reuse or compose a compatible implementation; when necessary, propose a parameterized adaptation with its expected output, checker and bounded cost. A new operator must serve the original obligation rather than manufacture a different goal.
+
+Qualification has three distinct uses:
+
+| Evidence | What to do with it |
+| --- | --- |
+| Known valid, discriminating negative and applicable boundary cases | Check the stated operation against expected answers grounded independently of its implementation. Keep failed cases; a process failure is not a scientific counterexample. |
+| Actual goal-bound input and an appropriate checker/measurement | Run through the existing authorized execution path, then use the result in the next selection. A fixed demonstration or backend smoke does not substitute for this application. |
+| A later invocation with a justified changed input or scope check | Reuse the retained function and original limits. Demonstrated reuse is scoped; outside-domain input should stay unsupported rather than inherit a previous PASS. |
+
+Record only the requirement, selected tool/version, evidence locator and changed next decision in the existing context/checkpoint. Keep full code, cases and raw results on disk. If the function is a genuinely reusable addition, use the existing extraction and local qualification flow below. Do not create another capability registry or reload the whole library on each turn. Registration does not add a trusted proof rule or mark a scientific hypergraph node true.
+
+This is an agent workflow over existing entries. Automated gap diagnosis and goal-bound application consumers are tracked in [#43](https://github.com/kongtou20070406/research-direction-selector/issues/43) and [#45](https://github.com/kongtou20070406/research-direction-selector/issues/45); they are not delivered by the catalogue fix. No model-weight learning or general mastery is claimed.
+
 ## Extract, test, register and actually reuse
 
 ```text

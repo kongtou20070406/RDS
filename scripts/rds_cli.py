@@ -1304,7 +1304,8 @@ def parser():
     rsi_use = rsi_actions.add_parser('use')
     rsi_use.add_argument('--name', required=True)
     rsi_use.add_argument('--output', '-o', help='Export a verified local module to a project-relative .py file without overwriting')
-    rsi_actions.add_parser('list')
+    rsi_list = rsi_actions.add_parser('list', help='Discover local tool entries; registration is not a fresh reuse check')
+    rsi_list.add_argument('--name', help='Inspect one exact local tool name without dumping unrelated records')
     for child in rsi_actions.choices.values():
         child.add_argument('--json', action='store_true')
     commands.add_parser("init").add_argument("--contract", required=True)
@@ -1593,8 +1594,13 @@ def _main():
             return 1
         if args.command == "checkpoint" and args.action == "restore" and result.get("status") == "CONFLICT":
             return 1
-    except (ValueError, KeyError, TypeError, RecursionError, OSError, sqlite3.Error, SyntaxError, ImportError, subprocess.SubprocessError) as exc:
+    except (ValueError, KeyError, TypeError, RecursionError, OSError, SyntaxError) as exc:
+        # KeyError/TypeError also come from unvalidated user specs, so they stay rejections.
         print("[RDS-REJECT] " + str(exc), file=sys.stderr)
+        return 1
+    except (sqlite3.Error, ImportError, subprocess.SubprocessError) as exc:
+        # Nothing in the request was refused: the state database, a dependency or a subprocess failed.
+        print("[RDS-ERROR] " + type(exc).__name__ + ": " + str(exc), file=sys.stderr)
         return 1
     return 0
 

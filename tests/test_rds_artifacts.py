@@ -69,6 +69,58 @@ class ImportTests(unittest.TestCase):
         self.assertEqual(result["facts"]["last_loss"]["source"]["locator"], "line:3:pointer:/loss")
         self.assertEqual(result["facts"]["loss"]["value"], 0.5)
 
+    def test_issue19_file_hash_inventory_is_not_scalar_code_identity(self):
+        record = {"source_sha256": {"model.py": "a" * 64}, "value": 1.0}
+        binding = {**self.binding, "run_id": "toy", "code_sha256": digest(record["source_sha256"]),
+                   "config_sha256": "c" * 64, "data_sha256": "d" * 64, "data_split": "synthetic",
+                   "metric": {"definition": "synthetic scalar", "reduction": "identity"}}
+        self.assertEqual(binding["code_sha256"], "9c10b08356db6478cbcc90a1e2ef920a731e8968533b2683896de9cccf1e8628")
+        source = self.source("record.json", "metric", record, [{"id": "toy_value", "pointer": "/value"}], binding=binding)
+        before = (self.base / "record.json").read_bytes()
+        result = self.run_import([source])
+        self.assertEqual(result["status"], "IMPORTED")
+        self.assertEqual(result["conflicts"], [])
+        fact = result["facts"]["toy_value"]
+        self.assertEqual((fact["value"], fact["kind"], fact.provenance_status), (1.0, "OBSERVED", "ARTIFACT_OBSERVED"))
+        self.assertEqual(fact["binding"]["code_sha256"], binding["code_sha256"])
+        self.assertEqual((self.base / "record.json").read_bytes(), before)
+
+    def test_hash_inventory_cannot_fill_missing_scalar_identity(self):
+        binding = deepcopy(self.binding)
+        binding.pop("code_sha256")
+        source = self.source("inventory.json", "metric", {"source_sha256": {"model.py": "a" * 64}, "loss": 0.25},
+                             [{"id": "loss", "pointer": "/loss"}], binding=binding)
+        result = self.run_import([source])
+        self.assertEqual(result["status"], "INCOMPLETE")
+        self.assertEqual(result["facts"]["loss"]["kind"], "UNKNOWN")
+        self.assertNotIn("code_sha256", result["facts"]["loss"]["binding"])
+        self.assertEqual(result["conflicts"], [])
+
+    def test_inventory_metadata_and_scalar_aliases_in_all_identity_origins(self):
+        for origin in (None, "binding", "protocol"):
+            for value, expected in (({"model.py": "f" * 64}, "IMPORTED"),
+                                    (self.binding["code_sha256"], "IMPORTED"), ("f" * 64, "CONFLICT")):
+                with self.subTest(origin=origin, value=value):
+                    metadata = {"source_sha256": value}
+                    record = {"loss": 0.25, **metadata} if origin is None else {"loss": 0.25, origin: metadata}
+                    source = self.source("alias.json", "metric", record, [{"id": "loss", "pointer": "/loss"}])
+                    result = self.run_import([source])
+                    self.assertEqual(result["status"], expected)
+                    self.assertEqual(result["facts"]["loss"]["kind"], "UNKNOWN" if expected == "CONFLICT" else "OBSERVED")
+
+    def test_scalar_legacy_identity_can_fill_binding_but_inventory_cannot_override_explicit(self):
+        binding = deepcopy(self.binding)
+        binding.pop("code_sha256")
+        source = self.source("legacy.json", "metric", {"source_sha256": "a" * 64, "loss": 0.25},
+                             [{"id": "loss", "pointer": "/loss"}], binding=binding)
+        result = self.run_import([source])
+        self.assertEqual(result["status"], "IMPORTED")
+        self.assertEqual(result["facts"]["loss"]["binding"]["code_sha256"], "a" * 64)
+        source = self.source("explicit.json", "metric", {"code_sha256": "a" * 64,
+                             "source_sha256": {"model.py": "f" * 64}, "loss": 0.25},
+                             [{"id": "explicit_loss", "pointer": "/loss"}])
+        self.assertEqual(self.run_import([source])["facts"]["explicit_loss"]["kind"], "OBSERVED")
+
     def test_invalid_source_identity_cannot_become_observed_evidence(self):
         cases = [(key, value) for key in ("run_id", "data_split")
                  for value in (" ", "unknown", " UNKNOWN ", 1, ["run"], {"name": "run"})]
