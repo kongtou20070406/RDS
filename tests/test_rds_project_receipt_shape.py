@@ -16,7 +16,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import test_rds_project as base  # noqa: E402  (module import: its classes are not rediscovered here)
-from rds_project import ProjectStore, canonical  # noqa: E402
+from rds_project import ProjectStore, ReceiptIntegrityError, canonical, digest  # noqa: E402
 
 CLI = Path(__file__).resolve().parents[1] / "scripts" / "rds_cli.py"
 
@@ -40,7 +40,22 @@ def damaged_bodies(receipt):
             "other run": (canonical(other), "names a different run"),
             "sha256 field differs": (canonical(resealed), mismatch),
             "edited under original sha256": (canonical(edited), mismatch),
-            "minimal id and sha256": (canonical(minimal), mismatch)}
+            "minimal id and sha256": (canonical(minimal), mismatch),
+            **non_canonical_bodies(receipt)}
+
+
+NO_CANONICAL = "has no canonical encoding (non-finite number or unpaired surrogate)"
+
+
+def non_canonical_bodies(receipt):
+    # Python's decoder accepts these; the writer (allow_nan=False, UTF-8) can never have produced them.
+    # Each keeps the original body and row sha256, as an edited or imported ledger would.
+    def extra(value):
+        return canonical(receipt)[:-1] + ',"extra":{"invalid":' + value + "}}"
+    return {f"non-canonical {name}": (extra(value), NO_CANONICAL)
+            for name, value in (("NaN", "NaN"), ("Infinity", "Infinity"), ("-Infinity", "-Infinity"),
+                                ("overflowing float", "1e400"), ("lone high surrogate", '"\\ud800"'),
+                                ("lone low surrogate", '"\\udfff"'))}
 
 
 def ledger_rows(store):
@@ -86,6 +101,18 @@ class ProjectReceiptShapeCliTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertNotIn("integrity failure", result.stderr)
 
+    def test_writer_shaped_non_ascii_and_escaped_receipts_still_read(self):
+        # Valid values in any JSON spelling keep passing; only values the writer cannot encode are rejected.
+        _, receipt = self.policy_store()
+        body = {key: value for key, value in receipt.items() if key != "sha256"}
+        body["note"] = "Δ résumé 😀"
+        sealed = {**body, "sha256": digest(body)}
+        for spelling in (canonical(sealed), json.dumps(sealed, ensure_ascii=True),
+                         json.dumps(sealed, ensure_ascii=True, indent=1)):
+            with self.subTest(spelling=spelling[-40:]):
+                row = {"run_id": "r1", "sha256": sealed["sha256"], "body": spelling}
+                self.assertEqual(ProjectStore._receipt(row), sealed)
+
     def test_damaged_receipt_is_a_named_rejection_on_every_project_read(self):
         store, receipt = self.policy_store()
         for name, (body, reason) in damaged_bodies(receipt).items():
@@ -113,13 +140,20 @@ class ProjectReceiptShapeCliTests(unittest.TestCase):
 
     def test_restoring_the_retained_body_restores_every_read(self):
         store, receipt = self.policy_store()
-        damage(store, "r1", "[]")
-        with self.assertRaisesRegex(ValueError, "Project receipt integrity failure"):
-            store.snapshot()
-        damage(store, "r1", canonical(receipt))
-        self.assertEqual(store.snapshot()["receipts"], [receipt])
-        self.assertEqual(store.recover("r1"), receipt)
-        self.assertFalse(store.execute("r1")["execution_started"])
+        nan_body, surrogate_body = (non_canonical_bodies(receipt)[f"non-canonical {name}"][0]
+                                    for name in ("NaN", "lone high surrogate"))
+        for body in ("[]", nan_body, surrogate_body):
+            with self.subTest(body=body[-30:]):
+                damage(store, "r1", body)
+                for read in (store.snapshot, lambda: store.recover("r1")):
+                    with self.assertRaises(ReceiptIntegrityError):
+                        read()
+                damage(store, "r1", canonical(receipt))
+                self.assertEqual(store.snapshot()["receipts"], [receipt])
+                self.assertEqual(store.recover("r1"), receipt)
+                self.assertFalse(store.execute("r1")["execution_started"])
+                result = cli(store, "status", "--brief")
+                self.assertEqual(result.returncode, 0, result.stderr)
 
 
 class ProjectReceiptShapeMaintenanceTests(unittest.TestCase):
@@ -134,14 +168,17 @@ class ProjectReceiptShapeMaintenanceTests(unittest.TestCase):
         receipt = fx.run_spec(fx.spec("r1", timeout=0.25, maintenance=True))
         manifest = fx.root / "r2-manifest.json"
         manifest.write_text(canonical(fx.spec("r2", timeout=0.25, maintenance=True)), encoding="utf-8")
-        for body in ("[]", "{}"):
-            with self.subTest(body=body):
+        bodies = {"array": ("[]", "is a JSON array"), "empty object": ("{}", "names a different run"),
+                  **non_canonical_bodies(receipt)}
+        for name, (body, reason) in bodies.items():
+            with self.subTest(body=name):
                 damage(store, "r1", body)
                 before = ledger_rows(store)
                 result = cli(store, "create", "--manifest", str(manifest))
                 self.assertEqual(result.returncode, 1, result.stdout)
                 self.assertNotIn("Traceback", result.stderr)
-                self.assertIn("[RDS-REJECT] Project receipt integrity failure: run r1 body", result.stderr)
+                self.assertIn("[RDS-REJECT] Project receipt integrity failure: run r1 body " + reason,
+                              result.stderr)
                 self.assertEqual(result.stdout, "")
                 self.assertEqual(ledger_rows(store), before)
         # The retained body restores admission; the prior maintenance cost is still counted.
@@ -163,11 +200,16 @@ class ProjectReceiptShapeMaintenanceTests(unittest.TestCase):
             run = store._run(db, "r2")
             run.update(attempt_id=attempt, worker_pid=os.getpid())
             store._save(db, run)
-        damage(store, "r1", "{}")
-        before = ledger_rows(store)
-        with self.assertRaisesRegex(ValueError, "Project receipt integrity failure: run r1 body names a different run"):
-            store._execute_claim("r2", attempt)
-        self.assertEqual(ledger_rows(store), before)
+        bodies = {"empty object": ("{}", "names a different run"), **non_canonical_bodies(receipt)}
+        for name, (body, reason) in bodies.items():
+            with self.subTest(body=name):
+                damage(store, "r1", body)
+                before = ledger_rows(store)
+                # Rejected as r1's damaged read: r2 stays RESERVED, budget and every ledger row unchanged.
+                with self.assertRaises(ReceiptIntegrityError) as raised:
+                    store._execute_claim("r2", attempt)
+                self.assertIn("Project receipt integrity failure: run r1 body " + reason, str(raised.exception))
+                self.assertEqual(ledger_rows(store), before)
         damage(store, "r1", canonical(receipt))
         settled = store._execute_claim("r2", attempt)
         self.assertEqual(settled["run_id"], "r2")
