@@ -1297,6 +1297,11 @@ def parser():
     hypergraph.add_argument('--input', '-i', required=True)
     hypergraph.add_argument('--output', '-o')
     hypergraph.add_argument('--audit-files', action='store_true')
+    hypergraph.add_argument('--update', '-u', action='append', default=[], help='Merge a small declaration fragment into the saved map')
+    for flag in ('retract-node', 'retract-rule', 'refute-node', 'refute-rule'):
+        hypergraph.add_argument('--' + flag, action='append', default=[])
+    hypergraph.add_argument('--change-source', help='Locator for the declared change; creates no scientific verdict')
+    hypergraph.add_argument('--trace-cone', help='Explain the selected support for one claim')
     hypergraph.add_argument('--json', action='store_true')
     usage = commands.add_parser("usage", help="Show locally recorded daily CLI invocation counts")
     window = usage.add_mutually_exclusive_group()
@@ -1558,11 +1563,22 @@ def _main():
             from rds_guard import evaluate
             result = evaluate(args.policy, args.root)
         elif args.command == 'hypergraph':
-            from rds_hypergraph import analyze_hypergraph, audit_sources
-            spec = strict_json(read_bounded(args.input, 8 * 1024 * 1024).decode('utf-8-sig'))
-            result = analyze_hypergraph(spec)
-            if args.audit_files:
-                result['source_file_audit'] = audit_sources(spec, Path(args.input).resolve().parent)
+            from rds_hypergraph import review_hypergraph, audit_sources
+            from rds_hypergraph_input import load_input
+            spec, repairs = load_input(read_bounded(args.input, 8 * 1024 * 1024).decode('utf-8-sig'))
+            require(len(args.update) <= 8, 'At most eight dependency update files')
+            updates = []
+            for update_path in args.update:
+                update, fixed = load_input(read_bounded(update_path, 8 * 1024 * 1024).decode('utf-8-sig'))
+                updates.append(update)
+                repairs.extend(fixed)
+            result = review_hypergraph(spec, locator=str(Path(args.input).resolve()),
+                                      retract_nodes=args.retract_node, retract_rules=args.retract_rule,
+                                      refute_nodes=args.refute_node, refute_rules=args.refute_rule,
+                                      change_source=args.change_source, trace=args.trace_cone, updates=updates)
+            result['input_review']['format_repairs'] = repairs
+            if args.audit_files and result['status'] != 'UNKNOWN':
+                result['source_file_audit'] = audit_sources(result['dependency_map'], Path(args.input).resolve().parent)
             if args.output:
                 output = Path(args.output)
                 output.parent.mkdir(parents=True, exist_ok=True)
@@ -1619,7 +1635,7 @@ def _main():
             return 1
         if args.command == 'guard' or args.command == 'exec' and 'regression_review' in result:
             return {'PASS': 0, 'FAIL': 1, 'UNKNOWN': 2}.get(result.get('regression_review', result).get('status'), 2)
-        if args.command == 'hypergraph' and result.get('truncated'):
+        if args.command == 'hypergraph' and (result.get('truncated') or result.get('input_review', {}).get('errors')):
             return 2
         if args.command == 'rsi' and args.action == 'validate':
             return {'LOCAL_CASES_PASSED': 0, 'FAILED': 1, 'UNKNOWN': 2}[result['status']]

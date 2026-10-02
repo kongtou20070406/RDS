@@ -594,6 +594,22 @@ def brief(root, value, version, formal=False):
     for key in ('id', 'name', 'source_sha256', 'module', 'assurance'):
         if key in value:
             summary[key] = value[key]
+    if 'dependency_map' in value and 'input_review' in value:
+        goals = value.get('goals', {})
+        summary['goals'] = {name: row['status'] for name, row in list(goals.items())[:3]}
+        summary['omitted_goals'] = max(0, len(goals) - 3)
+        review = value['input_review']
+        summary['input_repairs'] = len(review['repairs']) + len(review.get('format_repairs', []))
+        summary['input_warnings'] = len(review['warnings'])
+        summary['input_issues'] = len(review['errors'])
+        step = value.get('next_step', {})
+        # Full field diagnostics and tables remain at the existing CAS locator.
+        summary['next_step'] = {k: v for k, v in step.items() if k != 'fields'}
+        if step.get('fields'):
+            summary['next_step']['fields'] = step['fields'][:3]
+            summary['next_step']['omitted_fields'] = max(0, len(step['fields']) - 3)
+        if 'revision' in value:
+            summary['lost_support_count'] = len(value['revision']['lost_support'])
     if value.get('status') == 'LOCAL_CATALOG' and isinstance(value.get('tools'), list):
         registered = {row['data']['name'] for row in value['tools'] if row['kind'] == 'tool-adoption'}
         candidates = sorted((row['data'] for row in value['tools'] if row['kind'] == 'tool'),

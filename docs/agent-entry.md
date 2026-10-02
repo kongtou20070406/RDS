@@ -177,13 +177,13 @@ Exact commands take priority, followed by explicit aliases and unique command pr
 
 Additional aliases include `test`/`eval`/`start`/`测试` → `exec`, `suggest`/`route`/`规划` → `advise`, and `falsify`/`counterexample`/`证伪` → `reject`. `verify`/`prove`/`证明` expand to `formal verify`; `check`/`核查` to `formal check`; `snapshot`/`存档` to `checkpoint save`. Existing `run` and `plan` keep their original meanings. Root supports `-w`, `-d`, `--dir`; exec supports `-t`, `-o`, `-c`, `-l`; reject supports `-m`, `-e`. Suggestions do not authorize execution.
 
-Use `hypergraph --input proof-graph.json` for the existing bounded AND/OR dependency analysis. `--audit-files` checks declared file hashes; neither graph reachability nor a `SUPPORTED` label proves mathematics. Full results are retained; `--json` exposes them. Truncation returns exit code 2.
+Use `hypergraph --input proof-graph.json` for bounded AND/OR dependency analysis. It also accepts [compact declarations](truth-maintenance.md): the program generates and maintains the internal table. Reuse its returned `record` path with `--retract-node <id>` or `--refute-node <id>` instead of editing that table. Default output gives a small next step; the immutable full result contains the revised map for subsequent analysis. `--audit-files` checks declared file hashes; neither graph reachability nor a `SUPPORTED` label proves mathematics. `--json` exposes the full result. Input ambiguity and truncation return exit code 2.
 
 ## Goal-linked dependencies
 
 Keep a small map of the original acceptance, necessary premises and serious alternatives. One hyperedge's premises are AND; separate edges to a conclusion are OR. Unknown evidence remains `UNKNOWN`, an unproved implication remains `PROPOSED`, and every node/rule has a source. Do not confuse a domain's enumerated hypergraph with RDS's research dependency map. The [synthetic example](../examples/goal-linked-hypergraph.json) deliberately leaves all original-goal obligations open despite two supported side results.
 
-Supply that existing hypergraph schema in `advisor_context.dependency_map` (or the top level of a `--research-context` file). Advisor runs the bounded analyzer and retains the actual map, input SHA, minimal missing evidence sets, ready obligations and truncation in `selection_review.dependency_review`. It does not infer dependencies from prose or auto-verify labels. Source files can separately be audited by the existing hypergraph CLI.
+Supply the existing schema, compact declarations or a program-generated snapshot in `advisor_context.dependency_map` (or the top level of a `--research-context` file). Advisor runs the bounded analyzer and retains the actual map, input SHA, minimal missing evidence sets, ready obligations and truncation in `selection_review.dependency_review`. It does not infer dependencies from prose or auto-verify labels. Source files can separately be audited by the existing hypergraph CLI.
 
 For an action whose actual `target` is `unrestricted_lower`, declare `goal_contribution` with three fields:
 
