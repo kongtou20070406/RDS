@@ -174,6 +174,24 @@ def audit_sources(spec, base_dir=None):
             "all_requested_files_match": all(row["status"] == "MATCH" for row in rows)}
 
 
+def read_project_receipt(root_text, digest_sha):
+    """Read one receipt body by sha256 from a project ledger, read-only.
+
+    Returns ``{"status": "RECEIPT_FOUND", "body": ...}``, ``RECEIPT_NOT_FOUND`` or
+    ``LEDGER_UNAVAILABLE`` with the exception type; the caller judges the body.
+    """
+    try:
+        from rds_project import ProjectStore
+        store = ProjectStore(root_text)
+        with store._db(True) as db:
+            hit = db.execute("SELECT body FROM receipts WHERE sha256=?", (digest_sha,)).fetchone()
+        if hit is None:
+            return {"status": "RECEIPT_NOT_FOUND"}
+        return {"status": "RECEIPT_FOUND", "body": json.loads(hit["body"])}
+    except (ValueError, FileNotFoundError, OSError, sqlite3.Error) as exc:
+        return {"status": "LEDGER_UNAVAILABLE", "reason": type(exc).__name__}
+
+
 def audit_receipts(spec):
     """Verify receipt-bound evidence against frozen, append-only project ledgers.
 
@@ -194,22 +212,13 @@ def audit_receipts(spec):
     audited = []
     for (root_text, digest_sha), users in sorted(bindings.items()):
         row = {"receipt": {"project_root": root_text, "sha256": digest_sha}, "used_by": sorted(users)}
-        try:
-            from rds_project import ProjectStore
-            store = ProjectStore(root_text)
-            with store._db(True) as db:
-                hit = db.execute("SELECT body FROM receipts WHERE sha256=?", (digest_sha,)).fetchone()
-            if hit is None:
-                row.update(status="RECEIPT_NOT_FOUND")
-            else:
-                body = json.loads(hit["body"])
-                if body.get("sha256") != digest_sha or body.get("run_status") != "SUCCEEDED":
-                    row.update(status="RECEIPT_NOT_SUCCEEDED",
-                               run_status=body.get("run_status"))
-                else:
-                    row.update(status="GROUNDED", run_id=body.get("run_id"))
-        except (ValueError, FileNotFoundError, OSError, sqlite3.Error) as exc:
-            row.update(status="LEDGER_UNAVAILABLE", reason=type(exc).__name__)
+        found = read_project_receipt(root_text, digest_sha)
+        if found["status"] != "RECEIPT_FOUND":
+            row.update(found)
+        elif (body := found["body"]).get("sha256") != digest_sha or body.get("run_status") != "SUCCEEDED":
+            row.update(status="RECEIPT_NOT_SUCCEEDED", run_status=body.get("run_status"))
+        else:
+            row.update(status="GROUNDED", run_id=body.get("run_id"))
         audited.append(row)
     grounded = {(row["receipt"]["project_root"], row["receipt"]["sha256"])
                 for row in audited if row["status"] == "GROUNDED"}

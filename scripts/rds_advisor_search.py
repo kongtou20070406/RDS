@@ -30,7 +30,7 @@ OBSTRUCTION_RESPONSES = {
                               "the shortlist covers only the bounded catalogue."),
 }
 OBSTRUCTION_CAUSES = tuple(sorted(set(OBSTRUCTION_RESPONSES) | {"UNDETERMINED"}))
-OBSTRUCTION_FIELDS = ("cause", "dependency", "id", "obligation", "requirement", "scope", "signals", "source")
+OBSTRUCTION_FIELDS = ("cause", "dependency", "id", "obligation", "receipt", "requirement", "scope", "signals", "source")
 SOURCE_LOCATOR_KEYS = ("locator", "path", "receipt_id", "url")
 UNDETERMINED_NEXT = ("The cause is not established; choose the smallest check that distinguishes missing input, adapter fault, "
                      "execution cap and unsupported operation before treating it as a capability gap.")
@@ -611,7 +611,41 @@ def _obstruction_records(context):
                 raise ValueError(f"{field}.signals must be 1 to 8 lowercase theory-tool tags such as proof_bottleneck")
         if "scope" in record and not isinstance(record["scope"], dict):
             raise ValueError(f"{field}.scope must be an object compared with the current decision scope")
+        if "receipt" in record:
+            receipt = record["receipt"]
+            if not (isinstance(receipt, dict) and set(receipt) == {"project_root", "sha256"}
+                    and _text(receipt["project_root"]) and isinstance(receipt["sha256"], str)
+                    and re.fullmatch(r"[0-9a-fA-F]{64}", receipt["sha256"])):
+                raise ValueError(f"{field}.receipt must be exactly project_root (a nonempty path of at most 512 "
+                                 "characters) and sha256 (64 hexadecimal characters) naming a project-ledger receipt")
     return records
+
+
+def _receipt_audits(records, context):
+    """Read each distinct declared receipt once, read-only, only under the audit_receipts opt-in.
+
+    A receipt records execution, not why a goal is blocked: only a recorded timeout or stop policy
+    is reported, as an execution cap. Nothing is inferred from exit status or success.
+    """
+    keys = {(r["receipt"]["project_root"], r["receipt"]["sha256"].lower()) for r in records if "receipt" in r}
+    if context.get("audit_receipts") is not True:
+        return dict.fromkeys(keys, {"status": "NOT_AUDITED"})
+    from rds_hypergraph import read_project_receipt
+    audits = {}
+    for root_text, digest_sha in sorted(keys):
+        found = read_project_receipt(root_text, digest_sha)
+        body = found.get("body")
+        if found["status"] == "RECEIPT_FOUND" and not (isinstance(body, dict) and body.get("sha256") == digest_sha):
+            found = {"status": "RECEIPT_NOT_FOUND", "reason": "stored body does not carry the declared sha256"}
+        if found["status"] != "RECEIPT_FOUND":
+            audits[root_text, digest_sha] = found
+            continue
+        stop = body.get("stop_reason")
+        cap = "TIMEOUT" if body.get("timeout") is True else stop if _text(stop, 64) else None
+        audits[root_text, digest_sha] = {
+            "status": "RECEIPT_FOUND", "run_id": body.get("run_id"), "run_status": body.get("run_status"),
+            "execution_cap": cap, "assurance": "RECEIPT_EXECUTION_NOT_STATEMENT_VERIFICATION"}
+    return audits
 
 
 def _catalogue_shortlist(signals):
@@ -631,7 +665,7 @@ def _catalogue_shortlist(signals):
                           for card in found["cards"]]}
 
 
-def _obstruction_response(record):
+def _obstruction_response(record, audit=None):
     cause, requirement = record["cause"], record.get("requirement")
     if not _source(record):
         why = "No source locator was declared for this obstruction."
@@ -641,6 +675,9 @@ def _obstruction_response(record):
         why = "An unsupported operation needs requirement input/operation/output before it can become a capability requirement."
     elif cause == "DEPENDENCY_UNAVAILABLE" and "dependency" not in record:
         why = "An unavailable dependency needs its dependency name."
+    elif audit is not None and audit["status"] not in {"RECEIPT_FOUND", "NOT_AUDITED"}:
+        # Fail closed like receipt-bound dependency evidence: an audited binding that cannot be read supports nothing.
+        why = "The declared receipt could not be read from its named project ledger."
     else:
         why = None
     if why is not None:
@@ -676,11 +713,17 @@ def _obstruction_review(records, context, goal):
     decision = context.get("decision")
     # The ledger keys loop history by decision.scope; the context-level scope is the documented fallback.
     scope = decision["scope"] if isinstance(decision, dict) and "scope" in decision else context.get("scope")
+    audits = _receipt_audits(records, context)
     entries = []
     for record in records:
         entry = {"id": record["id"], "obligation": record["obligation"], "cause": record["cause"]}
         if "source" in record:
             entry["source"] = deepcopy(record["source"])
+        audit = None
+        if "receipt" in record:
+            entry["receipt"] = deepcopy(record["receipt"])
+            audit = audits[record["receipt"]["project_root"], record["receipt"]["sha256"].lower()]
+            entry["receipt_audit"] = deepcopy(audit)
         entry.update(assurance="INPUT_REPORTED_OBSTRUCTION_NOT_DIAGNOSIS", authorization="UNCHANGED")
         obligation = record["obligation"]
         if obligation not in targets:
@@ -692,26 +735,38 @@ def _obstruction_review(records, context, goal):
         elif truths.get(obligation) and all(truth == TRUE for truth in truths[obligation]):
             status, reason = "NOT_APPLICABLE", "The obligation's current goal predicates are satisfied; the obstruction no longer applies."
         else:
-            entries.append({**entry, "status": "APPLICABLE", **_obstruction_response(record)})
+            entries.append({**entry, "status": "APPLICABLE", **_obstruction_response(record, audit)})
             continue
         entries.append({**entry, "status": status, "reason": reason})
     # No cause is established while a different cause is declared for the same open obligation, including one
     # whose applicability is unknown; only a cause ruled out (NOT_APPLICABLE) is ignored. Same-cause records
-    # do not conflict. Declared contracts, dependency names and live checks stay as data for the check.
-    causes = {}
+    # do not conflict. A read receipt that records a timeout or stop policy counts as a declared EXECUTION_CAP:
+    # incomplete computation must be resolved before any other cause. Declared contracts, dependency names
+    # and live checks stay as data for the check.
+    causes, capped = {}, set()
     for entry in entries:
         if entry["status"] in {"APPLICABLE", UNKNOWN}:
             causes.setdefault(entry["obligation"], set()).add(entry["cause"])
+            if (entry.get("receipt_audit") or {}).get("execution_cap"):
+                capped.add(entry["obligation"])
     for record, entry in zip(records, entries):
         others = sorted(causes.get(entry["obligation"], set()) - {entry["cause"]})
-        if entry["status"] != "APPLICABLE" or entry["response"] == "DISCRIMINATING_CHECK" or not others:
+        receipt_cap = entry["obligation"] in capped and entry["cause"] != "EXECUTION_CAP"
+        if (entry["status"] != "APPLICABLE" or entry["response"] == "DISCRIMINATING_CHECK"
+                or not (others or receipt_cap)):
             continue
         entry.pop("required_capability", None)
         if record.get("requirement") is not None:
             entry["requirement"] = deepcopy(record["requirement"])
+        reasons = []
+        if others:
+            reasons.append("Co-declared " + ", ".join(others) + " on this obligation must be resolved or ruled out "
+                           "before this cause is treated as established.")
+        if receipt_cap:
+            reasons.append("A named receipt records an execution cap on this obligation; that incomplete computation "
+                           "must be resolved or ruled out before this cause is treated as established.")
         entry.update(response="DISCRIMINATING_CHECK", cause_status=UNKNOWN, next=UNDETERMINED_NEXT,
-                     reason="Co-declared " + ", ".join(others) + " on this obligation must be resolved or ruled out "
-                            "before this cause is treated as established.")
+                     reason=" ".join(reasons))
     return entries
 
 

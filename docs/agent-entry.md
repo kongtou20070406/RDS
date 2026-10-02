@@ -94,6 +94,14 @@ When a goal obligation is blocked, the caller can declare the observed obstructi
 
 When different causes remain declared for the same open obligation (each applicable or with unknown applicability; ruled-out records are ignored), every applicable record on it is held back to `DISCRIMINATING_CHECK` with the cause `UNKNOWN`. This includes unsourced records; records carry no time order, so a stale record is retired by removing it or by its scope. Records with the same cause do not conflict. A held-back record keeps its declared requirement, dependency name and live check as data for the check. Guidance text is fixed; record text stays in its own fields and is never spliced into instructions.
 
+A record may also name its run's project-ledger receipt as `receipt: {project_root, sha256}`, the same binding shape as dependency-map `evidence.receipt`. The receipt is read only with `advisor_context.audit_receipts: true`. Each distinct receipt is read once, read-only, and nothing is written. The entry then carries `receipt_audit`:
+
+- `RECEIPT_FOUND` reports the `run_id`, the `run_status` and an `execution_cap`. The cap is `TIMEOUT` when the receipt records `timeout: true`, the receipt's `stop_reason` when one is recorded (for example `CAMPAIGN_DEADLINE` or `PROGRESS_NO_GROWTH`), and otherwise `null`.
+- `RECEIPT_NOT_FOUND` or `LEDGER_UNAVAILABLE` fails closed: the record gives `DISCRIMINATING_CHECK` with the cause `UNKNOWN`.
+- `NOT_AUDITED` (no opt-in) keeps the binding as data, and the response is unchanged.
+
+A recorded execution cap counts as a declared `EXECUTION_CAP` on that obligation under the rule above. Any other applicable cause on it is therefore held back. For example, a timed-out run cannot back `CAPABILITY_REQUIRED` or `SPECIFY_CAPABILITY`. A receipt never fills in a cause, replaces `source`, or reads exit status or success as a reason. A succeeded receipt only records execution. Existing reasons (no source, undetermined cause, missing requirement or dependency) keep precedence.
+
 A record is `NOT_APPLICABLE` when:
 
 - its obligation is not a goal;

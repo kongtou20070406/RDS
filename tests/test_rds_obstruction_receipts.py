@@ -8,10 +8,12 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
@@ -19,8 +21,8 @@ sys.path.insert(0, str(ROOT / 'examples' / 'project-runner'))
 sys.path.insert(0, str(ROOT / 'tests'))
 from prepare import prepare
 from rds_project import file_sha
-from test_rds_capability_requirement import (DEEP_LEARNING, MATHEMATICS, REQUIREMENT, SOFTWARE_TOOL, context,
-                                             obstruction, route)
+from test_rds_capability_requirement import (DEEP_LEARNING, MATHEMATICS, REQUIREMENT, SOFTWARE_TOOL, advisor_review,
+                                             context, obstruction, route)
 
 
 def cli(root, *args, timeout=60):
@@ -190,6 +192,96 @@ class ObstructionReceiptCLITests(unittest.TestCase):
                 proc = self.advise(ctx, route(goal), expect=1)
                 self.assertIn('advisor_context.obstructions[0].receipt', proc.stderr)
                 self.assertNotIn('Traceback', proc.stderr)
+
+
+def stopped_ledger(root, stop_reason, sha):
+    """A minimal project ledger whose one receipt records a stop policy (shape of a real FAILED receipt)."""
+    (root / '.rds').mkdir(parents=True)
+    db = sqlite3.connect(root / '.rds' / 'project.sqlite3')
+    db.executescript('CREATE TABLE contract(id INTEGER PRIMARY KEY,sha256 TEXT NOT NULL,body TEXT NOT NULL);'
+                     'CREATE TABLE receipts(run_id TEXT PRIMARY KEY,sha256 TEXT NOT NULL,body TEXT NOT NULL);')
+    body = {'schema': 1, 'run_id': 'r1', 'sha256': sha, 'run_status': 'FAILED', 'timeout': False,
+            'stop_reason': stop_reason}
+    db.execute("INSERT INTO contract VALUES (1,'x','{}')")
+    db.execute('INSERT INTO receipts VALUES (?,?,?)', ('r1', sha, json.dumps(body)))
+    db.commit()
+    db.close()
+
+
+class ObstructionReceiptReviewTests(unittest.TestCase):
+    SHA = hashlib.sha256(b'synthetic stopped receipt').hexdigest()
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name) / 'project'
+        stopped_ledger(self.root, 'PROGRESS_NO_GROWTH', self.SHA)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def review(self, records, scope='synthetic'):
+        goal = DEEP_LEARNING[0]
+        ctx = context(*DEEP_LEARNING, scope=scope)
+        ctx.update(obstructions=records, audit_receipts=True)
+        return advisor_review(ctx, route(goal))['selection_review']
+
+    def capped(self, **extra):
+        record = obstruction(DEEP_LEARNING[0], 'EXECUTION_CAP',
+                             receipt={'project_root': str(self.root), 'sha256': self.SHA.upper()})
+        record.update(extra)
+        return record
+
+    def gap(self):
+        return obstruction(DEEP_LEARNING[0], 'UNSUPPORTED_OPERATION', requirement=REQUIREMENT,
+                           signals=['trajectory_degradation'])
+
+    def test_stop_policy_receipt_is_an_execution_cap_and_holds_back_other_causes(self):
+        alone = self.review([self.capped()])['obstruction_review'][0]
+        self.assertEqual(alone['receipt_audit']['execution_cap'], 'PROGRESS_NO_GROWTH')
+        self.assertEqual(alone['response'], 'INCOMPLETE_COMPUTATION')
+        entries = self.review([self.capped(), self.gap()])['obstruction_review']
+        # The existing co-declared rule still holds both back; the receipt adds no precedence for its own cause.
+        self.assertEqual(entries[0]['response'], 'DISCRIMINATING_CHECK')
+        self.assertEqual(entries[0]['reason'], 'Co-declared UNSUPPORTED_OPERATION on this obligation must be resolved '
+                                               'or ruled out before this cause is treated as established.')
+        held = entries[1]
+        self.assertEqual((held['response'], held['cause_status']), ('DISCRIMINATING_CHECK', 'UNKNOWN'))
+        # Both the co-declared cause and the receipt are named; neither reason replaces the other.
+        self.assertIn('Co-declared EXECUTION_CAP', held['reason'])
+        self.assertIn('records an execution cap', held['reason'])
+
+    def test_a_cap_receipt_from_another_scope_does_not_block_a_healthy_route(self):
+        alone = self.review([self.gap()])
+        scoped_out = self.review([self.capped(scope={'domain': 'elsewhere'}), self.gap()])
+        self.assertEqual(scoped_out['obstruction_review'][0]['status'], 'NOT_APPLICABLE')
+        self.assertEqual(scoped_out['obstruction_review'][1]['response'], 'CAPABILITY_REQUIRED')
+        self.assertEqual(scoped_out['next_move']['kind'], alone['next_move']['kind'])
+
+    def test_existing_reasons_keep_precedence_over_the_receipt(self):
+        record = self.capped(cause='UNSUPPORTED_OPERATION')  # No requirement: the existing reason comes first.
+        entry = self.review([record])['obstruction_review'][0]
+        self.assertEqual(entry['response'], 'DISCRIMINATING_CHECK')
+        self.assertTrue(entry['reason'].startswith('An unsupported operation needs requirement'))
+        missing = self.capped(receipt={'project_root': str(self.root), 'sha256': 'b' * 64})
+        del missing['source']
+        entry = self.review([missing])['obstruction_review'][0]
+        self.assertEqual(entry['receipt_audit']['status'], 'RECEIPT_NOT_FOUND')
+        self.assertEqual(entry['reason'], 'No source locator was declared for this obstruction.')
+
+    def test_each_distinct_receipt_is_read_once(self):
+        import rds_hypergraph
+        calls = []
+        original = rds_hypergraph.read_project_receipt
+
+        def counting(root_text, digest_sha):
+            calls.append((root_text, digest_sha))
+            return original(root_text, digest_sha)
+
+        records = [dict(self.capped(), id=f'o{i}') for i in range(3)]
+        with mock.patch.object(rds_hypergraph, 'read_project_receipt', counting):
+            entries = self.review(records)['obstruction_review']
+        self.assertEqual(calls, [(str(self.root), self.SHA)])
+        self.assertTrue(all(e['receipt_audit']['status'] == 'RECEIPT_FOUND' for e in entries))
 
 
 if __name__ == '__main__':
