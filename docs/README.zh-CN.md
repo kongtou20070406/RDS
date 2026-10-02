@@ -10,6 +10,7 @@
 
 | 指南 | 简体中文 | English |
 | --- | --- | --- |
+| 5.8 提案：目标、架构、状态和可分工事项 | [5.8 完整目标与协作计划](5.8-vision.zh-CN.md) | [5.8 vision](5.8-vision.md) |
 | 已有自主分级与当前实现范围 | [原框架与当前能力](research-autonomy.md) | [Research autonomy](research-autonomy.md) |
 | 科研职责与单次实验流程 | [科研工作流](research-workflow.zh-CN.md) | [Research workflow](research-workflow.md) |
 | 声明、证书与验证范围 | [形式化验证](formal-verification.zh-CN.md) | [Formal verification](formal-verification.md) |

@@ -30,6 +30,8 @@ RDS has two sides that share one research state:
 
 Both read from and write to the same `.rds/` state store and `references/judgment-graph.yaml` causal rules.
 
+The [5.8 vision and collaboration plan](docs/5.8-vision.md) describes the proposed goal-linked decision loop, testable reformulation, conditional tool library and work packages. It distinguishes existing behavior from work under review; 5.8.0 remains Unreleased.
+
 ---
 
 ## 5 Core Functional Components
