@@ -126,6 +126,33 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(result["candidates"], [])
         self.assertIn("no outcome", result["discarded_candidates"][0]["reason"])
 
+    def test_discarded_obligation_preserves_exact_identity_and_original_input(self):
+        root = node("root", action_id="check:claim")
+        root["executable"]["action"].update(kind="OBLIGATION_CHECK", target="scoped target", claim="scoped claim",
+            outcomes=[{"observation": label, "next_decision": "review " + label}
+                      for label in ("verified", "unresolved")])
+        graph, context = {"nodes": [root]}, self.context()
+        original = copy.deepcopy((graph, context))
+        result = search_directions(graph, context)
+        self.assertEqual(result["candidates"], [])
+        self.assertEqual(result["discarded_candidates"], [{"rule_id": "root", "id": "root:check:claim",
+            "action_id": "check:claim", "reason": "obligation outcomes must distinguish verified, counterexample and unresolved"}])
+        self.assertEqual((graph, context), original)
+
+    def test_malformed_and_fallback_actions_do_not_invent_discard_identity(self):
+        for action in (None, {}, {"id": []}):
+            with self.subTest(action=action):
+                root = node("root")
+                root["executable"]["action"] = action
+                result = search_directions({"nodes": [root]}, self.context())
+                self.assertEqual(result["discarded_candidates"], [{"rule_id": "root", "reason": "missing action identity"}])
+        fallback = node("unused", action_id="repair")['executable']['action']
+        fallback['required_observables'] = []
+        root = node("root", [{"fact": "ready", "value": True, "on_false": fallback}])
+        result = search_directions({"nodes": [root]}, self.context(facts={"ready": fact(False)}))
+        self.assertEqual(result['discarded_candidates'], [{"rule_id": "root", "id": "root:repair",
+            "action_id": "repair", "reason": "missing required observables"}])
+
     def test_distinct_resources_never_dominate_or_share_budget(self):
         graph = {"nodes": [node("cpu"), node("gpu")], "edges": []}
         costs = {name + "-test": fact(value, resource=name, unit="seconds", comparison_group="same-trial")

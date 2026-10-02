@@ -2,6 +2,7 @@
 
 ## 5.8.0 — Unreleased
 
+- Surface bounded, identity-matched protocol rejection reasons at prospective choice/exec entry. Preserve available-route selection, original evidence, pre-dispatch refusals and budget semantics; discarded alternatives do not authorize or replace an action.
 - Diagnose scope shape, field count, keys and non-atomic values separately, with bounded field locators and explicit-source guidance; retain the existing 16-field, 2048-byte and finite-JSON constraints.
 - Distinguish a declared output directory from a missing output file in failed receipts, and clarify file-only outputs in CLI help and runner guidance. Process exit 0 still requires output and binding validation for operational success.
 - Include the complete receipt error count and first bounded error in brief project status, exposing artifact-validation failures even when the command exits 0 and stderr is empty; retain all original errors in the full CAS record.
