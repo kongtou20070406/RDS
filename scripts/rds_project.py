@@ -220,7 +220,7 @@ class ProjectStore:
         claims = self._output_claims(db)
         self._campaign_deadline(db, contract)
         if 'maintenance' in run['manifest']:
-            self._maintenance_review(contract, run['manifest']['maintenance'])
+            self._maintenance_review(contract, run['manifest']['maintenance'], run['manifest']['argv'])
             _, used = self._maintenance_spend(db)
             require(used <= contract['maintenance_allowance']['wall_seconds'] + 1e-9,
                     'Maintenance wall allowance exhausted before start')
@@ -259,17 +259,21 @@ class ProjectStore:
         binding = check_context(self.root, context)
         require(binding and context.get('objective_binding') == binding
                 and binding['sha256'] == contract['objective_sha256'], 'Maintenance objective binding differs')
+        require(isinstance(context.get('action'), dict), 'Maintenance context requires a bound repair action')
         return context
 
-    def _maintenance_review(self, contract, maintenance):
+    def _maintenance_review(self, contract, maintenance, argv):
         from rds_advisor_search import _dependency_review, _goal_contribution
         require('maintenance_allowance' in contract, 'Maintenance runs require a contract maintenance_allowance')
         context = self._maintenance_context(contract)
+        action = context['action']
+        require(action.get('argv') == argv and action.get('target') == maintenance['affected_obligation']
+                and action.get('goal_contribution') == maintenance['goal_contribution'],
+                'Maintenance command and original-goal target differ from the bound repair action')
         dependency = _dependency_review(context)
         require(dependency is not None and dependency['status'] == 'ANALYZED',
                 'Maintenance requires a complete dependency review')
-        contribution = _goal_contribution({'target': maintenance['affected_obligation'],
-                                           'goal_contribution': maintenance['goal_contribution']}, context, dependency)
+        contribution = _goal_contribution(action, context, dependency)
         mapped = (contribution or {}).get('graph_path', {})
         goal = mapped.get('goal_review', {})
         require(maintenance['goal_contribution'].get('target') == 'completion_standard'
@@ -582,7 +586,7 @@ class ProjectStore:
             if spec.get("control_id"):
                 require(db.execute("SELECT 1 FROM runs WHERE id=?", (spec["control_id"],)).fetchone() is not None, "Unknown control ID")
             if "maintenance" in spec:
-                run['maintenance_review'] = self._maintenance_review(contract, spec['maintenance'])
+                run['maintenance_review'] = self._maintenance_review(contract, spec['maintenance'], spec['argv'])
                 uses, used = self._maintenance_spend(db)
                 require(uses < contract['maintenance_allowance']['max_uses'], 'Maintenance allowance is exhausted')
                 cap = contract['maintenance_allowance']['wall_seconds']

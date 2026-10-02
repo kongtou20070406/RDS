@@ -51,7 +51,9 @@ its exact path and SHA256, rather than a second goal registry:
 
 The context uses the existing Advisor shape: exact `objective_binding`
 (`question_id`, `goal_revision`, original asset `sha256`), compatible `scope`
-and `dependency_map`. Include `completion_standard` among the map's goals.
+and `dependency_map`. Its `action` binds the exact authorized `argv`, `target`
+and `goal_contribution`; registration must match all three. Include
+`completion_standard` among the map's goals.
 No arbitrary textual objective, absent binding or stale revision is accepted.
 
 A maintenance manifest adds this declaration, for example for an unresolved

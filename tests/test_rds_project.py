@@ -873,6 +873,9 @@ class StopPolicyAndMaintenanceTests(unittest.TestCase):
                                        'conclusion': 'completion_standard', 'status': 'SUPPORTED', 'source': 'alternative'})
         context = {'objective_binding': {'question_id': goal['question_id'], 'goal_revision': 'stale' if stale else '1',
                                          'sha256': record['asset']['sha256']}, 'scope': goal['scope'], 'dependency_map': graph}
+        declaration = self.spec(timeout=0.4, maintenance=True)['maintenance']
+        context['action'] = {'argv': [sys.executable, '-B', 'code.py'], 'target': 'config_health',
+                             'goal_contribution': declaration['goal_contribution']}
         path = self.root / 'maintenance-context.json'
         path.write_text(canonical(context), encoding='utf-8')
         ref = {'path': path.name, 'sha256': file_sha(path)}
@@ -1055,7 +1058,7 @@ class StopPolicyAndMaintenanceTests(unittest.TestCase):
             with self.subTest(field=field, value=value):
                 spec = self.spec(timeout=0.4, maintenance=True)
                 spec['maintenance'][field] = value
-                with self.assertRaisesRegex(ValueError, 'unresolved original-goal'):
+                with self.assertRaisesRegex(ValueError, 'original-goal'):
                     store.register(spec)
                 self.assertEqual(store.snapshot(), before)
 
