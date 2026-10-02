@@ -15,6 +15,7 @@ import math
 import os
 from pathlib import Path
 import shutil
+import shlex
 import signal
 import sqlite3
 import subprocess
@@ -25,6 +26,17 @@ import uuid
 
 TERMINAL = {"COMPLETED", "FAILED", "INTERRUPTED"}
 ROLES = {"code", "config", "data", "evaluator", "protocol"}
+
+
+def _shell_argument(value):
+    """Render one display-command argument for PowerShell on Windows, POSIX elsewhere."""
+    text = str(value)
+    if os.name != 'nt':
+        return shlex.quote(text)
+    if text and all(c.isascii() and (c.isalnum() or c in '-_./:') for c in text):
+        return text
+    # PowerShell also recognizes typographic single quotes as delimiters.
+    return "'" + text.replace("'", "''").replace('‘', '‘‘').replace('’', '’’') + "'"
 
 
 def _is_rational_literal(value):
@@ -1032,6 +1044,7 @@ class ProjectStore:
         """
         if not self.path.is_file():
             raise ValueError("Project contract has not been initialized; run: python -B scripts/rds_cli.py project init --contract <contract.json>")
+        command = f"python -B scripts/rds_cli.py --root {_shell_argument(self.root)}"
         snap = self.snapshot()
         runs = snap["runs"]
         receipts = {r["run_id"]: r for r in snap["receipts"]}
@@ -1044,41 +1057,42 @@ class ProjectStore:
         if failed:
             run = failed[0]
             return {"next_move": "recover the failed run to a terminal recorded state",
-                    "command": f"python -B scripts/rds_cli.py --root {self.root} project recover --id {run['id']}"}
+                    "command": f"{command} project recover --id={_shell_argument(run['id'])}"}
         if live:
             run = live[0]
             return {"next_move": "wait for the running attempt, then re-check status",
-                    "command": f"python -B scripts/rds_cli.py --root {self.root} project status --brief"}
+                    "command": f"{command} project status --brief"}
         if not executed:
             if not runs:
                 return {"next_move": "register the control arm from its manifest",
-                        "command": f"python -B scripts/rds_cli.py --root {self.root} project create --manifest <control-manifest.json>"}
+                        "command": f"{command} project create --manifest {_shell_argument('<control-manifest.json>')}"}
             pending = next((r for r in runs if r["id"] not in executed), None)
             return {"next_move": f"execute run {pending['id']}",
-                    "command": f"python -B scripts/rds_cli.py --root {self.root} project execute --id {pending['id']}"}
+                    "command": f"{command} project execute --id={_shell_argument(pending['id'])}"}
         if control_id is None or treatment_id is None:
             pending = next((r for r in runs if r["id"] not in executed), None)
             if pending is not None:
                 bound = pending.get("control_id")
                 label = f"treatment arm, control {bound}" if bound else f"run {pending['id']}"
                 return {"next_move": f"execute {label}",
-                        "command": f"python -B scripts/rds_cli.py --root {self.root} project execute --id {pending['id']}"}
+                        "command": f"{command} project execute --id={_shell_argument(pending['id'])}"}
             return {"next_move": "register the remaining arm bound to the recorded control",
-                    "command": f"python -B scripts/rds_cli.py --root {self.root} project create --manifest <treatment-manifest.json>"}
+                    "command": f"{command} project create --manifest {_shell_argument('<treatment-manifest.json>')}"}
         verdict = self.compare()
         if verdict is None:
             return {"next_move": "resolve the missing arm state before comparison",
-                    "command": f"python -B scripts/rds_cli.py --root {self.root} project status --brief"}
+                    "command": f"{command} project status --brief"}
         if verdict.get("status") == "UNKNOWN":
             return {"next_move": "resolve the recorded comparison blocker, then re-run project compare",
-                    "command": f"python -B scripts/rds_cli.py --root {self.root} project compare", "comparison": verdict}
+                    "command": f"{command} project compare", "comparison": verdict}
         if self._latest_project_checkpoint() is None:
             return {"next_move": "record the decision with the kernel comparison as evidence",
-                    "command": (f"python -B scripts/rds_cli.py --root {self.root} checkpoint save "
-                                f"--kind project --id <decision-id> --decision '<decision; see project compare>'"),
+                    "command": (f"{command} checkpoint save --kind project "
+                                f"--id {_shell_argument('<decision-id>')} "
+                                f"--decision {_shell_argument('<decision; see project compare>')}"),
                     "comparison": verdict}
         return {"next_move": "campaign reached a recorded decision; archive outputs or propose the next delta",
-                "command": f"python -B scripts/rds_cli.py --root {self.root} project status",
+                "command": f"{command} project status",
                 "comparison": verdict}
 
     def _latest_project_checkpoint(self):
