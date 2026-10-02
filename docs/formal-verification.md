@@ -164,6 +164,8 @@ Verifier outputs remain separate from `run_status`, `assessment.task_gain` and `
 
 ## Multidimensional adapter scope
 
+See the [tensor-operator formalization roadmap](tensor-operator-formalization.md) for research and staged integration of symbolic tensors, E-Graphs, and Riemannian/infinite-dimensional operator theory. This remains future work; `tensor_identity` still checks only concrete exact tensors.
+
 The following mathematical kinds are registered in current `main`, originating in PR #2 `995e8eb`. The restricted export is a Python API, not another `formal` CLI kind. Use the selected revision's contract and limits; scalar `hypothesis.formal` fields must not be imposed on every backend.
 
 | Adapter | Declared model and obligation | Interpretation limit |

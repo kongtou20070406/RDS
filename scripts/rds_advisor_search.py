@@ -52,6 +52,16 @@ SPECIFY_CAPABILITY_TEXT = (
     "are not assessed. Goal predicates stay UNKNOWN or FALSE until the checker's result is recorded. Answer any other "
     "referenced obstruction with its stated response. Declared obstructions are input-reported, not a diagnosis, and "
     "authorize neither execution nor installation. ")
+# Triple Affirmative (#80): a solution is found, portable and applicable to the whole declared scope.
+# The project declares what portable/applicable mean; only importer-read or program-derived evidence affirms.
+AFFIRMATIVES = ("portable", "applicable")
+AFFIRMING_ORIGINS = ("ARTIFACT_OBSERVED", "PROGRAM_DERIVED")
+AFFIRMATIVE_MOVE_TEXT = (
+    "For each affirmative listed in affirmatives, name the smallest observation that would affirm or refute the "
+    "project's own declared predicates for it; FOUND needs a reading imported from an artifact or derived by the "
+    "program, not a typed or configured value, and each affirmative needs evidence the others do not reuse. Keep "
+    "UNKNOWN where unsupported. Do not narrow the scope, weaken the statement or redefine the predicates to close "
+    "the goal; a failed affirmative is a scoped gap, not an impossibility result. ")
 
 
 def _evidence_status(record):
@@ -121,6 +131,113 @@ def evaluate_condition(condition, facts):
 def _all(reports):
     truths = [r["truth"] for r in reports]
     return FALSE if FALSE in truths else UNKNOWN if UNKNOWN in truths else TRUE
+
+
+def _affirmation_predicates(decision):
+    """Validate the opt-in Triple Affirmative declaration before any review uses it."""
+    if "affirmations" not in decision:
+        return None
+    declared = decision["affirmations"]
+    if "goal_conditions" not in decision:
+        raise ValueError("decision.affirmations requires decision.goal_conditions; FOUND is evaluated on the goal predicates")
+    if not isinstance(declared, dict) or not declared:
+        raise ValueError("decision.affirmations must be an object with portable and/or applicable predicate lists")
+    unknown = sorted(set(declared) - set(AFFIRMATIVES))
+    if unknown:
+        raise ValueError("decision.affirmations has unsupported key(s) " + ", ".join(map(repr, unknown)) +
+                         "; FOUND is derived from goal_conditions, only portable and applicable are declared")
+    for name, predicates in declared.items():
+        if not (isinstance(predicates, list) and 1 <= len(predicates) <= 32 and all(
+                isinstance(p, dict) and isinstance(p.get("fact"), str) and p["fact"].strip() for p in predicates)):
+            raise ValueError(f"decision.affirmations.{name} must be 1 to 32 explicit fact predicates")
+    return declared
+
+
+def _affirm(report, reused, grounded=True):
+    """One predicate affirms only when TRUE, importer-read or derived from such readings, and not reused.
+
+    A typed or configured FALSE still refutes, exactly as it fails the goal review; it never affirms.
+    """
+    row = {"fact": report["fact"], "truth": report["truth"], "evidence_status": report["evidence_status"],
+           "affirms": report["truth"]}
+    if report["truth"] != TRUE:
+        return row
+    if report["evidence_status"] not in AFFIRMING_ORIGINS:
+        row.update(affirms=UNKNOWN, affirmation_reason="reported, not found: the value was not read from an artifact or derived by the program")
+    elif not grounded:
+        row.update(affirms=UNKNOWN, affirmation_reason="derived from an input that is no longer importer-read evidence (disputed, missing or conflicting)")
+    elif reused:
+        row.update(affirms=UNKNOWN, affirmation_reason="reuses the evidence of another affirmative; one measurement is not an independent affirmation")
+    return row
+
+
+def _evidence_identity(name, facts, memo, seen=()):
+    """Read locations behind a fact: (file hash, locator) per reading, followed through derivations.
+
+    Returns (identities, grounded); grounded is False when a derivation input is no longer importer evidence.
+    """
+    if name in memo:
+        return memo[name]
+    record = facts.get(name)
+    status = _evidence_status(record)
+    source = record.get("source") if isinstance(record, dict) else None
+    if status == "PROGRAM_DERIVED" and isinstance(record.get("input_fact_ids"), list) and name not in seen:
+        parts = [_evidence_identity(i, facts, memo, seen + (name,)) for i in record["input_fact_ids"] if isinstance(i, str)]
+        result = (frozenset().union(*(p[0] for p in parts)),
+                  bool(parts) and all(p[1] for p in parts))
+    elif status == "ARTIFACT_OBSERVED" and isinstance(source, dict) and isinstance(source.get("sha256"), str):
+        locator = source.get("locator")
+        result = (frozenset({("read", source["sha256"], locator if isinstance(locator, str) else None)}), True)
+    else:
+        result = (frozenset({("fact", name)}), False)
+    memo[name] = result
+    return result
+
+
+def _triple_affirmative(declared, goal_reports, goals, facts):
+    """Strict completion review; never changes the reported goal status."""
+    predicates = {"found": goals, **{name: declared.get(name, []) for name in AFFIRMATIVES}}
+    memo = {}
+    owners = {name: frozenset().union(*(_evidence_identity(p["fact"], facts, memo)[0] for p in rows))
+              for name, rows in predicates.items()}
+    result = {}
+    for name in ("found",) + AFFIRMATIVES:
+        if name != "found" and name not in declared:
+            result[name] = {"status": UNKNOWN, "reason": "No predicate declared; an undeclared affirmative is never vacuously true."}
+            continue
+        others = frozenset().union(*(owned for other, owned in owners.items() if other != name))
+        reports = goal_reports if name == "found" else [evaluate_condition(p, facts) for p in predicates[name]]
+        rows = []
+        for predicate, report in zip(predicates[name], reports):
+            identity, grounded = _evidence_identity(predicate["fact"], facts, memo)
+            row = _affirm(report, bool(identity & others), grounded)
+            rows.append(row if name == "found" else {**report, **row})
+        result[name] = {"status": _all([{"truth": r["affirms"]} for r in rows]), "conditions": rows}
+    names = ("found",) + AFFIRMATIVES
+    return {"status": _all([{"truth": result[name]["status"]} for name in names]),
+            "open": [name.upper() for name in names if result[name]["status"] != TRUE],
+            **result, "assurance": "INPUT_REPORTED_NOT_SCIENTIFIC_VERIFICATION"}
+
+
+def _affirmative_move(triple):
+    """As in _next_move, unresolved evidence comes before a reported failure."""
+    failed = [name for name in triple["open"] if triple[name.lower()]["status"] == FALSE]
+    unresolved = [name for name in triple["open"] if name not in failed]
+    if unresolved:
+        kind = "RESOLVE_PREMISE"
+        reason = ("The goal predicates compare TRUE, but " + ", ".join(unresolved) + " " +
+                  ("is" if len(unresolved) == 1 else "are") + " not affirmed by unreused importer-read or "
+                  "program-derived evidence; resolve " + ("it" if len(unresolved) == 1 else "them") + " first.")
+        if failed:
+            reason += " " + ", ".join(failed) + " already failed and stays open."
+    else:
+        kind = "REFORMULATE"
+        reason = ("The found result fails the declared " + ", ".join(failed) + " affirmative" + ("s" if len(failed) > 1 else "") +
+                  "; this is a scoped gap, not an impossibility result or a causal diagnosis.")
+    return {"kind": kind, "reason": reason, "basis": "INPUT_REVIEW_HEURISTIC_NOT_SCIENTIFIC_PROOF",
+            "authorization": "UNCHANGED", "affirmatives": list(triple["open"]),
+            "preserve_refs": ["search.decision", "context.budget", "context.resources", "context.method_constraints"],
+            "prompt": AFFIRMATIVE_MOVE_TEXT + MOVE_PRESERVE_CLAUSES}
 
 
 def _action_valid(action, current_choice):
@@ -812,7 +929,22 @@ def review_selection(search, context, *, _dependency=None, audit_receipts=False,
         review["goal"] = {"status": _all(reports), "conditions": reports, "assurance": "INPUT_REPORTED"}
         if review["goal"]["status"] != TRUE:
             flags.append({"kind": "GOAL_BRIDGE_OPEN", "next": "Keep task acceptance separate from local/procedure success; choose a check or intervention that can close this declared gap."})
+    declared = _affirmation_predicates(decision) if isinstance(decision, dict) else None
+    triple_flag = None
+    if declared is not None:
+        triple = review["goal"]["triple_affirmative"] = _triple_affirmative(declared, reports, goals, facts)
+        if review["goal"]["status"] == TRUE and triple["status"] != TRUE:
+            triple_flag = {"kind": "TRIPLE_AFFIRMATIVE_OPEN", "open": triple["open"],
+                           "next": "The goal predicates compare TRUE, but the declared Triple Affirmative is not met; "
+                                   "affirm or refute each open affirmative before calling this a solution."}
+            flags.append(triple_flag)
     next_move = _next_move(review, search)
+    # Existing moves keep precedence; this fills only the slot a TRUE goal would otherwise leave empty.
+    if next_move is None and triple_flag is not None:
+        next_move = _affirmative_move(review["goal"]["triple_affirmative"])
+        # The flag that explains the move comes first, so a bounded digest keeps it.
+        flags.remove(triple_flag)
+        flags.insert(0, triple_flag)
     if next_move is not None:
         review["next_move"] = next_move
     return review

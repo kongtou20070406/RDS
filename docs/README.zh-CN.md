@@ -21,6 +21,7 @@
 | 具体改法、交付物和通过条件 | [开发与验收计划](roadmap.md) | [Development plan](roadmap.md) |
 | 有价值的并行批次、闲置容量与预算语义 | [资源利用与并行规划](resource-planning.md) | [Resource-aware planning](resource-planning.md) |
 | 深度学习验证器、Mathlib 与 Lean 4 接入方案 | [Lean 生态与接入综述](lean4-ecosystem-survey.md) | [Ecosystem survey](lean4-ecosystem-survey.md) |
+| 张量算子等价、E-Graph、黎曼与无限维形式化路线 | [张量算子形式化路线](tensor-operator-formalization.zh-CN.md) | [Tensor operator formalization](tensor-operator-formalization.md) |
 | 同模型 skill 对比与基准选型 | [基准选型与对比方案](benchmark-plan.md) | [Benchmark plan](benchmark-plan.md) |
 
 [可执行契约](../references/l3-state-machine.md) 定义所用 checkout 的运行行为，[SKILL.md](../SKILL.md) 定义科研协作协议。二者不一致时应报告差异，不能把协议要求解释为程序已实现的保证。

@@ -298,8 +298,11 @@ def cmd_init(args, rds):
     reject_self_signatures(contract)
     # Scalars cannot be searched for fields; lists and strings keep their missing-field message.
     require(isinstance(contract, (dict, list, str)), "Contract must be a JSON object")
-    for key in ("project_id", "claim", "primary_metric", "budget", "splits"):
-        require(key in contract, "Missing contract field: " + key)
+    # Batch every missing required field into one rejection so a caller repairs
+    # all of them in a single round trip instead of one field per attempt (#72).
+    missing = [key for key in ("project_id", "claim", "primary_metric", "budget", "splits", "baseline_source")
+               if key not in contract]
+    require(not missing, "Missing contract fields: " + ", ".join(missing))
     json_object(contract, "Contract")
     identity(contract["project_id"])
     metric = json_object(contract["primary_metric"], "Contract primary_metric")
@@ -332,8 +335,7 @@ def cmd_init(args, rds):
         registry[sid] = {**split, "path": str(path), "sha256": digest(raw),
                          "sample_ids": [digest(r[0]) for r in rows]}
     contract["splits"] = registry
-    baseline = Path(path_field(required_field(contract, "baseline_source", "contract"),
-                               "Contract baseline_source"))
+    baseline = Path(path_field(contract["baseline_source"], "Contract baseline_source"))
     baseline = (rds.root / baseline).resolve() if not baseline.is_absolute() else baseline.resolve()
     baseline_raw = read_bounded(baseline, 8192)
     baseline_ast = parse_source(baseline_raw.decode("utf-8-sig"))["control"]
@@ -1270,8 +1272,11 @@ class FriendlyParser(argparse.ArgumentParser):
         options = list(self._option_string_actions)
         unknown = next((token for token in message.split() if token.startswith('--')), None)
         suggestions = difflib.get_close_matches(unknown or '', options, n=2, cutoff=0.5)
-        hint = 'python scripts/rds_cli.py ' + (' '.join(suggestions) if suggestions else self.prog.split('rds_cli.py')[-1].strip() + ' --help')
-        super().error(message + '\n[RDS-HINT] ' + hint)
+        if suggestions:
+            message += " (closest: " + ", ".join(suggestions) + ")"
+        # The hint must run as printed: keep the failing subcommand path and ask for help (#72).
+        path = ' '.join(self.prog.split()[1:])
+        super().error(message + '\n[RDS-HINT] python scripts/rds_cli.py ' + (path + ' ' if path else '') + '--help')
 
 
 def parser():
@@ -1524,6 +1529,20 @@ def parser():
     return p
 
 
+L3_LEDGER_COMMANDS = frozenset({"init", "hypothesis", "gate", "plan", "run", "data", "decide",
+                                "branch", "artifacts", "meta"})
+
+
+def _project_ledger_message(root):
+    """True split naming for L3 commands in a root that holds only a project ledger (#76)."""
+    ledger = Path(root).resolve() / ".rds" / "project.sqlite3"
+    if not ledger.is_file():
+        return None
+    return ("L3 kernel not initialized in this root (project ledger found; L3 commands need "
+            "`init --contract`). This root's recorded project state is intact; use "
+            "`python -B scripts/rds_cli.py project next` for the campaign's next step")
+
+
 def _main():
     try:
         args = parser().parse_args()
@@ -1540,6 +1559,18 @@ def _main():
             print("[RDS-USAGE] " + str(exc), file=sys.stderr)
             return 1
     rds = RDSState(args.root)
+    if args.command in L3_LEDGER_COMMANDS and not rds.db_path.exists():
+        message = _project_ledger_message(args.root)
+    elif (args.command == "checkpoint" and args.action == "save"
+          and args.kind == "reference" and not rds.db_path.exists()):
+        # A reference save reads the L3 snapshot; a project save must stay reachable.
+        message = _project_ledger_message(args.root)
+    else:
+        message = None
+    if message:
+        print("[RDS-REJECT] " + message, file=sys.stderr)
+        print("[RDS-HINT] python -B scripts/rds_cli.py --root \"" + str(args.root) + "\" project next", file=sys.stderr)
+        return 1
     try:
         if args.command == "history":
             from rds_obelisk import history_command
@@ -1705,6 +1736,9 @@ def _main():
     except (ValueError, KeyError, TypeError, RecursionError, OSError, SyntaxError) as exc:
         # KeyError/TypeError also come from unvalidated user specs, so they stay rejections.
         print("[RDS-REJECT] " + str(exc), file=sys.stderr)
+        if args.command == "init" or args.command == "project" and args.action == "init":
+            # Point at a command that produces a valid, bound contract from scratch (#72).
+            print("[RDS-HINT] python -B examples/project-runner/prepare.py --root ./my-project", file=sys.stderr)
         return 1
     except (sqlite3.Error, ImportError, subprocess.SubprocessError) as exc:
         # Nothing in the request was refused: the state database, a dependency or a subprocess failed.

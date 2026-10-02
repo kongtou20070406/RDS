@@ -637,12 +637,11 @@ class EGraphEquivalenceOperator:
 # ---------------------------------------------------------------------------
 
 class LeanAxiomReviewOperator:
-    """Lean 4 Axiom and Environment Dependency Audit Operator.
+    """Check a supplied #print axioms report against a declared axiom policy.
 
-    Inspects formal Lean theorem obligations and verifies that declared proofs
-    depend only on authorized axioms (e.g., empty set for constructive logic,
-    or standard classical axioms: propext, Classical.choice, Quot.sound).
-    Detects unproved gaps ('sorry'), forbidden axioms, or missing environment bindings.
+    Text is input-reported evidence, never a bound Lean execution or proof of
+    constructivity. Missing/ambiguous reports remain UNKNOWN. Source scanning
+    can flag placeholders, but cannot establish the compiled dependencies.
     """
 
     STANDARD_CLASSICAL_AXIOMS = frozenset(("propext", "Classical.choice", "Quot.sound"))
@@ -655,13 +654,25 @@ class LeanAxiomReviewOperator:
         allowed_axioms: Optional[Set[str]] = None,
         is_stdout: bool = False
     ) -> Dict[str, Any]:
-        """Audits axioms from Lean stdout or source code."""
+        """Parse one complete report for this exact theorem, without executing Lean."""
+        if (not isinstance(theorem_name, str) or not theorem_name.strip() or len(theorem_name) > 512
+                or any(c in theorem_name for c in '\r\n') or not isinstance(code_or_stdout, str)
+                or len(code_or_stdout) > 65536 or len(code_or_stdout.encode('utf-8')) > 65536
+                or type(is_stdout) is not bool):
+            raise ValueError('Expected a bounded theorem name, report text and Boolean is_stdout')
+        if allowed_axioms is not None and (not isinstance(allowed_axioms, (set, frozenset, list, tuple))
+                or len(allowed_axioms) > 256 or not all(isinstance(ax, str) and ax and len(ax) <= 512 for ax in allowed_axioms)):
+            raise ValueError('Expected at most 256 explicit axiom names')
         allowed = set(allowed_axioms) if allowed_axioms is not None else set(cls.STANDARD_CLASSICAL_AXIOMS)
+        result = {'status': 'UNKNOWN', 'assurance': 'AXIOM_AUDIT_UNAVAILABLE', 'theorem': theorem_name,
+                  'axioms_detected': None, 'allowed_axioms': sorted(allowed), 'disallowed_axioms': None,
+                  'reported_axiom_free': None, 'is_constructive': None, 'lean_verified': False,
+                  'evidence_kind': 'INPUT_REPORTED_STDOUT' if is_stdout else 'SOURCE_TEXT'}
 
         if not is_stdout:
             # Check source code for sorry or cheat tactics
             if re.search(r"\bsorry\b", code_or_stdout):
-                return {
+                return {**result,
                     "status": "FAIL",
                     "assurance": "SORRY_AXIOM_DETECTED",
                     "theorem": theorem_name,
@@ -669,28 +680,33 @@ class LeanAxiomReviewOperator:
                     "axioms_detected": ["sorry"],
                     "allowed_axioms": sorted(allowed),
                 }
+            return {**result, 'reason': 'Source text does not establish a Lean axiom audit'}
 
-        no_axiom_match = re.search(rf"'{re.escape(theorem_name)}'\s+does\s+not\s+depend\s+on\s+any\s+axioms", code_or_stdout)
-        if no_axiom_match:
-            found_axioms = []
-        else:
-            dep_match = re.search(rf"'{re.escape(theorem_name)}'\s+depends\s+on\s+axioms:\s*\[(.*?)\]", code_or_stdout)
-            if dep_match:
-                raw_items = dep_match.group(1).split(",")
-                found_axioms = [item.strip() for item in raw_items if item.strip()]
-            else:
-                found_axioms = []
-
-        disallowed = [ax for ax in found_axioms if ax not in allowed]
+        name = re.escape(theorem_name)
+        headers = list(re.finditer(rf"(?m)^[ \t]*'{name}'(?=[ \t]|\r?$)", code_or_stdout))
+        if len(headers) != 1:
+            return {**result, 'reason': 'Missing or multiple reports for the requested theorem'}
+        report = re.match(
+            rf"[ \t]*'{name}'[ \t]+(?:does[ \t]+not[ \t]+depend[ \t]+on[ \t]+any[ \t]+axioms"
+            rf"|depends[ \t]+on[ \t]+axioms:[ \t]*\[(?P<axioms>[^\[\]]*)\])[ \t]*\r?$",
+            code_or_stdout[headers[0].start():], re.MULTILINE)
+        if report is None:
+            return {**result, 'reason': 'Incomplete or malformed report for the requested theorem'}
+        raw = report.group('axioms')
+        found_axioms = [] if raw is None or not raw.strip() else [item.strip() for item in raw.split(',')]
+        identifier = r"(?:[^\W\d]|_)[\w']*(?:\.(?:[^\W\d]|_)[\w']*)*"
+        if any(not re.fullmatch(identifier, ax) for ax in found_axioms) or len(found_axioms) != len(set(found_axioms)):
+            return {**result, 'reason': 'Malformed or duplicate axiom identifiers'}
+        disallowed = [ax for ax in found_axioms if ax not in allowed or ax in {'sorry', 'sorryAx'}]
         passed = (len(disallowed) == 0)
-        return {
+        return {**result,
             "status": "PASS" if passed else "FAIL",
-            "assurance": "AXIOM_DEPENDENCY_VERIFIED" if passed else "DISALLOWED_AXIOM_DEPENDENCY",
+            "assurance": "INPUT_REPORTED_AXIOM_AUDIT" if passed else "DISALLOWED_AXIOM_DEPENDENCY",
             "theorem": theorem_name,
             "axioms_detected": sorted(found_axioms),
             "allowed_axioms": sorted(allowed),
             "disallowed_axioms": sorted(disallowed),
-            "is_constructive": (len(found_axioms) == 0),
+            "reported_axiom_free": (len(found_axioms) == 0),
         }
 
     @staticmethod
@@ -973,8 +989,11 @@ def _lean_axiom_self_test():
         is_stdout=True,
     )
     negative = LeanAxiomReviewOperator.audit_lean_axioms("T", "sorry", is_stdout=False)
+    missing = LeanAxiomReviewOperator.audit_lean_axioms('missing.theorem', 'not Lean output', is_stdout=True)
     assert report["status"] == "PASS" and not report["disallowed_axioms"]
     assert negative["status"] == "FAIL" and negative["axioms_detected"] == ["sorry"]
+    assert missing['status'] == 'UNKNOWN' and missing['axioms_detected'] is None
+    assert not report['lean_verified'] and report['is_constructive'] is None
     return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
 
 
@@ -1039,7 +1058,7 @@ OPERATORS = {
         "guarantee": "Scoped supported rewrites or exact rational counterexample; otherwise UNKNOWN; no certificate emitted", "self_test": _egraph_self_test},
     "lean_axiom_review": {"operator_id": "lean_axiom_review", "title": "Lean 4 Axiom & Dependency Audit Operator",
         "operator_class": LeanAxiomReviewOperator, "primary_signal": "proof_bottleneck",
-        "guarantee": "Constructive or authorized classical axiom boundary verification", "self_test": _lean_axiom_self_test},
+        "guarantee": "Exact-theorem input-report policy check; no Lean execution or constructivity verification", "self_test": _lean_axiom_self_test},
     "bounded_finite_model": {"operator_id": "bounded_finite_model", "title": "Bounded Finite Model & Counterexample Search Operator",
         "operator_class": BoundedFiniteModelOperator, "primary_signal": "proof_bottleneck",
         "guarantee": "Exhaustive finite Cayley table verification and witness refutation", "self_test": _bounded_finite_model_self_test},
