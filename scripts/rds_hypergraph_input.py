@@ -78,6 +78,13 @@ def prepare_input(value, locator="input"):
     if not isinstance(value, dict):
         note("errors", "$", "supply an object containing claims/nodes, rules and goal(s)")
         return None, review
+    try:
+        raw = json.dumps(value, ensure_ascii=False, allow_nan=False).encode('utf-8')
+        if len(raw) > 8 * 1024 * 1024:
+            raise ValueError('dependency declaration exceeds 8 MiB')
+    except (ValueError, TypeError, RecursionError) as exc:
+        note('errors', '$', 'supply bounded, finite JSON data: ' + str(exc))
+        return None, review
     spec = deepcopy(value)
     if isinstance(spec.get("dependency_map"), dict) and (
             spec.get("assurance") == "INPUT_REPORTED_DEPENDENCY_ANALYSIS_NOT_PROOF"

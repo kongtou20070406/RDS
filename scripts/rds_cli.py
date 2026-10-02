@@ -920,6 +920,8 @@ def cmd_advise(args, rds):
     has_context = bool(has_search_context or getattr(args, "frontier", None) or getattr(args, "frontier_proposals", None))
     require(not getattr(args, "templates", None) or has_search_context,
             "--templates requires --research-context or --artifacts with a decision")
+    require(not getattr(args, 'saved_dependencies', False) or has_search_context,
+            '--saved-dependencies requires a research context or artifact decision')
     require(not (any(modes) or has_train) or not (has_context or getattr(args, "templates", None) or getattr(args, "graph", None)),
             "Research context, artifacts, templates, frontier and graph require the direction-search mode")
     require(not getattr(args, "topic", None) or getattr(args, "doc", None), "--topic requires --doc")
@@ -966,6 +968,9 @@ def cmd_advise(args, rds):
         state = {}
     if getattr(args, "research_context", None):
         state["advisor_context"] = load_spec(args.research_context)
+    if getattr(args, 'saved_dependencies', False):
+        from rds_tms_store import with_saved_dependencies
+        state['advisor_context'] = with_saved_dependencies(args.root, state.get('advisor_context', {}))
     if getattr(args, "frontier", None):
         context = state.setdefault("advisor_context", {})
         require(isinstance(context, dict), "Research context must be an object")
@@ -1284,6 +1289,7 @@ def parser():
     quick.add_argument("--background", action="store_true", help="Use the existing Windows Task Scheduler runner")
     quick.add_argument("--context", "--research-context", "-c", "--ctx", dest="research_context")
     quick.add_argument("--graph")
+    quick.add_argument('--saved-dependencies', action='store_true', help='Read current dependencies from --ledger before advice and admission')
     quick.add_argument("--choose", help="Exact candidate ID from the direction review")
     quick.add_argument("--ledger", "-l", "--db", help="Existing project ledger for prospective choice and execution feedback")
     quick.add_argument("--json", action="store_true", help="Return the full operational receipt")
@@ -1299,10 +1305,11 @@ def parser():
     guard.add_argument('--policy', required=True)
     guard.add_argument('--json', action='store_true')
     hypergraph = commands.add_parser('hypergraph', help='Bounded AND/OR proof dependency analysis, not proof certification')
-    hypergraph.add_argument('--input', '-i', required=True)
+    hypergraph.add_argument('--input', '-i', help='Import or restore a map; omitted inputs reuse this root\'s saved map')
     hypergraph.add_argument('--output', '-o')
     hypergraph.add_argument('--audit-files', action='store_true')
     hypergraph.add_argument('--update', '-u', action='append', default=[], help='Merge a small declaration fragment into the saved map')
+    hypergraph.add_argument('--declare', action='append', default=[], help='Small JSON declaration, without writing an input file')
     for flag in ('retract-node', 'retract-rule', 'refute-node', 'refute-rule'):
         hypergraph.add_argument('--' + flag, action='append', default=[])
     hypergraph.add_argument('--change-source', help='Locator for the declared change; creates no scientific verdict')
@@ -1485,6 +1492,7 @@ def parser():
     adv.add_argument("--fit-telemetry", default=None, help="Paired, comparable curve observations for fit diagnosis")
     adv.add_argument("--literature", default=None, help="Search scoped local primary-source records")
     adv.add_argument("--research-context", "--context", "-c", "--ctx", default=None, help="Sourced facts and the decision for bounded graph search")
+    adv.add_argument('--saved-dependencies', action='store_true', help='Read this root\'s program-owned dependency map into the existing Advisor context')
     adv.add_argument("--choose", help="Exact candidate ID to record as the caller's planned route")
     adv.add_argument("--record", help="New checkpoint ID; use with --choose to complete the decision fields")
     adv.add_argument("--brief", "--digest", action="store_true", help="Save full advice and return a bounded digest")
@@ -1570,22 +1578,32 @@ def _main():
             from rds_guard import evaluate
             result = evaluate(args.policy, args.root)
         elif args.command == 'hypergraph':
-            from rds_hypergraph import review_hypergraph, audit_sources
             from rds_hypergraph_input import load_input
-            spec, repairs = load_input(read_bounded(args.input, 8 * 1024 * 1024).decode('utf-8-sig'))
-            require(len(args.update) <= 8, 'At most eight dependency update files')
-            updates = []
+            from rds_tms_store import maintain
+            spec, repairs = None, []
+            if args.input:
+                spec, repairs = load_input(read_bounded(args.input, 8 * 1024 * 1024).decode('utf-8-sig'))
+            require(len(args.update) + len(args.declare) <= 8, 'At most eight dependency declarations')
+            updates, locators = [], []
             for update_path in args.update:
                 update, fixed = load_input(read_bounded(update_path, 8 * 1024 * 1024).decode('utf-8-sig'))
                 updates.append(update)
+                locators.append(str(Path(update_path).resolve()))
                 repairs.extend(fixed)
-            result = review_hypergraph(spec, locator=str(Path(args.input).resolve()),
-                                      retract_nodes=args.retract_node, retract_rules=args.retract_rule,
-                                      refute_nodes=args.refute_node, refute_rules=args.refute_rule,
-                                      change_source=args.change_source, trace=args.trace_cone, updates=updates)
-            result['input_review']['format_repairs'] = repairs
-            if args.audit_files and result['status'] != 'UNKNOWN':
-                result['source_file_audit'] = audit_sources(result['dependency_map'], Path(args.input).resolve().parent)
+            for declaration in args.declare:
+                require(len(declaration.encode('utf-8')) <= 128 * 1024, 'Inline declaration exceeds 128 KiB; use --update for larger input')
+                update, fixed = load_input(declaration)
+                updates.append(update)
+                locators.append('command-line declaration')
+                repairs.extend(fixed)
+            result = maintain(args.root, initial=spec,
+                              locator=str(Path(args.input).resolve()) if args.input else 'command-line declaration',
+                              source_base=Path(args.input).resolve().parent if args.input else None,
+                              audit_files=args.audit_files, format_repairs=repairs,
+                              retract_nodes=args.retract_node, retract_rules=args.retract_rule,
+                              refute_nodes=args.refute_node, refute_rules=args.refute_rule,
+                              change_source=args.change_source, trace=args.trace_cone,
+                              updates=updates, update_locators=locators)
             if args.output:
                 output = Path(args.output)
                 output.parent.mkdir(parents=True, exist_ok=True)
@@ -1596,9 +1614,17 @@ def _main():
             review = None
             require(bool(args.research_context) == bool(args.ledger) and (not args.choose or args.research_context),
                     "Prospective exec needs --context and --ledger; --choose is optional only for one READY candidate")
+            require(not args.saved_dependencies or args.research_context,
+                    '--saved-dependencies requires prospective --context and --ledger')
             if args.research_context:
-                review_args = argparse.Namespace(root=args.ledger, research_context=args.research_context, graph=args.graph)
-                review = (cmd_advise(review_args, RDSState(args.ledger)), load_spec(args.research_context))
+                review_args = argparse.Namespace(root=args.ledger, research_context=args.research_context,
+                                                 graph=args.graph, saved_dependencies=args.saved_dependencies)
+                advice = cmd_advise(review_args, RDSState(args.ledger))
+                context = load_spec(args.research_context)
+                if args.saved_dependencies:
+                    from rds_tms_store import with_saved_dependencies
+                    context = with_saved_dependencies(args.ledger, context)
+                review = (advice, context)
             result = execute(args, review=review)
         elif args.command == "reject":
             from rds_quick import reject_route
@@ -1642,7 +1668,8 @@ def _main():
             return 1
         if args.command == 'guard' or args.command == 'exec' and 'regression_review' in result:
             return {'PASS': 0, 'FAIL': 1, 'UNKNOWN': 2}.get(result.get('regression_review', result).get('status'), 2)
-        if args.command == 'hypergraph' and (result.get('truncated') or result.get('input_review', {}).get('errors')):
+        if args.command == 'hypergraph' and (result.get('truncated') or result.get('input_review', {}).get('errors')
+                                              or result.get('status') == 'CONFLICT'):
             return 2
         if args.command == 'rsi' and args.action == 'validate':
             return {'LOCAL_CASES_PASSED': 0, 'FAILED': 1, 'UNKNOWN': 2}[result['status']]

@@ -1,0 +1,141 @@
+"""Program-owned dependency snapshots in the existing project ledger and CAS.
+
+The harness supplies the project root. Models send only a declaration or a
+change, and receive an observation; they never carry the support table.
+"""
+from copy import deepcopy
+import json
+from pathlib import Path
+
+from rds_hypergraph import ASSURANCE, _validate, review_hypergraph, audit_sources
+from rds_math import MAX_BYTES, blob
+from rds_project import ProjectStore, canonical, digest, require
+from rds_quick import brief, cas_bytes
+
+
+class SnapshotConflict(ValueError):
+    """Another invocation advanced the same project's map before commit."""
+
+
+def _store(root):
+    store = ProjectStore(root)
+    require(store.path.resolve().is_relative_to(store.root), 'Dependency ledger escapes project root')
+    return store
+
+
+def _last(db):
+    return db.execute('SELECT sha256,body FROM dependency_snapshots ORDER BY rowid DESC LIMIT 1').fetchone()
+
+
+def current(root):
+    """Read one bound snapshot, without scanning or rehashing the whole ledger."""
+    store = _store(root)
+    if not store.path.exists():
+        return None
+    with store._db(True) as db:
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dependency_snapshots'").fetchone():
+            return None
+        row = _last(db)
+    if row is None:
+        return None
+    require(len(row['body'].encode('utf-8')) <= MAX_BYTES, 'Dependency snapshot exceeds 8 MiB')
+    value = json.loads(row['body'])
+    require(digest(value) == row['sha256'], 'Dependency snapshot integrity failure')
+    raw = blob(store.root, value['map'])
+    spec = json.loads(raw)
+    _validate(spec)
+    return {**value, 'sha256': row['sha256'], 'dependency_map': spec}
+
+
+def save(root, spec, *, expected, revision=None, source_base=None):
+    """Atomically append a revision; a stale caller cannot overwrite newer input."""
+    store = _store(root)
+    _validate(spec)
+    raw = canonical(spec).encode('utf-8')
+    require(len(raw) <= MAX_BYTES, 'Dependency map exceeds 8 MiB')
+    ref = cas_bytes(store.root, raw)
+    ref['path'] = Path(ref['path']).relative_to(store.root).as_posix()
+    source_base = str(Path(source_base or store.root).resolve())
+    value = {'parent': expected, 'map': ref, 'source_base_dir': source_base,
+             'revision': deepcopy(revision)}
+    body = canonical(value)
+    require(len(body.encode('utf-8')) <= MAX_BYTES, 'Dependency revision exceeds 8 MiB')
+    store.state_dir.mkdir(exist_ok=True)
+    with store._db() as db:
+        db.executescript("""
+            CREATE TABLE IF NOT EXISTS dependency_snapshots(sha256 TEXT PRIMARY KEY,body TEXT NOT NULL);
+            CREATE TRIGGER IF NOT EXISTS dependency_snapshots_no_update BEFORE UPDATE ON dependency_snapshots
+                BEGIN SELECT RAISE(ABORT,'dependency_snapshots is append-only'); END;
+            CREATE TRIGGER IF NOT EXISTS dependency_snapshots_no_delete BEFORE DELETE ON dependency_snapshots
+                BEGIN SELECT RAISE(ABORT,'dependency_snapshots is append-only'); END;
+        """)
+        db.execute('BEGIN IMMEDIATE')
+        previous = _last(db)
+        if (previous['sha256'] if previous else None) != expected:
+            raise SnapshotConflict('Current dependency snapshot changed; review the latest map before resubmitting')
+        if previous:
+            old = json.loads(previous['body'])
+            require(digest(old) == previous['sha256'], 'Dependency snapshot integrity failure')
+            if not revision and old['map'] == ref and old['source_base_dir'] == source_base:
+                return previous['sha256']
+        sha = digest(value)
+        db.execute('INSERT INTO dependency_snapshots VALUES (?,?)', (sha, body))
+    return sha
+
+
+def maintain(root, *, initial=None, locator='tool-input', source_base=None, audit_files=False,
+             format_repairs=(), **changes):
+    """Compile, revise, analyze and persist in one application-side tool action."""
+    saved = current(root)
+    spec = initial if initial is not None else saved['dependency_map'] if saved else {}
+    expected = saved['sha256'] if saved else None
+    base = source_base or (saved['source_base_dir'] if saved else str(Path(root).resolve()))
+    if isinstance(initial, dict) and isinstance(initial.get('dependency_map'), dict):
+        base = initial.get('source_base_dir', base)
+    result = review_hypergraph(spec, locator=locator, **changes)
+    result['input_review']['format_repairs'] = list(format_repairs)
+    result['source_base_dir'] = str(Path(base).resolve())
+    result['snapshot_sha256'] = expected
+    if result['input_review']['errors']:
+        return result  # No partial declarations reach the current map.
+    if audit_files:
+        result['source_file_audit'] = audit_sources(result['dependency_map'], base)
+    try:
+        result['snapshot_sha256'] = save(root, result['dependency_map'], expected=expected,
+                                        revision=result.get('revision'), source_base=base)
+    except SnapshotConflict as exc:
+        # A stale analysis is not the current project's conclusion.
+        return {'status': 'CONFLICT', 'assurance': ASSURANCE, 'authorization': 'UNCHANGED',
+                'dependency_map': None, 'input_review': result['input_review'], 'snapshot_sha256': None,
+                'next_step': {'action': 'review_current_snapshot', 'reason': str(exc)}}
+    return result
+
+
+def with_saved_dependencies(root, context):
+    """Inject program state into the existing Advisor/exec context, outside the LLM."""
+    require(isinstance(context, dict) and 'dependency_map' not in context,
+            'Use --saved-dependencies or a context dependency_map, not both')
+    saved = current(root)
+    require(saved is not None, 'No saved dependency map; declare the current dependencies with hypergraph first')
+    spec = deepcopy(saved['dependency_map'])
+    # Preserve source resolution when advice/exec runs from a different cwd.
+    for key in ('nodes', 'hyperedges'):
+        for record in spec[key]:
+            source = record['source']
+            if isinstance(source, dict) and 'file' in source and not Path(source['file']).is_absolute():
+                source['file'] = str((Path(saved['source_base_dir']) / source['file']).resolve())
+    return {**deepcopy(context), 'dependency_map': spec}
+
+
+def tms_tool(root, *, declaration=None, detail=False, **changes):
+    """Provider-independent adapter: root is host context, not a model argument.
+
+    Codex shell/MCP and Pi custom tools can use the same reducer. A Pi wrapper
+    puts the brief observation in content and keeps a CAS locator in details.
+    No model call, mandatory loop hook or scientific oracle is introduced.
+    """
+    updates = list(changes.pop('updates', ()))
+    if declaration is not None:
+        updates.append(declaration)
+    result = maintain(root, updates=updates, **changes)
+    return result if detail else brief(root, result, 'native-tms')

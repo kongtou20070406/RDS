@@ -596,6 +596,9 @@ def brief(root, value, version, formal=False):
         if key in value:
             summary[key] = value[key]
     if 'dependency_map' in value and 'input_review' in value:
+        summary['authorization'] = 'UNCHANGED'
+        if 'snapshot_sha256' in value:
+            summary['snapshot_sha256'] = value['snapshot_sha256']
         goals = value.get('goals', {})
         summary['goals'] = {name: row['status'] for name, row in list(goals.items())[:3]}
         summary['omitted_goals'] = max(0, len(goals) - 3)
@@ -611,6 +614,15 @@ def brief(root, value, version, formal=False):
             summary['next_step']['omitted_fields'] = max(0, len(step['fields']) - 3)
         if 'revision' in value:
             summary['lost_support_count'] = len(value['revision']['lost_support'])
+            summary['gained_support_count'] = len(value['revision']['gained_support'])
+            summary['lost_support'] = value['revision']['lost_support'][:3]
+            summary['gained_support'] = value['revision']['gained_support'][:3]
+        if 'support_cone' in value:
+            cone = value['support_cone']
+            summary['support_cone'] = {key: cone[key] for key in ('node_id', 'supported', 'derivation_rule')}
+            for key in ('support_cone_nodes', 'support_cone_rules'):
+                summary['support_cone'][key] = cone[key][:3]
+                summary['support_cone']['omitted_' + key] = max(0, len(cone[key]) - 3)
     if value.get('status') == 'LOCAL_CATALOG' and isinstance(value.get('tools'), list):
         registered = {row['data']['name'] for row in value['tools'] if row['kind'] == 'tool-adoption'}
         candidates = sorted((row['data'] for row in value['tools'] if row['kind'] == 'tool'),

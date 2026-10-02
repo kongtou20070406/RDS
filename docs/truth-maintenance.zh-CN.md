@@ -27,21 +27,29 @@
 
 别名冲突、重复 ID、缺规则端点、未知变更目标会一起报告；存在这些歧义时不应用变更。退出码 2 表示输入需要澄清或计算达到上限。科学义务尚未解决仍可继续使用，不会成为格式拒绝。重复 JSON 键与非有限数字仍无效。导入的代码只作为数据，不会执行。
 
-## 复用快照，只提交变更
+## 在 agent loop 中只提交变更
 
 ```powershell
 python -B scripts/rds_cli.py --root ../tms-demo hypergraph -i examples/tms-input.json
 ```
 
-默认输出至多三个目标状态、计数、一个下一步和现有 CAS 的 `record` 定位符。该文件保存完整结果及程序生成的 `dependency_map`。下一轮直接使用这条**记录路径**：
+根目录需要已存在。程序将当前图保存在现有 `.rds/project.sqlite3` 与 CAS 中，下一轮自动读取该项目的当前状态，AI 无需传整张表或上一轮的 `record` 路径：
 
 ```powershell
-python -B scripts/rds_cli.py --root ../tms-demo hypergraph -i <previous-record-path> --retract-node premise
+python -B scripts/rds_cli.py --root ../tms-demo hypergraph --retract-node premise --change-source later-observation.json
+python -B scripts/rds_cli.py --root ../tms-demo hypergraph --update one-change.json
+python -B scripts/rds_cli.py --root ../tms-demo hypergraph --trace-cone target
 ```
 
-不必编辑表。撤回节点支持变为 `UNKNOWN`，撤回规则支持变为 `PROPOSED`；`--refute-node` / `--refute-rule` 则记录 `CONTRADICTED`。多个目标可重复使用参数；`--change-source <locator>` 记录变更声明的来源。`--trace-cone <node>` 解释选中的当前支持。需要详情时可用 `--output <new-file>` 与 `--json`。
+`one-change.json` 可以只有 `{"claims":{"premise":{"status":"supported","source":"new-observation.json"}}}`；`--declare '<简短 JSON>'` 也可直接提交，省去写文件的一次往返。一次最多合并八份增量，引用不会覆盖已有观测；明确冲突的 scope/revision 或计算上限需显式导入新图。ID、声明来源和派生状态表由程序生成，科学关系的含义仍需调用方给出。
 
-普通闭包、目标状态、阻断集合与报告行统一来自修订后的图。有效的独立 OR 路线会保留，无锚定的环不能自证。旧快照不可变；重用旧记录即可重访当时的声明，无需手工重建支持表。Advisor 的现有 `advisor_context.dependency_map` 接受生成的快照并分析同一张修订图。收据检查与授权继续由现有组件负责。
+默认输出至多三个目标状态、有界变化摘要、一个下一步与供按需查看的 CAS 定位符。同一次工具调用完成编译、更新、重算、保存。撤回节点支持变为 `UNKNOWN`，撤回规则支持变为 `PROPOSED`；`--refute-node` / `--refute-rule` 记录 `CONTRADICTED`。原始证据来源留在记录上，变更来源与此前的状态/来源保存在只追加历史中。需要详情时可用 `--output <new-file>` 与 `--json`。
+
+普通闭包、目标状态、阻断集合与报告行统一来自修订后的图。独立 OR 路线会保留，无锚定的环不能自证。旧快照不可变；`--input <旧记录路径>` 可显式恢复。歧义不会改写当前图，并发更新会返回 `CONFLICT`，不会覆盖他人更新或把旧结论当作当前结果。退出码 2 的不同原因由 `status`/`next_step` 区分：需澄清的 `UNKNOWN`、达到计算上限的 `INCOMPLETE`、并发的 `CONFLICT`；语法、存储或完整性错误仍走退出码 1。
+
+`advise --saved-dependencies --context context.json --graph graph.json` 在程序侧向现有 Advisor 注入该根目录的当前图；前瞻执行 `exec --saved-dependencies --context context.json --graph graph.json --ledger <归属账本>` 在准入前也会从归属账本重新加载。上下文文件无需放依赖表。原有 `dependency_map` 输入仍可使用简短声明或程序完整快照，内部标准表保留严格验证。不要同时通过两条路提供图；收据、目标门禁、预算与授权继续由现有组件负责。
+
+自定义工具可用 `rds_tms_store.tms_tool(root, declaration=..., retract_nodes=...)`。宿主从本地上下文绑定根目录，模型只见小参数和短结果。Codex/Pi 已可通过 shell 工具使用 CLI；原生自定义工具的包装属于集成示例，没有自动安装插件。只在证据、依赖变化或需要解释下一步时调用，不强制每轮运行，也不挂无限继续钩子。调查来源与字节对照见 [Codex/Pi agent loop 设计](agent-loop-tms.md)。
 
 ## 证据范围
 

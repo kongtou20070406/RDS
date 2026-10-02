@@ -364,6 +364,13 @@ def review_hypergraph(value, *, locator="input", retract_nodes=(), retract_rules
         if fragment.get('schema', 1) != candidate.get('schema', 1):
             input_review['errors'].append({'path': 'updates.schema', 'reason': 'incremental declarations must use the same schema'})
             continue
+        for key in ('question_id', 'goal_revision', 'scope'):
+            if key in fragment:
+                if key in candidate and candidate[key] != fragment[key]:
+                    input_review['errors'].append({'path': 'updates.' + key,
+                                                  'reason': 'declaration conflicts with the saved scope; explicitly import the new map'})
+                else:
+                    candidate[key] = deepcopy(fragment[key])
         generated = set(fragment_review['generated_node_ids'])
         for kind, key in (('node', 'nodes'), ('rule', 'hyperedges')):
             positions = {record['id']: j for j, record in enumerate(candidate[key])}

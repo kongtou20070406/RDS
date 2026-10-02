@@ -241,11 +241,18 @@ def _dependency_review(context, *, audit_receipts=False, audit_files=False):
         raw = json.dumps(spec, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
         if len(raw) > 128 * 1024:
             raise ValueError("dependency_map exceeds 128 KiB; retain only the current decision map")
+        from rds_hypergraph import _validate, analyze_hypergraph
+        # Existing internal maps stay strict. The compact declaration adapter
+        # and program-owned snapshots let agents avoid writing these rows.
+        if isinstance(spec, dict) and all(key in spec for key in ('nodes', 'hyperedges', 'goals')):
+            _validate(spec)
+        if not isinstance(spec, dict) or not any(key in spec for key in
+                ('nodes', 'claims', 'hyperedges', 'rules', 'goals', 'goal', 'dependency_map')):
+            raise ValueError('No dependency declarations supplied')
         from rds_hypergraph_input import prepare_input
         spec, input_review = prepare_input(spec)
         if input_review['errors']:
             raise ValueError('; '.join(row['path'] + ': ' + row['reason'] for row in input_review['errors']))
-        from rds_hypergraph import analyze_hypergraph
         try:
             result = analyze_hypergraph(spec, audit_receipts_enabled=audit_receipts) if audit_receipts \
                 else analyze_hypergraph(spec)

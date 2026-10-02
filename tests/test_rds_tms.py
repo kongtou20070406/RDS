@@ -162,6 +162,7 @@ class TMSInputAndEntryTests(unittest.TestCase):
             load_input('{"nodes":[], "value":NaN}')
         with self.assertRaisesRegex(ValueError, 'Non-finite'):
             load_input('{"nodes":[], "value":1e309}')
+        self.assertEqual(review_hypergraph({'claims': ['a'], 'value': float('nan')})['status'], 'UNKNOWN')
 
     def test_real_cli_reuses_saved_snapshots_for_negative_and_restored_cases(self):
         with tempfile.TemporaryDirectory() as directory:

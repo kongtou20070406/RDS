@@ -27,21 +27,29 @@ Unambiguous formatting repairs are automatic and retained in `input_review`:
 
 Conflicting aliases, duplicate IDs, missing rule endpoints and unknown change targets are reported together. No change is applied while these ambiguities remain. Exit 2 means input clarification or a computation limit; an open scientific obligation is still usable and does not cause a formatting rejection. Duplicate JSON keys and non-finite numbers remain invalid. Imported code is data and is never executed.
 
-## Reuse snapshots, submit changes
+## Submit changes in the agent loop
 
 ```powershell
 python -B scripts/rds_cli.py --root ../tms-demo hypergraph -i examples/tms-input.json
 ```
 
-Default output contains at most three goal statuses, counts, one next step and the existing CAS `record` locator. The full result at that locator includes the program-generated `dependency_map`. Feed that **record path** directly to the next invocation:
+The root must already exist. The program saves its map in the existing `.rds/project.sqlite3` and CAS. Subsequent calls automatically load that root's current state. Neither the whole table nor the previous `record` path is a required model argument:
 
 ```powershell
-python -B scripts/rds_cli.py --root ../tms-demo hypergraph -i <previous-record-path> --retract-node premise
+python -B scripts/rds_cli.py --root ../tms-demo hypergraph --retract-node premise --change-source later-observation.json
+python -B scripts/rds_cli.py --root ../tms-demo hypergraph --update one-change.json
+python -B scripts/rds_cli.py --root ../tms-demo hypergraph --trace-cone target
 ```
 
-No table editing is required. Retraction withdraws a node's reported support (`UNKNOWN`) or a rule's reported support (`PROPOSED`). `--refute-node` / `--refute-rule` instead record `CONTRADICTED`. Repeat a flag for several targets; `--change-source <locator>` records the source of the declared change. `--trace-cone <node>` explains its selected current justification. `--output <new-file>` and `--json` expose the full result when needed.
+`one-change.json` can contain just `{"claims":{"premise":{"status":"supported","source":"new-observation.json"}}}`. `--declare '<small JSON>'` also accepts inline declarations without a file-writing round trip. At most eight fragments are merged per call; references do not overwrite existing observations, and explicit conflicting scope/revision or computation limits need a deliberate new-map import. The program supplies IDs, sources for declarations and derived status tables. It does not invent the meaning of a scientific relation.
 
-The ordinary closure, goal statuses, blocker sets and reported rows all refer to the revised map. Independent valid OR alternatives survive; an unanchored cycle cannot prove itself. Earlier snapshots remain immutable. Reuse an earlier record to revisit its declarations instead of manually reconstructing a support table. Advisor accepts the generated snapshot in its existing `advisor_context.dependency_map` field and analyzes the same revised map. Existing receipt checks and authorization remain in their current owners.
+Default output contains at most three goal statuses, bounded change counts/IDs, one next step and a CAS `record` locator for optional inspection. It combines compilation, revision, analysis and storage in one tool action. Retraction withdraws a node's reported support (`UNKNOWN`) or a rule's reported support (`PROPOSED`). `--refute-node` / `--refute-rule` instead record `CONTRADICTED`. Original evidence sources stay on the rows; the change source and previous status/source stay in append-only history. `--output <new-file>` and `--json` expose the full result when needed.
+
+The ordinary closure, goal statuses, blocker sets and reported rows all refer to the revised map. Independent valid OR alternatives survive; an unanchored cycle cannot prove itself. Earlier snapshots remain immutable. Use `--input <earlier-record-path>` for an explicit restoration. Input errors leave the current map unchanged; a competing writer produces `CONFLICT` rather than overwriting newer state or returning stale supported goals. Exit 2 covers clarification (`UNKNOWN`), bounded incomplete computation (`INCOMPLETE`) and concurrency (`CONFLICT`); inspect `status`/`next_step`. Syntax, storage or integrity errors retain the existing exit 1 path.
+
+Use `advise --saved-dependencies --context context.json --graph graph.json` to inject this root's current map into the existing Advisor context on the program side. Prospective `exec --saved-dependencies --context context.json --graph graph.json --ledger <owner>` also reloads from its owning ledger before admission. The context file needs no dependency table. Explicit `dependency_map` input remains supported, including compact declarations and full program-generated snapshots; internal canonical maps retain their strict validation. Existing receipt checks, goal guards, budgets and authorization remain in their current owners. Do not attach the same map through both routes.
+
+For a custom tool, `rds_tms_store.tms_tool(root, declaration=..., retract_nodes=...)` exposes the same operation. The host binds `root` from local context; the model sees only the small arguments and brief result. Codex/Pi can already use the CLI through their shell tool. Native custom-tool wrappers are integration examples, not installed plugins. Do not require TMS on every model turn or use an always-continue hook: call it when dependencies or evidence change, or an explanation would change the next action. See the [Codex/Pi design evidence and byte comparison](agent-loop-tms.md).
 
 ## Evidence boundary
 
