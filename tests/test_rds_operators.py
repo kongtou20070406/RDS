@@ -442,6 +442,14 @@ class OperatorUnitTests(unittest.TestCase):
                     exported_class.analyze_system = lambda *args, **kwargs: {"status": "FAIL"}
                 elif card_id == "structural_preflight":
                     exported_class.preflight_callable = lambda *args, **kwargs: {"status": "PASS"}
+                elif card_id == "egraph_equivalence_saturation":
+                    exported_class.verify_algebraic_equivalence = lambda *args, **kwargs: {"status": "FAIL"}
+                elif card_id == "lean_axiom_review":
+                    exported_class.audit_lean_axioms = lambda *args, **kwargs: {"status": "FAIL"}
+                elif card_id == "bounded_finite_model":
+                    exported_class.verify_cayley_property = lambda *args, **kwargs: {"status": "FAIL"}
+                elif card_id == "explicit_reduction_transfer":
+                    exported_class.verify_reduction = lambda *args, **kwargs: {"status": "FAIL"}
                 else:
                     exported_class.certify_interval_bound = lambda *args, **kwargs: {"status": "FAIL"}
                 with self.assertRaises(AssertionError):

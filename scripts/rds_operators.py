@@ -959,7 +959,7 @@ def _reduction_self_test():
     report = ExplicitReductionTransferOperator.verify_reduction(
         [-5, -2, 0, 3, 7], forward, backward, lambda x: x > 0, lambda p: p[0] > p[1])
     negative = ExplicitReductionTransferOperator.verify_reduction(
-        [-5], forward, lambda p: -p[0] - p[1], lambda x: x > 0, lambda p: p[0] > p[1])
+        [-5], forward, lambda p: p[0] + p[1], lambda x: x > 0, lambda p: p[0] > p[1])
     assert report["status"] == "PASS" and report["has_bidirectional_reconstruction"]
     assert negative["status"] == "FAIL" and negative["assurance"] == "RECONSTRUCTION_OBLIGATION_UNMET"
     return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
