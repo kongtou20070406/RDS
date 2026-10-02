@@ -740,10 +740,11 @@ class RDSAdvisor:
                 "checkpoint_ids": skipped_goal_records[-5:],
                 "reason": "Another question's malformed record left same-goal history incomplete; only this question's records were used."})
         history = [row for row in recorded if row["same_question"]]
-        goal_history = [row for row in recorded if row["same_goal"] and not row["same_question"]]
         current_scope = (decision["goal_revision"], _json(decision["scope"]))
         scoped = [row for row in history if (row["goal_revision"], _json(row["scope"])) == current_scope]
-        goal_scoped = [row for row in goal_history if (row["goal_revision"], _json(row["scope"])) == current_scope]
+        # This question's and same-goal records in checkpoint order: the latest applicable decision wins.
+        applicable = [row for row in recorded if (row["same_question"] or row["same_goal"])
+                      and (row["goal_revision"], _json(row["scope"])) == current_scope]
         choices = []
         for row in scoped:
             if not choices or choices[-1]["route_sha256"] != row["route_sha256"]:
@@ -762,11 +763,10 @@ class RDSAdvisor:
             kept = []
             for candidate in output.get("candidates", []):
                 route = _loop_route(candidate)
-                # The same question takes precedence; a renamed question with the same goal does not reset its routes.
-                matches = ([row for row in scoped if row["route_sha256"] == route]
-                           or [row for row in goal_scoped if row["route_sha256"] == route])
-                prior = matches[-1] if matches else next((row for row in reversed(history) if row["route_sha256"] == route),
-                    next((row for row in reversed(goal_history) if row["route_sha256"] == route), None))
+                # A renamed question with the same goal does not reset its routes, and an older decision under
+                # either question never overrides a later one.
+                prior = next((row for row in reversed(applicable) if row["route_sha256"] == route),
+                    next((row for row in reversed(recorded) if row["route_sha256"] == route), None))
                 domain_match = False
                 if prior is None:
                     from rds_guard import in_domain, same_family
@@ -814,16 +814,20 @@ class RDSAdvisor:
                 flag["candidate_ids"] = [c["id"] for c in search.get("candidates", [])
                     if c.get("status") == "READY" and _loop_route(c) in flag["route_sha256"]]
         latest = {}
-        for row in recorded:
-            if row["same_goal"]:  # The latest recorded choice for a route supersedes earlier outcomes.
+        for row in applicable:
+            if row["same_goal"]:  # The latest choice for a route in this scope supersedes earlier outcomes.
                 latest.pop(row["route_sha256"], None)
                 latest[row["route_sha256"]] = row
         rejected = [row for row in latest.values() if row["outcome"] == "rejected" and row["family_sha256"] is not None]
         variants, related = [], {}
         for candidate in search.get("candidates", []):
             family, route = _loop_family(candidate), _loop_route(candidate)
-            rows = [row for row in rejected if candidate.get("status") == "READY" and family is not None
-                    and row["family_sha256"] == family and row["route_sha256"] != route]
+            if candidate.get("status") != "READY" or family is None:
+                continue
+            rows = [row for row in rejected if row["family_sha256"] == family and row["route_sha256"] != route]
+            if rows:  # Changed relevant evidence reopens review, as for exact repeats.
+                context = _loop_context(candidate, evidence)
+                rows = [row for row in rows if row["review_context"] == context]
             if rows:
                 variants.append(candidate.get("id"))
                 related.update((row["checkpoint_id"], row) for row in rows)

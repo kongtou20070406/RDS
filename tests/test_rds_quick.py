@@ -594,7 +594,7 @@ class QuickTests(unittest.TestCase):
         rejected_obligation = {'question_id': 'round-0', 'goal_revision': 'growth-v1', 'goal_conditions': goal,
             'scope': {'domain': 'synthetic'}, 'candidate': {'id': 'route:recipe', 'status': 'READY',
             'action': {**self.graph['nodes'][0]['executable']['action'], 'parameters': {'gain': 4}}},
-            'outcome': 'rejected', 'evidence': {}}
+            'outcome': 'rejected', 'evidence': copy.deepcopy(self.context['facts'])}  # Same relevant evidence as this check.
         save_checkpoint(self.ledger, 'rejected-obligation', ProjectStore(self.ledger).snapshot(check_bindings=True),
                         kind='project', decision=rejected_obligation)
         search, flags, move = full()
@@ -649,6 +649,90 @@ class QuickTests(unittest.TestCase):
                 self.assertEqual([c['status'] for c in search['candidates']], ['READY'])
                 self.assertNotIn('GOAL_ROUTES_REJECTED', {f['kind'] for f in search['loop_review']['flags']})
                 self.assertEqual(search['selection_review']['next_move']['kind'], 'RESOLVE_PREMISE')
+
+    def goal_ledger(self):
+        from test_rds_advisor import LedgerLoopTests
+        from rds_checkpoints import save_checkpoint
+        helper = LedgerLoopTests()
+        helper.setUp()
+        self.addCleanup(helper.doCleanups)
+        context = copy.deepcopy(helper.context)
+        context['decision']['goal_conditions'] = [{'fact': 'goal', 'value': True}]
+        context['facts']['goal'] = {'value': None, 'source': 'unmeasured.json'}
+        graph = copy.deepcopy(helper.graph)
+        graph['nodes'][0]['executable']['action']['parameters'] = {'p': 1}
+
+        def save(identity, question, candidate, outcome, scope=None):
+            decision = context['decision']
+            save_checkpoint(helper.root, identity, helper.store.snapshot(), kind='project', decision={
+                'question_id': question, 'goal_revision': decision['goal_revision'],
+                'goal_conditions': decision['goal_conditions'], 'scope': scope or decision['scope'],
+                'candidate': candidate, 'outcome': outcome, 'evidence': context['facts']})
+
+        def advise(context=context, graph=graph):
+            search = helper.search(context=context, graph=graph)['search']
+            return search, {f['kind']: f for f in search['loop_review']['flags']}
+        return helper.search(context=context, graph=graph)['search']['candidates'][0], context, graph, save, advise
+
+    def test_latest_same_goal_decision_wins_across_current_and_renamed_questions(self):
+        # Returning to an older question cannot bypass a later rejection recorded under a renamed one.
+        candidate, context, graph, save, advise = self.goal_ledger()
+        save('current-accepted', 'choose', candidate, 'accepted')
+        save('renamed-rejected', 'renamed', candidate, 'rejected')
+        search, flags = advise()
+        self.assertEqual(search['candidates'], [])
+        self.assertEqual([c['status'] for c in search['blocked_candidates']], ['BLOCKED_REJECTED_ROUTE'])
+        self.assertEqual(flags['REPEAT_REJECTED_ROUTE']['checkpoint_id'], 'renamed-rejected')
+        self.assertEqual(flags['REPEAT_REJECTED_ROUTE']['recorded_question_id'], 'renamed')
+        # The existing scope and evidence reopening rules still apply to that later rejection.
+        moved = copy.deepcopy(context)
+        moved['decision']['scope'] = {'dataset': 'independent-new-scope'}
+        changed = copy.deepcopy(context)
+        changed['facts']['x']['binding'] = {'run_id': 'new-run'}
+        for variant in (moved, changed):
+            with self.subTest(variant=variant['decision']['scope']):
+                search, flags = advise(context=variant)
+                self.assertEqual([c['status'] for c in search['candidates']], ['READY'])
+                self.assertEqual(flags['REOPEN_REVIEW']['checkpoint_id'], 'renamed-rejected')
+                self.assertNotIn('REPEAT_REJECTED_ROUTE', flags)
+
+        # A later acceptance under the renamed question supersedes this question's older rejection.
+        candidate, context, graph, save, advise = self.goal_ledger()
+        save('current-rejected', 'choose', candidate, 'rejected')
+        save('renamed-accepted', 'renamed', candidate, 'accepted')
+        search, flags = advise()
+        self.assertEqual([c['status'] for c in search['candidates']], ['READY'])
+        self.assertEqual(search.get('blocked_candidates', []), [])
+        self.assertNotIn('REPEAT_REJECTED_ROUTE', flags)
+        self.assertNotIn('REOPEN_REVIEW', flags)
+
+    def test_parameter_variant_hint_applies_only_in_the_rejected_scope_and_evidence(self):
+        candidate, context, graph, save, advise = self.goal_ledger()
+        save('earlier-rejection', 'earlier', candidate, 'rejected')
+        variant_graph = copy.deepcopy(graph)
+        variant_graph['nodes'][0]['executable']['action']['parameters'] = {'p': 2}
+        search, flags = advise(graph=variant_graph)
+        self.assertEqual([c['status'] for c in search['candidates']], ['READY'])
+        self.assertEqual(flags['GOAL_ROUTES_REJECTED']['checkpoint_ids'], ['earlier-rejection'])
+        unrelated = copy.deepcopy(context)
+        unrelated['facts']['unrelated'] = {'value': 3, 'source': 'other.json'}
+        self.assertIn('GOAL_ROUTES_REJECTED', advise(context=unrelated, graph=variant_graph)[1])
+
+        # The new scope or relevant evidence has not failed: no stagnation hint and no forced reformulation.
+        moved = copy.deepcopy(context)
+        moved['decision']['scope'] = {'dataset': 'independent-new-scope'}
+        changed = copy.deepcopy(context)
+        changed['facts']['x']['binding'] = {'run_id': 'new-run'}
+        for variant in (moved, changed):
+            with self.subTest(variant=variant['decision']['scope']):
+                search, flags = advise(context=variant, graph=variant_graph)
+                self.assertEqual([c['status'] for c in search['candidates']], ['READY'])
+                self.assertNotIn('GOAL_ROUTES_REJECTED', flags)
+                self.assertEqual(search['selection_review']['next_move']['kind'], 'RESOLVE_PREMISE')
+
+        # A later acceptance recorded in another scope does not supersede the rejection in this scope.
+        save('other-scope-accepted', 'earlier', candidate, 'accepted', scope={'dataset': 'independent-new-scope'})
+        self.assertEqual(advise(graph=variant_graph)[1]['GOAL_ROUTES_REJECTED']['checkpoint_ids'], ['earlier-rejection'])
 
     def test_prospective_job_cannot_reset_the_parent_budget(self):
         self.initialize_ledger()
