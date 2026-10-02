@@ -831,6 +831,34 @@ def review_obstructions(search, context, *, _read_receipt=None):
     return entries
 
 
+def _goal_discriminators(review, search):
+    """Return declared links for ready rival checks, never inferred goal repair."""
+    unresolved = {c['fact'] for c in review.get('goal', {}).get('conditions', []) if c['truth'] == UNKNOWN}
+    if not unresolved:
+        return {}
+    actions = {c['id']: c.get('action', {}) for c in search.get('candidates', []) if 'id' in c}
+    linked = {}
+    for candidate in review['candidates']:
+        if candidate['basis'] != 'CONDITIONAL_RIVAL_TEST' or candidate['unresolved_pairs']:
+            continue
+        contribution = candidate.get('goal_contribution', {})
+        if contribution.get('status') == 'DECLARED_PATH':
+            target = contribution['target']
+            # The existing graph consumer validates mapped paths. Text-only paths
+            # must also end at the goal they claim to inform.
+            if contribution['path'][-1] != target:
+                continue
+        elif contribution.get('status') == 'UNDECLARED':
+            # A direct goal-predicate check needs no invented intermediate bridge.
+            target = actions.get(candidate['id'], {}).get('target')
+        else:
+            # An explicitly invalid/UNKNOWN path cannot be bypassed by its label.
+            continue
+        if isinstance(target, str) and target in unresolved:
+            linked[candidate['id']] = target
+    return linked
+
+
 def _next_move(review, search):
     """Suggest a bounded reasoning step from input review, without changing a route."""
     flags = {f["kind"] for f in review["flags"]}
@@ -850,6 +878,7 @@ def _next_move(review, search):
                           (c["basis"] == "CONDITIONAL_RIVAL_TEST" and not c["unresolved_pairs"])
                           for c in review["candidates"])
     goal = review.get("goal", {})
+    measuring = _goal_discriminators(review, search)
     pending = any(c.get("status") in {"NEEDS_EVIDENCE", "NEEDS_METHOD_CLARIFICATION", "NEEDS_METHOD_DESCRIPTION"}
                   for c in search.get("candidates", []))
     blocked = any(c.get("status") in {"BLOCKED_PREREQUISITE", "BLOCKED_METHOD", "BLOCKED_BUDGET"}
@@ -860,20 +889,16 @@ def _next_move(review, search):
                     and not supported_route and goal.get("status") in {UNKNOWN, FALSE})
     if "LOOP_HISTORY_REVIEW_ERROR" in loop_flags:
         kind, reason = "RESOLVE_PREMISE", "Recorded history integrity is unresolved; inspect the existing loop review."
-    elif supported_route and goal.get("conditions") and any(
-            c["truth"] == UNKNOWN for c in goal.get("conditions", [])) and any(
-            c["basis"] == "CONDITIONAL_RIVAL_TEST" and not c["unresolved_pairs"]
-            for c in review["candidates"]):
-        # A supported discriminating observation that measures the unresolved
-        # predicate IS the evidence repair: name it instead of a generic premise step.
+    elif measuring:
         unresolved_facts = {c["fact"] for c in goal["conditions"] if c["truth"] == UNKNOWN}
-        measuring = [c["id"] for c in review["candidates"]
-                     if c["basis"] == "CONDITIONAL_RIVAL_TEST" and not c["unresolved_pairs"]]
+        remaining = unresolved_facts - set(measuring.values())
+        links = ', '.join(f'{ident} -> {target}' for ident, target in sorted(measuring.items()))
         kind, reason = "DESIGN_DISCRIMINATOR", (
-            "Local success does not measure the open application/transfer obligation; run the ready "
-            f"discriminating check ({', '.join(sorted(measuring))}) whose rival predictions resolve "
-            f"{', '.join(sorted(unresolved_facts))}. Replication and healthy local routes stay preserved; "
-            "another local qualification is not application progress.")
+            "Local success does not measure an open goal, including an application/transfer obligation; ready rival checks "
+            f"have declared goal links ({links}). These checks may inform the named predicates; "
+            "a declared link is not scientific proof or goal completion. "
+            + (f"Other unresolved predicates remain open: {', '.join(sorted(remaining))}. " if remaining else "")
+            + "Replication and healthy local routes stay preserved; another local qualification is not application progress.")
     elif (goal.get("status") == UNKNOWN or any(c["truth"] == UNKNOWN for c in goal.get("conditions", []))) and not goal_history:
         kind, reason = "RESOLVE_PREMISE", "The original goal has unresolved evidence; no scientific failure is established."
     elif ("PREDICTION_PREMISES_UNRESOLVED" in flags and not supported_route) or (not ready_ids and (pending or blocked)):
