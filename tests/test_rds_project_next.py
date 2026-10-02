@@ -80,10 +80,27 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(store.compare()["status"], "BELOW_RESOLUTION")
 
     def test_exact_rational_threshold_boundary(self):
-        # delta = -5900190476190475553/5e17 exactly; use a precommitted threshold
-        # that the delta exactly meets (<=) to prove no float rounding occurs.
-        store = self.run_both_arms(min_useful_delta="5900190476190475553/500000000000000000")
+        # The float delta is platform-dependent in its last ulps, so derive the
+        # threshold from this platform's own recorded values: a precommitted
+        # threshold that the delta exactly meets (<=) must confirm the gain,
+        # proving no float re-rounding happens at the verdict.
+        import json
+        from fractions import Fraction
+        probe = self.run_both_arms(min_useful_delta="0")
+        control_raw = json.loads((self.root / "outputs" / "control.json").read_text(encoding="utf-8"))["mse"]
+        treatment_raw = json.loads((self.root / "outputs" / "treatment.json").read_text(encoding="utf-8"))["mse"]
+        threshold = Fraction(str(treatment_raw)) - Fraction(str(control_raw))
+        self.assertLess(threshold, 0)
+        info = prepare(Path(self.tmp.name) / "proj-boundary")
+        root = Path(info["root"])
+        store = ProjectStore(root)
+        store.initialize(metric_contract(root, min_useful_delta=str(-threshold)))
+        for manifest in (Path(p) for p in info["manifests"]):
+            store.register(json.loads(manifest.read_text(encoding="utf-8")))
+        store.execute("control")
+        store.execute("treatment")
         self.assertEqual(store.compare()["status"], "GAIN_CONFIRMED")
+        self.assertEqual(store.compare()["delta"], str(threshold))
 
     def test_missing_metric_declaration_is_unknown(self):
         store = ProjectStore(self.root)
