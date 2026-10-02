@@ -204,6 +204,20 @@ def _dependency_review(context):
                 "assurance": "INPUT_REPORTED_DEPENDENCY_ANALYSIS_NOT_PROOF"}
 
 
+def _operation_dependency(context):
+    """Own one map snapshot and reuse its analysis only within this operation."""
+    snapshot = dict(context)
+    snapshot["dependency_map"] = deepcopy(context["dependency_map"])
+    cached = []
+
+    def review():
+        if not cached:
+            cached.append(_dependency_review(snapshot))
+        return deepcopy(cached[0])
+
+    return review
+
+
 def _mapped_path(spec, dependency, action):
     """Check a contributory path, keeping every AND premise as a separate obligation."""
     report = {"status": UNKNOWN, "assurance": "INPUT_REPORTED_GRAPH_PATH_NOT_PROOF"}
@@ -324,9 +338,13 @@ def _next_move(review, search):
                   for c in search.get("candidates", []))
     blocked = any(c.get("status") in {"BLOCKED_PREREQUISITE", "BLOCKED_METHOD", "BLOCKED_BUDGET"}
                   for c in search.get("blocked_candidates", []))
+    goal_rejections = next((f for f in history_flags if f.get("kind") == "GOAL_ROUTES_REJECTED"), None)
+    # A new variant after rejections recorded for the same goal; an unmeasured current scope does not erase them.
+    goal_history = (goal_rejections is not None and bool(ready_ids.intersection(goal_rejections.get("candidate_ids", [])))
+                    and not supported_route and goal.get("status") in {UNKNOWN, FALSE})
     if "LOOP_HISTORY_REVIEW_ERROR" in loop_flags:
         kind, reason = "RESOLVE_PREMISE", "Recorded history integrity is unresolved; inspect the existing loop review."
-    elif goal.get("status") == UNKNOWN or any(c["truth"] == UNKNOWN for c in goal.get("conditions", [])):
+    elif (goal.get("status") == UNKNOWN or any(c["truth"] == UNKNOWN for c in goal.get("conditions", []))) and not goal_history:
         kind, reason = "RESOLVE_PREMISE", "The original goal has unresolved evidence; no scientific failure is established."
     elif ("PREDICTION_PREMISES_UNRESOLVED" in flags and not supported_route) or (not ready_ids and (pending or blocked)):
         kind, reason = "RESOLVE_PREMISE", "Resolve the affected evidence, prediction scope, method or budget conditions first."
@@ -342,6 +360,11 @@ def _next_move(review, search):
         return None
     elif "RIVAL_PREDICTIONS_OVERLAP" in flags and not supported_route:
         kind, reason = "DESIGN_DISCRIMINATOR", "Supported same-scope prediction sets overlap; seek a distinguishing observation."
+    elif goal_history:
+        kind, reason = "REFORMULATE", (
+            f"The ready action changes only parameters of {goal_rejections['rejected_routes']} route(s) recorded as rejected "
+            "for this goal revision and acceptance predicates; compare a changed premise, representation or method with the smallest repair. "
+            "Recorded rejections are scoped choices, not a capacity bound or a guilty premise.")
     elif goal.get("status") == FALSE:
         kind, reason = "REFORMULATE", "The reported goal predicate failed; this is a scoped gap, not a capacity lower bound or a causal diagnosis."
     elif {"SINGLE_CONFIGURED_DIRECTION", "RIVAL_PREDICTIONS_MISSING"} <= flags and not supported_route:
@@ -376,11 +399,11 @@ def _next_move(review, search):
                       "Unknown evidence or a scoped failure does not establish a capacity lower bound."}
 
 
-def review_selection(search, context):
+def review_selection(search, context, *, _dependency=None):
     """Expose what the supplied directions can decide; never invent utility."""
     ready = [c for c in search.get("candidates", []) if c.get("status") == "READY"]
     flags, candidates = [], []
-    dependency = _dependency_review(context)
+    dependency = _dependency() if _dependency is not None else _dependency_review(context)
     if search.get("truncation", {}).get("truncated"):
         flags.append({"kind": "SEARCH_TRUNCATED", "next": "Review the omitted search scope before claiming a best route."})
     obligations = all(c.get("action", {}).get("kind") == "OBLIGATION_CHECK" for c in ready)
@@ -454,7 +477,8 @@ def review_selection(search, context):
 
 
 def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nodes=128,
-                      templates=None, max_combinations=128, max_compose_depth=2):
+                      templates=None, max_combinations=128, max_compose_depth=2,
+                      _dependency=None, _defer_selection_review=False):
     """Compose source-labelled checks and tests for the supplied next decision.
 
     Nodes opt in via executable.decisions, preconditions, satisfied_when, action.
@@ -484,13 +508,17 @@ def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nod
                                "Dominance requires valid same-scope rival predictions; decision labels alone do not establish scientific value."]}
     def finish():
         chosen_templates = templates if templates is not None else context.get("templates")
+        dependency = _dependency
+        if dependency is None and chosen_templates is not None and "dependency_map" in context:
+            dependency = _operation_dependency(context)
         if chosen_templates is not None:
             from rds_experiments import compose_experiments
             result["experiment_composition"] = compose_experiments(
                 graph, context, chosen_templates, max_candidates=max_candidates, max_depth=max_compose_depth,
-                max_combinations=max_combinations,
+                max_combinations=max_combinations, _dependency=dependency,
                 search_limits={"max_candidates": max_candidates, "max_depth": max_depth, "max_nodes": max_nodes})
-        result["selection_review"] = review_selection(result, context)
+        if not _defer_selection_review:
+            result["selection_review"] = review_selection(result, context, _dependency=dependency)
         return result
     if len(raw_nodes) > max_nodes:
         result["truncation"].update(truncated=True)

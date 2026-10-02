@@ -140,7 +140,7 @@ python -B scripts/rds_cli.py --root ./my-project project status
 
 `scripts/rds_verify.py` は、有限の宣言的命題、登録済みの領域ルール、独立した証明書検査を提供します。範囲を限定したタクティックインターフェースは Lean スタイルの証明ワークフローに着想を得ています。汎用の Lean や Mathlib の証明器ではありません。
 
-- **信頼するルールの登録簿** — 有理数スカラーの閾値、アフィン力学、適用範囲を定めた行列スペクトル検査、対応する Linear/ReLU の性質、具体的なテンソル、ネイティブ Lean の閉じた有理数の証明義務を扱う 12 個の原子的数学ルールを登録しています。有限の定理モジュールはこれらの命題を組み合わせます。この登録簿は、23 ノードの方法論判断グラフとは別です。
+- **信頼するルールの登録簿** — 有理数スカラーの閾値、アフィン力学、適用範囲を定めた行列スペクトル検査、対応する Linear/ReLU の性質、具体的なテンソル、正確な単位円板の幾何被覆、ネイティブ Lean の証明義務（閉じた有理数関係と範囲を限定した統計義務）を扱う 15 個の原子的数学ルールを登録しています。有限の定理モジュールはこれらの命題を組み合わせます。この登録簿は、23 ノードの方法論判断グラフとは別です。
 - **範囲を限定したタクティックのディスパッチャー** — `LeanFormalEngine().verify(spec, tactics)` は `rule`、`gershgorin`、`spectral_radius`、`scale_invariance`、`interval`、`lean4` を受け付けます。タクティックは互換性のある登録済み検査を選び、未対応または結論を出せない入力には `UNKNOWN` を返します。
 - **ネイティブ Lean 4 アダプター** — ネイティブ Lean 実行ファイルを設定すると、固定テンプレートの閉じた有理数の `eq`、`lt`、`le` 証明義務は、ネイティブ再検査と公理が空であることの監査後に `LEAN_KERNEL_CHECKED` を受け取ります。任意の Lean ソースやユーザーのタクティックは受け付けません。
 
@@ -228,6 +228,19 @@ scripts/rds_adversary.py         RSI の対抗的な変種と評価候補（コ�
 benchmark/                       過去の判断パケットとレッドチームベンチマーク
 tests/                           全回帰テストスイート
 ```
+
+---
+
+## Star の推移
+
+<a href="https://www.star-history.com/#kongtou20070406/research-direction-selector&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=kongtou20070406/research-direction-selector&type=Date&theme=dark">
+    <img alt="Star の推移" src="https://api.star-history.com/svg?repos=kongtou20070406/research-direction-selector&type=Date" width="600">
+  </picture>
+</a>
+
+このチャートは公開の Star History サービスから読み込まれ、GitHub star の推移のみを反映します。研究上の意味はありません。
 
 ---
 

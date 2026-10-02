@@ -94,7 +94,7 @@ def _conflict(parts):
 
 
 def compose_experiments(graph, context, templates, *, max_candidates=12,
-                        max_depth=2, max_combinations=128, search_limits=None):
+                        max_depth=2, max_combinations=128, search_limits=None, _dependency=None):
     """Enumerate compatible declared interventions, retaining unknown evidence.
 
     context.target_types maps target names to number/string/boolean. A missing
@@ -123,9 +123,9 @@ def compose_experiments(graph, context, templates, *, max_candidates=12,
         raise ValueError("Context facts and target_types must be objects")
     decision = context.get("decision")
     decision_id = decision.get("id") if isinstance(decision, dict) else decision
-    search_context = deepcopy(context)
+    search_context = dict(context)
     search_context.pop("templates", None)
-    base = search_directions(graph, search_context, **(search_limits or {}))
+    base = search_directions(graph, search_context, _dependency=_dependency, **(search_limits or {}))
     ready = {c["rule_id"]: c for c in base["candidates"]}
     blocked = {c["rule_id"]: c for c in base["blocked_candidates"]}
     node_ids = {n.get("id") for n in graph.get("nodes", []) if isinstance(n, dict)}

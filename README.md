@@ -148,7 +148,7 @@ python -B scripts/rds_cli.py --root ./my-project project status
 
 `scripts/rds_verify.py` provides finite declarative statements, registered domain rules, and independent certificate checking. Its bounded tactic facade is inspired by Lean-style proof workflows; it is not a general Lean or Mathlib prover.
 
-- **Trusted rule registry** — Registers 12 atomic mathematical rules covering rational scalar thresholds, affine dynamics, scoped matrix spectral checks, supported Linear/ReLU properties, concrete tensors, and native closed-rational Lean obligations. Finite theorem modules compose these statements. This registry is separate from the 23-node methodology judgment graph.
+- **Trusted rule registry** — Registers 15 atomic mathematical rules covering rational scalar thresholds, affine dynamics, scoped matrix spectral checks, supported Linear/ReLU properties, concrete tensors, exact unit-disk geometry covers, and native Lean obligations (closed rational relations and a scoped statistical obligation). Finite theorem modules compose these statements. This registry is separate from the 23-node methodology judgment graph.
 - **Bounded tactic dispatcher** — `LeanFormalEngine().verify(spec, tactics)` accepts `rule`, `gershgorin`, `spectral_radius`, `scale_invariance`, `interval`, and `lean4`. Tactics select compatible registered checks; unsupported or inconclusive inputs return `UNKNOWN`.
 - **Native Lean 4 adapter** — With a configured native Lean executable, fixed-template closed rational `eq`, `lt`, or `le` obligations receive `LEAN_KERNEL_CHECKED` after native rechecking and an empty-axiom audit. It does not accept arbitrary Lean source or user tactics.
 
@@ -236,6 +236,19 @@ scripts/rds_adversary.py         RSI adversarial variants and evaluation candida
 benchmark/                       Historical decision packets & red-team benchmarks
 tests/                           Full regression test suite
 ```
+
+---
+
+## Star history
+
+<a href="https://www.star-history.com/#kongtou20070406/research-direction-selector&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=kongtou20070406/research-direction-selector&type=Date&theme=dark">
+    <img alt="Star history" src="https://api.star-history.com/svg?repos=kongtou20070406/research-direction-selector&type=Date" width="600">
+  </picture>
+</a>
+
+The chart is loaded from the public Star History service and only reflects GitHub stars over time; it carries no research meaning.
 
 ---
 

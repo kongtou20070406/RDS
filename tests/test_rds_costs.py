@@ -7,7 +7,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
-from rds_costs import check_control_reuse, summarize_costs
+from rds_costs import check_control_reuse, receipt_identity, receipt_issues, summarize_costs
 from rds_verify_types import digest
 
 
@@ -33,6 +33,66 @@ def rehash(value):
 
 
 class CostsTests(unittest.TestCase):
+    def test_explicit_identity_precedes_scalar_alias_without_hiding_conflicts(self):
+        for origin in (None, "binding", "protocol"):
+            for old, new in (("source_sha256", "code_sha256"), ("dataset_sha256", "data_sha256")):
+                with self.subTest(origin=origin, old=old):
+                    record = {old: "f" * 64, "binding": {new: "a" * 64}}
+                    if origin is not None:
+                        record = {"binding": {new: "a" * 64}, origin: {old: "f" * 64, new: "a" * 64}}
+                    identity, conflicts = receipt_identity(record)
+                    self.assertEqual(identity[new], "a" * 64)
+                    self.assertEqual(conflicts, [new])
+                    matched = {"binding": {new: "a" * 64}, old: "a" * 64}
+                    self.assertEqual(receipt_identity(matched), ({new: "a" * 64}, []))
+        # Contradictory modern identity fields also remain a conflict.
+        self.assertEqual(receipt_identity({"code_sha256": "a" * 64, "protocol": {"code_sha256": "b" * 64}})[1],
+                         ["code_sha256"])
+
+    def test_hash_inventories_never_become_scalar_identity_or_hashes(self):
+        for origin in (None, "binding", "protocol"):
+            metadata = {"source_sha256": {"model.py": "a" * 64}, "dataset_sha256": {"data.csv": "c" * 64}}
+            record = metadata if origin is None else {origin: metadata}
+            with self.subTest(origin=origin):
+                before = deepcopy(record)
+                self.assertEqual(receipt_identity(record), ({}, []))
+                self.assertEqual(record, before)
+        for invalid in (17, ["a" * 64], None, "not-a-hash"):
+            identity, _ = receipt_identity({"source_sha256": invalid})
+            self.assertEqual(identity["code_sha256"], invalid)
+            item = receipt(protocol={**protocol(), "code_sha256": invalid})
+            self.assertTrue(any("code_sha256" in issue for issue in receipt_issues(item)))
+
+    def test_receipt_cost_inventory_keeps_measurements_but_scalar_conflict_rejects(self):
+        item = receipt(source_sha256={"model.py": "f" * 64})
+        result = summarize_costs([item])
+        self.assertEqual(result["measurements"][0]["value"], 2.0)
+        self.assertEqual(receipt_issues(item), [])
+        conflicting = receipt(source_sha256="f" * 64)
+        self.assertEqual(summarize_costs([conflicting])["measurements"], [])
+        self.assertIn("conflicting receipt identity: code_sha256", receipt_issues(conflicting))
+        legacy = protocol()
+        legacy["source_sha256"] = legacy.pop("code_sha256")
+        self.assertEqual(receipt_issues(receipt(protocol=legacy)), [])
+
+    def test_control_reuse_inventory_metadata_and_legacy_scalar_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            control, current = self.make_control(base)
+            control["source_sha256"] = {"model.py": "f" * 64}
+            current["source_sha256"] = {"different.py": "e" * 64}
+            self.assertTrue(check_control_reuse(rehash(control), current, base)["reusable"])
+            scalar_conflict = {**control, "source_sha256": "f" * 64}
+            result = check_control_reuse(rehash(scalar_conflict), current, base)
+            self.assertFalse(result["reusable"])
+            self.assertIn("conflicting receipt identity: code_sha256", result["reasons"])
+            current_conflict = {**current, "source_sha256": "f" * 64}
+            self.assertFalse(check_control_reuse(rehash(control), current_conflict, base)["reusable"])
+            legacy = deepcopy(control)
+            legacy.pop("source_sha256")
+            legacy["protocol"]["source_sha256"] = legacy["protocol"].pop("code_sha256")
+            self.assertTrue(check_control_reuse(rehash(legacy), current, base)["reusable"])
+
     def make_control(self, base, **extra):
         identity = protocol()
         inputs = []

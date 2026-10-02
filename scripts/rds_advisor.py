@@ -519,9 +519,17 @@ class RDSAdvisor:
             if isinstance(state["advisor_context"], dict):
                 options.update({key: state["advisor_context"][key] for key in ("max_depth", "max_candidates")
                                 if key in state["advisor_context"]})
+            dependency = None
+            if isinstance(context, dict) and "dependency_map" in context:
+                # History filters candidates, then the final review evaluates them.
+                options["_defer_selection_review"] = True
+                if options.get("templates", context.get("templates")) is not None:
+                    from rds_advisor_search import _operation_dependency
+                    dependency = _operation_dependency(context)
+                    options["_dependency"] = dependency
             search = search_directions(judgment_graph, state["advisor_context"], **options)
             loop_review = self._review_loop_history(state, context, search)
-            search["selection_review"] = review_selection(search, context)
+            search["selection_review"] = review_selection(search, context, _dependency=dependency)
             recommendations.append(_advice("STRATEGIC_RESEARCH_ADVICE", type="EXECUTABLE_DIRECTION_SEARCH", urgency="REVIEW",
                 reason="按明确的下一决策、带来源事实和图中结构化前置条件组合有界候选。",
                 search=search, observations=search["candidates"], limitations=search["limitations"],
@@ -631,6 +639,8 @@ class RDSAdvisor:
         evidence = context.get("facts", {})
         _require(isinstance(evidence, dict), "Loop evidence must be context facts")
         _json(evidence)
+        # Identical acceptance predicates and revision identify the same goal across renamed questions.
+        goal_key = _goal_key(decision.get("goal_conditions"))
         directory = self.root_dir / ".rds"
         kind = "project" if (directory / "project.sqlite3").is_file() else "reference"
         path = directory / ("project.sqlite3" if kind == "project" else "state.sqlite3")
@@ -643,6 +653,36 @@ class RDSAdvisor:
                       "Changed facts or conditions reopen review; source labels do not independently verify new evidence."]}
         history = []
         checked_witnesses = set()
+        skipped_goal_records = []
+
+        def decision_row(prior, checkpoint_id, sha, same_question, same_goal):
+            _require(_text(prior["goal_revision"]) and prior["outcome"] in
+                     ("rejected", "accepted", "plan_locked", "deferred") and isinstance(prior["evidence"], dict),
+                     "Invalid checkpoint decision: " + checkpoint_id)
+            _scope(prior["scope"])
+            _json(prior["evidence"])
+            route = _loop_route(prior["candidate"])
+            _require(route is not None, "Checkpoint decision needs a structured candidate: " + checkpoint_id)
+            # Declared domains prune only within their own question, so only that question checks the witness.
+            if same_question and prior['outcome'] == 'rejected' and 'rejected_domain' in prior:
+                from rds_guard import validate_domain, MAX_BYTES
+                validate_domain(prior['rejected_domain'], prior['candidate'])
+                witness = prior.get('falsification', {})
+                witness_sha = witness.get('sha256')
+                _require(isinstance(witness_sha, str) and re.fullmatch('[0-9a-f]{64}', witness_sha), 'Declared-domain rejection needs a witness hash')
+                original = Path(witness['path']).resolve()
+                _require(original.is_relative_to((directory / 'cas').resolve()), 'Domain witness must be in the project CAS')
+                if (str(original), witness_sha) not in checked_witnesses:
+                    with original.open('rb') as handle:
+                        witness_raw = handle.read(MAX_BYTES + 1)
+                    _require(len(witness_raw) <= MAX_BYTES and hashlib.sha256(witness_raw).hexdigest() == witness_sha,
+                             'Declared-domain witness CAS integrity failure')
+                    checked_witnesses.add((str(original), witness_sha))
+            return {**prior, "route_sha256": route, "family_sha256": _loop_family(prior["candidate"]),
+                    "review_context": _loop_context(prior["candidate"], prior["evidence"]),
+                    "checkpoint_id": checkpoint_id, "checkpoint_sha256": sha,
+                    "same_question": same_question, "same_goal": same_goal}
+
         try:
             db = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, isolation_level=None, timeout=0.05)
             try:
@@ -669,34 +709,23 @@ class RDSAdvisor:
                              and _sha(record["snapshot"]["contract"]) == contract_sha,
                              "Checkpoint contract mismatch: " + checkpoint_id)
                     prior = record.get("decision", {})
-                    if not isinstance(prior, dict) or prior.get("question_id") != decision["id"]:
+                    if not isinstance(prior, dict):
+                        continue
+                    same_question = prior.get("question_id") == decision["id"]
+                    same_goal = (goal_key is not None and prior.get("goal_revision") == decision["goal_revision"]
+                                 and _text(prior.get("question_id")) and _goal_key(prior.get("goal_conditions")) == goal_key)
+                    if not (same_question or same_goal):
                         continue
                     fields = ("goal_revision", "scope", "candidate", "outcome", "evidence")
                     if not all(key in prior for key in fields):
                         continue  # Older opaque contexts never become route decisions.
-                    _require(_text(prior["goal_revision"]) and prior["outcome"] in
-                             ("rejected", "accepted", "plan_locked", "deferred") and isinstance(prior["evidence"], dict),
-                             "Invalid checkpoint decision: " + checkpoint_id)
-                    _scope(prior["scope"])
-                    _json(prior["evidence"])
-                    route = _loop_route(prior["candidate"])
-                    _require(route is not None, "Checkpoint decision needs a structured candidate: " + checkpoint_id)
-                    if prior['outcome'] == 'rejected' and 'rejected_domain' in prior:
-                        from rds_guard import validate_domain, MAX_BYTES
-                        validate_domain(prior['rejected_domain'], prior['candidate'])
-                        witness = prior.get('falsification', {})
-                        witness_sha = witness.get('sha256')
-                        _require(isinstance(witness_sha, str) and re.fullmatch('[0-9a-f]{64}', witness_sha), 'Declared-domain rejection needs a witness hash')
-                        original = Path(witness['path']).resolve()
-                        _require(original.is_relative_to((directory / 'cas').resolve()), 'Domain witness must be in the project CAS')
-                        if (str(original), witness_sha) not in checked_witnesses:
-                            with original.open('rb') as handle:
-                                witness_raw = handle.read(MAX_BYTES + 1)
-                            _require(len(witness_raw) <= MAX_BYTES and hashlib.sha256(witness_raw).hexdigest() == witness_sha,
-                                     'Declared-domain witness CAS integrity failure')
-                            checked_witnesses.add((str(original), witness_sha))
-                    history.append({**prior, "route_sha256": route, "review_context": _loop_context(prior["candidate"], prior["evidence"]),
-                                    "checkpoint_id": checkpoint_id, "checkpoint_sha256": sha})
+                    if same_question:
+                        history.append(decision_row(prior, checkpoint_id, sha, True, same_goal))
+                        continue
+                    try:  # Another question's record adds history; it was never part of this question's review.
+                        history.append(decision_row(prior, checkpoint_id, sha, False, True))
+                    except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
+                        skipped_goal_records.append(checkpoint_id)
             finally:
                 db.close()
         except (sqlite3.Error, OSError, ValueError, KeyError, TypeError, AttributeError, UnicodeError, RecursionError) as exc:
@@ -704,8 +733,18 @@ class RDSAdvisor:
             review["status"] = "REVIEW_REQUIRED"
             search["loop_review"] = review
             return review  # No partial or corrupt history has pruning authority.
+        recorded = history
+        if skipped_goal_records:  # Partial same-goal history neither prunes routes nor prompts a jump.
+            recorded = [row for row in recorded if row["same_question"]]
+            review["flags"].append({"kind": "GOAL_HISTORY_SKIPPED", "count": len(skipped_goal_records),
+                "checkpoint_ids": skipped_goal_records[-5:],
+                "reason": "Another question's malformed record left same-goal history incomplete; only this question's records were used."})
+        history = [row for row in recorded if row["same_question"]]
         current_scope = (decision["goal_revision"], _json(decision["scope"]))
         scoped = [row for row in history if (row["goal_revision"], _json(row["scope"])) == current_scope]
+        # This question's and same-goal records in checkpoint order: the latest applicable decision wins.
+        applicable = [row for row in recorded if (row["same_question"] or row["same_goal"])
+                      and (row["goal_revision"], _json(row["scope"])) == current_scope]
         choices = []
         for row in scoped:
             if not choices or choices[-1]["route_sha256"] != row["route_sha256"]:
@@ -724,8 +763,10 @@ class RDSAdvisor:
             kept = []
             for candidate in output.get("candidates", []):
                 route = _loop_route(candidate)
-                matches = [row for row in scoped if row["route_sha256"] == route]
-                prior = matches[-1] if matches else next((row for row in reversed(history) if row["route_sha256"] == route), None)
+                # A renamed question with the same goal does not reset its routes, and an older decision under
+                # either question never overrides a later one.
+                prior = next((row for row in reversed(applicable) if row["route_sha256"] == route),
+                    next((row for row in reversed(recorded) if row["route_sha256"] == route), None))
                 domain_match = False
                 if prior is None:
                     from rds_guard import in_domain, same_family
@@ -743,6 +784,8 @@ class RDSAdvisor:
                         "route_sha256": route, "checkpoint_id": prior["checkpoint_id"], "checkpoint_sha256": prior["checkpoint_sha256"]}
                 if domain_match:
                     flag['witness_sha256'] = prior['falsification']['sha256']
+                if prior["question_id"] != decision["id"]:
+                    flag["recorded_question_id"] = prior["question_id"]
                 if flag not in review["flags"]:
                     review["flags"].append(flag)
                 if changed:
@@ -770,6 +813,32 @@ class RDSAdvisor:
             if flag["kind"] == "DECISION_OSCILLATION":
                 flag["candidate_ids"] = [c["id"] for c in search.get("candidates", [])
                     if c.get("status") == "READY" and _loop_route(c) in flag["route_sha256"]]
+        latest = {}
+        for row in applicable:
+            if row["same_goal"]:  # The latest choice for a route in this scope supersedes earlier outcomes.
+                latest.pop(row["route_sha256"], None)
+                latest[row["route_sha256"]] = row
+        rejected = [row for row in latest.values() if row["outcome"] == "rejected" and row["family_sha256"] is not None]
+        variants, related = [], {}
+        for candidate in search.get("candidates", []):
+            family, route = _loop_family(candidate), _loop_route(candidate)
+            if candidate.get("status") != "READY" or family is None:
+                continue
+            rows = [row for row in rejected if row["family_sha256"] == family and row["route_sha256"] != route]
+            if rows:  # Changed relevant evidence reopens review, as for exact repeats.
+                context = _loop_context(candidate, evidence)
+                rows = [row for row in rows if row["review_context"] == context]
+            if rows:
+                variants.append(candidate.get("id"))
+                related.update((row["checkpoint_id"], row) for row in rows)
+        if related:
+            # Parameter-only variants of routes rejected for this goal; not a capacity bound or a guilty premise.
+            order = {row["checkpoint_id"]: index for index, row in enumerate(recorded)}
+            related = sorted(related.values(), key=lambda row: order[row["checkpoint_id"]])
+            review["flags"].append({"kind": "GOAL_ROUTES_REJECTED", "goal_revision": decision["goal_revision"],
+                "rejected_routes": len(related), "candidate_ids": variants,
+                "question_ids": list(dict.fromkeys(row["question_id"] for row in related))[-8:],
+                "checkpoint_ids": [row["checkpoint_id"] for row in related][-5:]})
         review["status"] = "REVIEW_REQUIRED" if review["flags"] else "RECORDED_HISTORY_REVIEWED"
         search["loop_review"] = review
         return review
@@ -792,6 +861,26 @@ def _loop_route(candidate):
     else:
         return None
     return hashlib.sha256(_json(route).encode("utf-8")).hexdigest()
+
+
+def _loop_family(candidate):
+    """Route identity without action parameters: a parameter-only variant shares its family."""
+    action = candidate.get("action") if isinstance(candidate, dict) else None
+    # Without a structured target, intervention or operation, the description is part of route identity.
+    if (not isinstance(action, dict) or not isinstance(action.get("parameters", {}), dict)
+            or not any(key in action for key in ("target", "intervention", "operation"))):
+        return None
+    return _loop_route({**candidate, "action": {**action, "parameters": {}}})
+
+
+def _goal_key(goals):
+    """Order-insensitive identity of explicit goal predicates; None when absent or malformed."""
+    if not (isinstance(goals, list) and 1 <= len(goals) <= 32 and all(isinstance(goal, dict) for goal in goals)):
+        return None
+    try:
+        return _json(sorted(_json(goal) for goal in goals))
+    except (ValueError, TypeError, RecursionError):
+        return None
 
 
 def _loop_context(candidate, evidence):

@@ -262,6 +262,8 @@ def command(args):
                     stream.write(code)
             result['module'] = str(path)
         return result
+    name = _name(args.name) if getattr(args, 'name', None) is not None else None
     return {'status': 'LOCAL_CATALOG', 'tools': [{'id': v['id'], 'kind': v['kind'], 'data': v['data']}
-            for v in records(args.root) if v['kind'] in {'tool', 'tool-validation', 'tool-adoption'}],
+            for v in records(args.root) if v['kind'] in {'tool', 'tool-validation', 'tool-adoption'}
+            and (name is None or v['data']['name'] == name)],
             'research_policy_gain_measured': False}
