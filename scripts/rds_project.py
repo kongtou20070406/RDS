@@ -90,6 +90,10 @@ class ReceiptIntegrityError(ValueError):
     """A damaged owned receipt row: a rejection of the read, never another run's admission outcome (#104)."""
 
 
+class RunIntegrityError(ValueError):
+    """A damaged retained run is not another run's failed admission or execution."""
+
+
 def execution_route(argv, bindings, outpaths, root, objective=None, route=None, arm=None, executor_sha256=None):
     """Exact declared contents/roles; names, destinations and allowances are not new work."""
     inputs = {}
@@ -346,9 +350,12 @@ class ProjectStore:
         used = 0.0
         for event in prior:
             receipt = db.execute('SELECT run_id,sha256,body FROM receipts WHERE run_id=?', (event['run_id'],)).fetchone()
-            run = db.execute('SELECT body FROM runs WHERE id=?', (event['run_id'],)).fetchone()
+            row = db.execute('SELECT id,status,body FROM runs WHERE id=?', (event['run_id'],)).fetchone()
+            if row is None:
+                raise RunIntegrityError(f"Project run integrity failure: run {event['run_id']!r} is missing; inspect retained state")
+            run = cls._run_row(row)
             resource = cls._receipt(receipt)['resources']['wall_seconds'] if receipt else {}
-            observed = json.loads(run['body']).get('observed_wall_seconds', 0.0) if run else 0.0
+            observed = run['observed_wall_seconds']
             used += max(event['wall_seconds'], observed, resource.get('measured') or 0.0, resource.get('charged_estimate') or 0.0)
         return len(prior), used
 
@@ -641,10 +648,9 @@ class ProjectStore:
                     contract.get('objective_sha256'), arm=spec['arm'], executor_sha256=run['executor_sha256'])
             db.execute("BEGIN IMMEDIATE")
             require(db.execute("SELECT 1 FROM runs WHERE id=?", (run_id,)).fetchone() is None, "Run ID already exists")
+            retained = self._runs(db)
             if 'execution_policy' in contract:
-                previous = [json.loads(row['body']) for row in db.execute(
-                    "SELECT body FROM runs WHERE json_extract(body,'$.execution_route_sha256')=?",
-                    (run['execution_route_sha256'],))]
+                previous = [row for row in retained if row.get('execution_route_sha256') == run['execution_route_sha256']]
                 active = next((row for row in previous if row['status'] in {'RESERVED', 'RUNNING', 'COMPLETED'}), None)
                 require(active is None, 'Execution policy: observe or recover existing run ' + (active or {}).get('id', ''))
                 require(len(previous) < contract['execution_policy']['max_attempts'],
@@ -676,12 +682,81 @@ class ProjectStore:
             db.execute("INSERT INTO runs VALUES (?,?,?)", (run_id, "RESERVED", canonical(run)))
         return run
 
-    @staticmethod
-    def _run(db, run_id):
-        row = db.execute("SELECT body FROM runs WHERE id=?", (run_id,)).fetchone()
+    @classmethod
+    def _run(cls, db, run_id):
+        row = db.execute("SELECT id,status,body FROM runs WHERE id=?", (run_id,)).fetchone()
         require(row is not None, "Unknown run ID")
-        run = json.loads(row["body"])
-        require(digest(run["manifest"]) == run["manifest_sha256"], "Manifest integrity failure")
+        return cls._run_row(row)
+
+    @classmethod
+    def _runs(cls, db):
+        return [cls._run_row(row) for row in db.execute("SELECT id,status,body FROM runs ORDER BY id")]
+
+    @staticmethod
+    def _run_row(row):
+        """Validate retained writer values before displaying, dispatching or settling them.
+
+        No schema migration, content repair or new evidence claim. Optional later
+        aliases/policy fields are not required, and hot-loop reads remain keyed by id.
+        """
+        prefix = f"Project run integrity failure: run {row['id']!r} body "
+        suffix = "; inspect retained state"
+
+        def reject(reason):
+            raise RunIntegrityError(prefix + reason + suffix)
+
+        def unique(items):
+            result = {}
+            for key, value in items:
+                if key in result:
+                    reject("repeats a JSON key")
+                result[key] = value
+            return result
+
+        try:
+            run = json.loads(row["body"], object_pairs_hook=unique)
+        except RunIntegrityError:
+            raise
+        except (ValueError, TypeError, RecursionError):
+            reject("is not valid JSON")
+        if not isinstance(run, dict):
+            reject("is not an object")
+        if run.get("id") != row["id"]:
+            reject("names a different run")
+        if not isinstance(run.get("status"), str) or run["status"] not in {"RESERVED", "RUNNING", *TERMINAL} or run["status"] != row["status"]:
+            reject("does not match its recorded status")
+        if not isinstance(run.get("manifest"), dict) or run["manifest"].get("id") != row["id"]:
+            reject("has no matching manifest")
+        try:
+            canonical(run).encode("utf-8")
+            manifest_sha = digest(run["manifest"])
+        except (ValueError, RecursionError):
+            reject("has no canonical encoding")
+        if manifest_sha != run.get("manifest_sha256"):
+            reject("has a Manifest integrity failure")
+        required = {"resource_estimates", "protocol", "executor", "executor_sha256", "attempt_id",
+                    "worker_pid", "pid", "started_at", "finished_at", "observed_wall_seconds", "scheduler"}
+        if not required <= run.keys():
+            reject("is missing execution state")
+        if (not isinstance(run["resource_estimates"], dict)
+                or not isinstance(run["protocol"], dict)
+                or not isinstance(run["executor"], str) or not run["executor"]
+                or not isinstance(run["executor_sha256"], str)
+                or (run["attempt_id"] is not None and not isinstance(run["attempt_id"], str))
+                or (run["scheduler"] is not None and not isinstance(run["scheduler"], dict))):
+            reject("has invalid execution state")
+        for value in [run["observed_wall_seconds"], *run["resource_estimates"].values()]:
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+                reject("has invalid recorded costs")
+            try:
+                finite = math.isfinite(value)
+            except OverflowError:
+                finite = False
+            if not finite:
+                reject("has invalid recorded costs")
+        for key in ("worker_pid", "pid"):
+            if run[key] is not None and (type(run[key]) is not int or run[key] <= 0):
+                reject("has an invalid process identity")
         return run
 
     @staticmethod
@@ -733,6 +808,7 @@ class ProjectStore:
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             run = self._run(db, run_id)
+            self._runs(db)
             if 'execution_policy' in self._contract(db) and (run['status'] != 'RESERVED' or run['attempt_id'] is not None):
                 return self._observe(db, run)
             require(run["status"] == "RESERVED" and run["attempt_id"] is None, "Run already dispatched or started; recover never reruns it")
@@ -800,11 +876,12 @@ class ProjectStore:
             db.execute("BEGIN IMMEDIATE")
             run = self._run(db, run_id)
             require(run["status"] == "RESERVED" and run["attempt_id"] == attempt_id, "Run cannot be started twice")
+            self._runs(db)
             try:
                 self._check_start(db, run)
             except ValueError as exc:
                 # A damaged prior receipt leaves this run RESERVED and unsettled, recoverable once restored.
-                if isinstance(exc, ReceiptIntegrityError) or (
+                if isinstance(exc, (ReceiptIntegrityError, RunIntegrityError)) or (
                         'stop_policy' not in self._contract(db) and 'maintenance' not in run['manifest']):
                     raise
                 admission_error = str(exc)
@@ -917,6 +994,10 @@ class ProjectStore:
                 elif process.poll() is None:
                     process.kill()
                 exit_code = process.wait()
+            if isinstance(exc, (ReceiptIntegrityError, RunIntegrityError)):
+                # Retain the attempt and unknown costs. Recovery can reconcile it
+                # after the damaged history is restored; this is no FAILED receipt.
+                raise
             status = "INTERRUPTED" if isinstance(exc, (KeyboardInterrupt, SystemExit)) else "FAILED"
             if str(exc) == 'Stop policy: CAMPAIGN_DEADLINE':
                 stop_reason = 'CAMPAIGN_DEADLINE'
@@ -991,6 +1072,7 @@ class ProjectStore:
         receipt["sha256"] = digest(receipt)
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
+            self._runs(db)
             old = db.execute("SELECT run_id,sha256,body FROM receipts WHERE run_id=?", (run_id,)).fetchone()
             if old:
                 return self._receipt(old)
@@ -1014,7 +1096,9 @@ class ProjectStore:
 
     def recover(self, run_id):
         with self._db(True) as db:
+            db.execute("BEGIN")
             run = self._run(db, run_id)
+            self._runs(db)
             old = db.execute("SELECT run_id,sha256,body FROM receipts WHERE run_id=?", (run_id,)).fetchone()
             if old:
                 return self._receipt(old)
@@ -1039,7 +1123,7 @@ class ProjectStore:
                                            "remaining": row["cap"] - row["spent"] - row["charged"] - row["reserved"],
                                            "unit": "seconds" if row["resource"].endswith("_seconds") else row["resource"]}
             snapshot = {"schema": 1, "contract": contract, "contract_sha256": digest(contract), "budget": budget,
-                    "runs": [json.loads(r["body"]) for r in db.execute("SELECT body FROM runs ORDER BY id")],
+                    "runs": self._runs(db),
                     "exposures": [json.loads(r["body"]) for r in db.execute("SELECT body FROM exposures ORDER BY id")],
                     "receipts": [self._receipt(r) for r in db.execute("SELECT run_id,sha256,body FROM receipts ORDER BY run_id")]}
         if check_bindings:
