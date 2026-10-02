@@ -225,6 +225,18 @@ class TripleAffirmativeCLITests(unittest.TestCase):
             self.assertEqual((row['truth'], row['evidence_status']), ('TRUE', 'ARTIFACT_OBSERVED'))
             self.assertIn('reuses the evidence', row['affirmation_reason'])
 
+    def test_non_ascii_index_spelling_of_the_same_element_is_not_a_new_reading(self):
+        # Unicode digits are not RFC 6901 indexes; they must not mint a second locator for one element.
+        values = {'runs': [0.05]}
+        review = self.advise(context(DL_GOAL, DL_AFFIRM), 'heldout_error', values,
+                             aliases={'heldout_error': 'runs/0', 'clean_root_replay_error': 'runs/٠',
+                                      'worst_declared_cohort_error': 'runs/０'})
+        self.assertOpen(review, ['PORTABLE', 'APPLICABLE'], 'UNKNOWN', 'RESOLVE_PREMISE')
+        self.assertEqual(review['goal']['triple_affirmative']['found']['status'], 'TRUE')
+        for name in ('portable', 'applicable'):
+            row = review['goal']['triple_affirmative'][name]['conditions'][0]
+            self.assertEqual((row['truth'], row['affirms']), ('UNKNOWN', 'UNKNOWN'))
+
     def test_derivation_from_the_goal_measurement_is_reuse(self):
         values = {'heldout_error': 0.05, 'worst_declared_cohort_error': 0.09}
         derived = [{'id': 'clean_root_replay_error', 'method': 'mean', 'input_fact_ids': ['heldout_error']}]
