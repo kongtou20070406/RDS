@@ -47,8 +47,9 @@ SPECIFY_CAPABILITY_REASON = ("A sourced unsupported operation blocks an open goa
                              "for it; the reusable operation it requires is the next step.")
 SPECIFY_CAPABILITY_TEXT = (
     "Specify the smallest reusable adaptation, composition or new operation that meets each referenced required_capability "
-    "input/operation/output contract, with a checker on a known case, and compare it with the smallest repair of the current "
-    "route. The shortlist covers only the bounded catalogue; availability and prerequisites are not assessed. Answer any other "
+    "input/operation/output contract, with a checker on a known case, and compare it with the smallest repair; routes "
+    "recorded as rejected stay rejected. The shortlist covers only the bounded catalogue; availability and prerequisites "
+    "are not assessed. Goal predicates stay UNKNOWN or FALSE until the checker's result is recorded. Answer any other "
     "referenced obstruction with its stated response. Declared obstructions are input-reported, not a diagnosis, and "
     "authorize neither execution nor installation. ")
 
@@ -585,13 +586,17 @@ def _obstruction_review(records, context, goal):
 def _specify_capability(move, review, entries, integrity):
     """Whether the applicable capability requirements supersede the existing move kind."""
     capability = {e["obligation"] for e in entries if e["status"] == "APPLICABLE" and e["response"] == "CAPABILITY_REQUIRED"}
-    if integrity or not capability:
+    goal = review.get("goal") or {}
+    # A satisfied goal is not blocked; a loop-history move before the goal check must not become a capability step.
+    if integrity or not capability or goal.get("status") == TRUE:
         return False
-    if move["kind"] in CAPABILITY_SUPERSEDES:
-        return True
-    unknown = {c["fact"] for c in (review.get("goal") or {}).get("conditions", []) if c["truth"] == UNKNOWN}
-    return (move["kind"] == "RESOLVE_PREMISE" and move["reason"] == GOAL_EVIDENCE_REASON
-            and bool(unknown) and unknown <= capability)
+    unknown = {c["fact"] for c in goal.get("conditions", []) if c["truth"] == UNKNOWN}
+    # Any UNKNOWN goal predicate must be covered, whichever branch produced the move, so recorded
+    # rejections never make superseding easier than the plain goal-evidence step.
+    if not unknown <= capability:
+        return False
+    return (move["kind"] in CAPABILITY_SUPERSEDES or
+            (move["kind"] == "RESOLVE_PREMISE" and move["reason"] == GOAL_EVIDENCE_REASON and bool(unknown)))
 
 
 def review_obstructions(search, context):
@@ -615,7 +620,9 @@ def review_obstructions(search, context):
                              "ref": f"selection_review.obstruction_review[{index}]"} for index, entry in applicable]
     integrity = any(f.get("kind") == "LOOP_HISTORY_REVIEW_ERROR" for f in search.get("loop_review", {}).get("flags", []))
     if _specify_capability(move, review, entries, integrity):
-        move.update(supersedes=move["kind"], kind="SPECIFY_CAPABILITY", reason=SPECIFY_CAPABILITY_REASON,
+        # The superseded kind and reason stay as data, so recorded rejections remain visible.
+        move.update(supersedes={"kind": move["kind"], "reason": move["reason"]}, kind="SPECIFY_CAPABILITY",
+                    reason=SPECIFY_CAPABILITY_REASON,
                     prompt=SPECIFY_CAPABILITY_TEXT + MOVE_PRESERVE_CLAUSES)
     elif not integrity and move["prompt"].endswith(MOVE_PRESERVE_CLAUSES):
         move["prompt"] = move["prompt"][:-len(MOVE_PRESERVE_CLAUSES)] + OBSTRUCTION_MOVE_TEXT + MOVE_PRESERVE_CLAUSES

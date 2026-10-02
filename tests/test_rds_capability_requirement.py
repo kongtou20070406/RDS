@@ -14,8 +14,8 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from rds_advisor import RDSAdvisor
-from rds_advisor_search import (MOVE_PRESERVE_CLAUSES, OBSTRUCTION_MOVE_TEXT, SPECIFY_CAPABILITY_TEXT, review_obstructions,
-                                search_directions)
+from rds_advisor_search import (GOAL_EVIDENCE_REASON, MOVE_PRESERVE_CLAUSES, OBSTRUCTION_MOVE_TEXT, SPECIFY_CAPABILITY_TEXT,
+                                review_obstructions, search_directions)
 
 
 def route(goal, decision='next', kind='PAIRED_TEST', node='route'):
@@ -91,7 +91,8 @@ class CapabilityRequirementCLITests(unittest.TestCase):
         self.assertNotIn('obstructions', baseline['next_move'])
         # A generic reformulation becomes the specific jump; authorization and preserved inputs are unchanged.
         move, before = review['next_move'], baseline['next_move']
-        self.assertEqual((before['kind'], move['kind'], move['supersedes']), ('REFORMULATE', 'SPECIFY_CAPABILITY', 'REFORMULATE'))
+        self.assertEqual((before['kind'], move['kind']), ('REFORMULATE', 'SPECIFY_CAPABILITY'))
+        self.assertEqual(move['supersedes'], {'kind': before['kind'], 'reason': before['reason']})
         self.assertEqual({k: move[k] for k in ('basis', 'authorization', 'preserve_refs')},
                          {k: before[k] for k in ('basis', 'authorization', 'preserve_refs')})
         entry = review['obstruction_review'][0]
@@ -176,6 +177,11 @@ class CapabilityRequirementCLITests(unittest.TestCase):
             DEEP_LEARNING, [capability, {**obstruction(goal, 'MISSING_INPUT'), 'scope': {'domain': 'older'}}])
         self.assertEqual([e.get('response', e['status']) for e in review['obstruction_review']],
                          ['CAPABILITY_REQUIRED', 'NOT_APPLICABLE'])
+        # An unsourced co-declared cause also holds back; only scope or removal retires an old record.
+        unsourced = obstruction(goal, 'ADAPTER_MISMATCH')
+        del unsourced['source']
+        _, review = self.baseline_and_review(DEEP_LEARNING, [capability, unsourced])
+        self.assertEqual([e['response'] for e in review['obstruction_review']], ['DISCRIMINATING_CHECK'] * 2)
         # Two records with the same cause on the same obligation are not a conflict.
         second = {**capability, 'id': 'second'}
         _, review = self.baseline_and_review(DEEP_LEARNING, [capability, second])
@@ -250,8 +256,8 @@ class CapabilityRequirementCLITests(unittest.TestCase):
         self.assertEqual(exact['response'], 'CAPABILITY_REQUIRED')
         self.assertTrue(exact['required_capability']['catalogue']['shortlist'])
         # Every UNKNOWN goal predicate is covered by the requirement, so it supersedes the evidence step.
-        self.assertEqual((baseline['next_move']['kind'], review['next_move']['kind'], review['next_move']['supersedes']),
-                         ('RESOLVE_PREMISE', 'SPECIFY_CAPABILITY', 'RESOLVE_PREMISE'))
+        self.assertEqual((baseline['next_move']['kind'], review['next_move']['kind']), ('RESOLVE_PREMISE', 'SPECIFY_CAPABILITY'))
+        self.assertEqual(review['next_move']['supersedes'], {'kind': 'RESOLVE_PREMISE', 'reason': GOAL_EVIDENCE_REASON})
         _, review = self.baseline_and_review(MATHEMATICS, [no_contract, unsourced, undetermined])
         entries = {e['id']: e for e in review['obstruction_review']}
         for name in ('vague', 'unsourced', 'unclear'):
@@ -260,6 +266,22 @@ class CapabilityRequirementCLITests(unittest.TestCase):
                 self.assertEqual(entries[name]['cause_status'], 'UNKNOWN')
                 self.assertNotIn('required_capability', entries[name])
         self.assertEqual(review['next_move']['kind'], 'RESOLVE_PREMISE')
+
+    def test_covered_unknown_predicate_beside_a_failed_one_specifies_the_capability(self):
+        goal = MATHEMATICS[0]
+        ctx = context(*MATHEMATICS)
+        ctx['facts']['side_condition_checked'] = {'value': False, 'source': 'synthetic-observation.json'}
+        ctx['decision']['goal_conditions'].append({'fact': 'side_condition_checked', 'op': 'eq', 'value': True})
+        baseline = self.advise(ctx, route(goal))
+        # The failed predicate's own causes compete, so only the UNKNOWN one carries a capability requirement.
+        ctx['obstructions'] = [obstruction(goal, 'UNSUPPORTED_OPERATION', requirement=REQUIREMENT),
+                               obstruction('side_condition_checked', 'MISSING_INPUT', id='side-missing'),
+                               obstruction('side_condition_checked', 'EXECUTION_CAP', id='side-cap')]
+        review = self.advise(ctx, route(goal))
+        self.assertEqual(baseline['next_move']['reason'], GOAL_EVIDENCE_REASON)
+        self.assertEqual(review['next_move']['kind'], 'SPECIFY_CAPABILITY')
+        self.assertEqual([o['response'] for o in review['next_move']['obstructions']],
+                         ['CAPABILITY_REQUIRED', 'DISCRIMINATING_CHECK', 'DISCRIMINATING_CHECK'])
 
     def test_an_uncovered_unknown_predicate_or_goal_link_gap_keeps_its_move(self):
         goal = MATHEMATICS[0]
@@ -451,6 +473,46 @@ class CapabilityRequirementReviewTests(unittest.TestCase):
         move = search['selection_review']['next_move']
         self.assertEqual((move['kind'], move['obstructions'][0]['response']), ('RESOLVE_PREMISE', 'CAPABILITY_REQUIRED'))
         self.assertNotIn('supersedes', move)
+
+    def test_goal_evidence_reason_matches_the_move_it_supersedes(self):
+        ctx = context(*MATHEMATICS)
+        move = search_directions(route(MATHEMATICS[0]), ctx)['selection_review']['next_move']
+        self.assertEqual((move['kind'], move['reason']), ('RESOLVE_PREMISE', GOAL_EVIDENCE_REASON))
+
+    def superseded(self, ctx, goal, kind, reason, record=None):
+        ctx['obstructions'] = [record or obstruction(goal, 'UNSUPPORTED_OPERATION', requirement=REQUIREMENT)]
+        search = search_directions(route(goal), ctx)
+        # Stands in for the producing _next_move branch (a satisfied goal has no move of its own).
+        search['selection_review'].setdefault('next_move', {'authorization': 'UNCHANGED', 'prompt': MOVE_PRESERVE_CLAUSES})
+        search['selection_review']['next_move'].update(kind=kind, reason=reason)
+        review_obstructions(search, ctx)
+        return search['selection_review']['next_move']
+
+    def test_superseding_follows_move_kind_and_goal_coverage(self):
+        goal = DEEP_LEARNING[0]
+        alternative = self.superseded(context(*DEEP_LEARNING), goal, 'REVIEW_ALTERNATIVE', 'One procedure was supplied.')
+        self.assertEqual(alternative['kind'], 'SPECIFY_CAPABILITY')
+        for kind, reason in (('DESIGN_DISCRIMINATOR', 'Supported same-scope prediction sets overlap.'),
+                             ('RESOLVE_PREMISE', 'The bounded search omitted part of the supplied scope.'),
+                             ('RESOLVE_PREMISE', 'Resolve the affected evidence, prediction scope, method or budget conditions first.'),
+                             ('REVIEW_GOAL_LINK', 'No declared dependency path.')):
+            with self.subTest(kind=kind, reason=reason):
+                move = self.superseded(context(*DEEP_LEARNING), goal, kind, reason)
+                self.assertEqual((move['kind'], move['reason']), (kind, reason))
+                self.assertNotIn('supersedes', move)
+        # A goal-history REFORMULATE with another UNKNOWN predicate keeps its kind: rejections never make superseding easier.
+        ctx = context(*MATHEMATICS)
+        ctx['decision']['goal_conditions'].append({'fact': 'side_condition_checked', 'op': 'eq', 'value': True})
+        rejected = 'The ready action changes only parameters of 2 route(s) recorded as rejected.'
+        move = self.superseded(ctx, MATHEMATICS[0], 'REFORMULATE', rejected)
+        self.assertEqual((move['kind'], move['reason']), ('REFORMULATE', rejected))
+        # A satisfied goal is not blocked, even when a loop-repeat REFORMULATE precedes the goal check.
+        ctx = context(*MATHEMATICS)
+        ctx['facts'][MATHEMATICS[0]] = {'value': True, 'source': 'synthetic-observation.json'}
+        ctx['objective_binding'] = {'objective_sha256': 'a' * 64}
+        record = obstruction('completion_standard', 'UNSUPPORTED_OPERATION', requirement=REQUIREMENT)
+        move = self.superseded(ctx, MATHEMATICS[0], 'REFORMULATE', 'Recorded choices repeat a rejected route.', record)
+        self.assertEqual(move['kind'], 'REFORMULATE')
 
     def test_healthy_scoped_obligation_is_not_blocked_by_a_completion_obstruction(self):
         graph = route('completion_standard', kind='OBLIGATION_CHECK')
