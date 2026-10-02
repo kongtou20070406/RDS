@@ -2,6 +2,9 @@
 
 ## 5.8.0 — Unreleased
 
+- Give project campaigns a machine-readable next step: `project status --brief` now ends with a derived `next_move` (step plus a runnable command), and `project next` prints only that step. The step is computed from recorded ledger state only — register, execute, recover, compare or record the decision — so the caller never has to infer campaign position from raw snapshots.
+- Add `project compare` and an optional `primary_metric` contract field (`name`, `direction`, `min_useful_delta` as an exact rational string). After both arms succeed, the kernel reads the recorded `project_output` artifacts, verifies their hashes, and judges the delta against the precommitted threshold with exact rational arithmetic (`GAIN_CONFIRMED`, `NOT_CONFIRMED`, `BELOW_RESOLUTION`, or `UNKNOWN` with the recorded reason). Exactness holds over the recorded values; float inputs are parsed via their shortest exact decimal representation, never re-rounded for the verdict. Both run receipt SHA-256 values are returned as evidence anchors.
+
 - Add optional Rust ABI v2 hypergraph closure with ordered witnesses and contradiction parity, verified in compiled Windows/Linux CI and falling back to Python when unavailable. Add a bounded rational-polynomial rewrite example; unresolved equivalence remains UNKNOWN and no independent certificate is claimed.
 
 - Add frozen project stops with a ledger-wide campaign deadline and an optional retained-log growth watchdog. Preserve partial output, original failures and settled costs. Bind maintenance to the native objective and a ready original-goal dependency, with atomic cumulative wall/use allowances retained across failures and recovery; zero allowance refuses maintenance. Quick/theory child routes refuse these policies pending their integration. Maintenance receipts keep scientific assessments UNKNOWN; this project consumer does not close the 5.8 umbrella.

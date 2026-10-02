@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+import sqlite3
 import sys
 import time
 
@@ -652,14 +653,19 @@ def brief(root, value, version, formal=False):
                            if artifact.get('kind') == 'stderr.bin' and artifact.get('size', 0) > 0), None)
             if stderr is not None:
                 summary['latest_receipt']['stderr_path'] = str((Path(latest['cwd']) / stderr['path']).resolve())
+    ledger_root = Path(value.get('ledger_root', root)).resolve()
+    ledger = ledger_root / '.rds' / 'project.sqlite3'
+    if ledger.is_file() and isinstance(value.get('runs'), list) and isinstance(value.get('contract'), dict):
+        try:
+            summary['next_move'] = ProjectStore(ledger_root).next_move()
+        except (ValueError, OSError, sqlite3.Error):
+            summary['next_move'] = {'next_move': 'inspect recorded project state', 'command': 'python -B scripts/rds_cli.py project status'}
     assurance = value.get('assurance') if formal else None
     formal_status = value.get('status', 'UNKNOWN') if formal and assurance in {'CERTIFICATE_CHECKED', 'LEAN_KERNEL_CHECKED'} else 'UNKNOWN'
     if formal:
         summary['formal_status'] = formal_status
         summary['formal_assurance'] = assurance or 'NONE'
         summary['application_status'] = value.get('application_status', 'UNKNOWN')
-    ledger_root = Path(value.get('ledger_root', root)).resolve()
-    ledger = ledger_root / '.rds' / 'project.sqlite3'
     if ledger.is_file():
         store = ProjectStore(ledger_root)
         with store._db(True) as db:
