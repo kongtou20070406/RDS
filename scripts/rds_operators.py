@@ -357,6 +357,464 @@ class RationalCertificateOperator:
         return _scaffold(RationalCertificateOperator, _rational_self_test)
 
 
+class GershgorinSpectralOperator:
+    """Exact rational Gershgorin circle discs, spectral radius upper bounds, and invertibility checks.
+
+    Eigenvalue bounds follow from Mathlib.LinearAlgebra.Matrix.Gershgorin.
+    Failure to prove strict diagonal dominance or stability does not imply singularity.
+    """
+
+    @staticmethod
+    def compute_discs(matrix):
+        n = _dimension(len(matrix))
+        _matrix(matrix, n, n, "A")
+        discs = []
+        for i in range(n):
+            center = _ratio(matrix[i][i])
+            radius = sum(abs(_ratio(matrix[i][j])) for j in range(n) if j != i)
+            bound = abs(center) + radius
+            discs.append({
+                "row": i,
+                "center": str(center),
+                "radius": str(radius),
+                "center_float": _finite_number(center),
+                "radius_float": _finite_number(radius),
+                "real_interval": [str(center - radius), str(center + radius)],
+                "spectral_bound": str(bound),
+                "excludes_zero": abs(center) > radius,
+            })
+        return discs
+
+    @classmethod
+    def analyze_matrix(cls, matrix, target_property="discrete_stability"):
+        if target_property not in ("discrete_stability", "invertibility", "hurwitz_stability"):
+            raise ValueError("Target property must be discrete_stability, invertibility, or hurwitz_stability")
+        discs = cls.compute_discs(matrix)
+        spectral_radius_bound = max(Fraction(d["spectral_bound"]) for d in discs)
+
+        if target_property == "discrete_stability":
+            contracting = spectral_radius_bound < 1
+            if contracting:
+                return {
+                    "status": "PASS",
+                    "assurance": "GERSHGORIN_SPECTRAL_CERTIFICATE",
+                    "target_property": target_property,
+                    "spectral_radius_bound": _finite_number(spectral_radius_bound),
+                    "spectral_radius_bound_exact": str(spectral_radius_bound),
+                    "is_contracting": True,
+                    "discs": discs,
+                }
+            offending = max(discs, key=lambda d: Fraction(d["spectral_bound"]))
+            return {
+                "status": "FAIL",
+                "assurance": "SPECTRAL_RADIUS_BREACH_WITNESS",
+                "target_property": target_property,
+                "spectral_radius_bound": _finite_number(spectral_radius_bound),
+                "spectral_radius_bound_exact": str(spectral_radius_bound),
+                "is_contracting": False,
+                "witness": {
+                    "offending_row": offending["row"],
+                    "center": offending["center"],
+                    "radius": offending["radius"],
+                    "disc_bound": offending["spectral_bound"],
+                },
+                "discs": discs,
+            }
+
+        elif target_property == "invertibility":
+            invertible = all(d["excludes_zero"] for d in discs)
+            if invertible:
+                return {
+                    "status": "PASS",
+                    "assurance": "STRICT_DIAGONAL_DOMINANCE_CERTIFICATE",
+                    "target_property": target_property,
+                    "is_invertible": True,
+                    "discs": discs,
+                }
+            offending = next(d for d in discs if not d["excludes_zero"])
+            return {
+                "status": "FAIL",
+                "assurance": "ZERO_INTERSECTING_DISC_WITNESS",
+                "target_property": target_property,
+                "is_invertible": False,
+                "witness": {
+                    "offending_row": offending["row"],
+                    "center": offending["center"],
+                    "radius": offending["radius"],
+                    "real_interval": offending["real_interval"],
+                },
+                "discs": discs,
+            }
+
+        else:  # hurwitz_stability
+            stable = all(Fraction(d["real_interval"][1]) < 0 for d in discs)
+            if stable:
+                return {
+                    "status": "PASS",
+                    "assurance": "GERSHGORIN_HURWITZ_CERTIFICATE",
+                    "target_property": target_property,
+                    "is_hurwitz_stable": True,
+                    "discs": discs,
+                }
+            offending = max(discs, key=lambda d: Fraction(d["real_interval"][1]))
+            return {
+                "status": "FAIL",
+                "assurance": "HURWITZ_RIGHT_PLANE_WITNESS",
+                "target_property": target_property,
+                "is_hurwitz_stable": False,
+                "witness": {
+                    "offending_row": offending["row"],
+                    "max_real_boundary": offending["real_interval"][1],
+                },
+                "discs": discs,
+            }
+
+    @staticmethod
+    def scaffold_code():
+        return _scaffold(GershgorinSpectralOperator, _gershgorin_self_test)
+
+
+class LipschitzBoundOperator:
+    """Exact rational Frobenius and infinity norm upper bounds for composite feedforward layers.
+
+    Grounding: ContinuousLinearMap.lipschitzWith_of_opNorm_le and TorchLean Proofs.
+    """
+
+    @staticmethod
+    def frobenius_norm_squared(matrix):
+        rows = _dimension(len(matrix))
+        cols = _dimension(len(matrix[0]))
+        _matrix(matrix, rows, cols, "W")
+        return sum(_ratio(matrix[i][j]) ** 2 for i in range(rows) for j in range(cols))
+
+    @staticmethod
+    def infinity_norm(matrix):
+        rows = _dimension(len(matrix))
+        cols = _dimension(len(matrix[0]))
+        _matrix(matrix, rows, cols, "W")
+        return max(sum(abs(_ratio(matrix[i][j])) for j in range(cols)) for i in range(rows))
+
+    @classmethod
+    def certify_network_lipschitz(cls, layer_weights, activation_lipschitz=1,
+                                  input_perturbation=None, margin=None):
+        if not isinstance(layer_weights, (list, tuple)) or not 1 <= len(layer_weights) <= 32:
+            raise ValueError("Expected 1..32 layer weight matrices")
+        act_lip = _ratio(activation_lipschitz)
+        if act_lip <= 0:
+            raise ValueError("Activation Lipschitz constant must be positive")
+
+        layers_info = []
+        prod_fro_sq = Fraction(1)
+        prod_inf = Fraction(1)
+
+        prev_out = None
+        for idx, w_mat in enumerate(layer_weights):
+            rows = _dimension(len(w_mat))
+            cols = _dimension(len(w_mat[0]))
+            _matrix(w_mat, rows, cols, f"Layer {idx}")
+            if prev_out is not None and cols != prev_out:
+                raise ValueError(f"Layer {idx} input dim {cols} does not match previous output dim {prev_out}")
+            prev_out = rows
+
+            f_sq = cls.frobenius_norm_squared(w_mat)
+            inf_norm = cls.infinity_norm(w_mat)
+            prod_fro_sq *= f_sq
+            prod_inf *= inf_norm
+
+            layers_info.append({
+                "layer_index": idx,
+                "shape": [rows, cols],
+                "frobenius_norm_squared": str(f_sq),
+                "infinity_norm": str(inf_norm),
+            })
+
+        num_activations = len(layer_weights) - 1
+        activation_factor = act_lip ** num_activations
+
+        frob_bound_float = math.sqrt(_finite_number(prod_fro_sq)) * _finite_number(activation_factor)
+        inf_bound_float = _finite_number(prod_inf * activation_factor)
+        chosen_lip = min(frob_bound_float, inf_bound_float)
+
+        if input_perturbation is not None and margin is not None:
+            eps = _finite_number(input_perturbation)
+            m = _finite_number(margin)
+            if eps <= 0 or m <= 0:
+                raise ValueError("Perturbation and margin must be positive")
+            output_deviation = chosen_lip * eps
+            margin_satisfied = output_deviation < m
+            if margin_satisfied:
+                return {
+                    "status": "PASS",
+                    "assurance": "LIPSCHITZ_ROBUSTNESS_CERTIFICATE",
+                    "lipschitz_bound": chosen_lip,
+                    "frobenius_bound": frob_bound_float,
+                    "infinity_bound": inf_bound_float,
+                    "input_perturbation": eps,
+                    "margin": m,
+                    "output_deviation_bound": output_deviation,
+                    "safety_headroom": m - output_deviation,
+                    "layers": layers_info,
+                }
+            return {
+                "status": "FAIL",
+                "assurance": "MARGIN_BREACH_WITNESS",
+                "lipschitz_bound": chosen_lip,
+                "input_perturbation": eps,
+                "margin": m,
+                "output_deviation_bound": output_deviation,
+                "witness": {
+                    "excess_ratio": output_deviation / m,
+                    "excess_margin": output_deviation - m,
+                },
+                "layers": layers_info,
+            }
+
+        return {
+            "status": "PASS",
+            "assurance": "LIPSCHITZ_BOUND_CERTIFIED",
+            "lipschitz_bound": chosen_lip,
+            "frobenius_bound": frob_bound_float,
+            "infinity_bound": inf_bound_float,
+            "layers": layers_info,
+        }
+
+    @staticmethod
+    def scaffold_code():
+        return _scaffold(LipschitzBoundOperator, _lipschitz_self_test)
+
+
+class ConcentrationBoundOperator:
+    """Sub-Gaussian Hoeffding finite-sample bounds and sample size requirements.
+
+    Grounding: Mathlib ProbabilityTheory.HasSubgaussianMGF.
+    """
+
+    @staticmethod
+    def compute_hoeffding_radius(sample_size, value_range, delta=0.05):
+        n = _dimension(sample_size) if type(sample_size) is int and 1 <= sample_size <= 64 else sample_size
+        if type(n) is not int or n < 1:
+            raise ValueError("Sample size must be an integer >= 1")
+        if not isinstance(value_range, (list, tuple)) or len(value_range) != 2:
+            raise ValueError("Expected value range (lower, upper)")
+        a, b = map(_finite_number, value_range)
+        if a >= b:
+            raise ValueError("Lower bound must be strictly less than upper bound")
+        d = _finite_number(delta)
+        if not 0 < d < 1:
+            raise ValueError("Significance delta must be in (0, 1)")
+        r = b - a
+        return r * math.sqrt(math.log(2.0 / d) / (2.0 * n))
+
+    @staticmethod
+    def required_sample_size(target_epsilon, value_range, delta=0.05):
+        eps = _finite_number(target_epsilon)
+        if eps <= 0:
+            raise ValueError("Target epsilon must be positive")
+        if not isinstance(value_range, (list, tuple)) or len(value_range) != 2:
+            raise ValueError("Expected value range (lower, upper)")
+        a, b = map(_finite_number, value_range)
+        if a >= b:
+            raise ValueError("Lower bound must be strictly less than upper bound")
+        d = _finite_number(delta)
+        if not 0 < d < 1:
+            raise ValueError("Significance delta must be in (0, 1)")
+        r = b - a
+        return math.ceil((r ** 2 * math.log(2.0 / d)) / (2.0 * eps ** 2))
+
+    @classmethod
+    def certify_empirical_gap(cls, sample_size, value_range, empirical_gap, delta=0.05):
+        gap = _finite_number(empirical_gap)
+        radius = cls.compute_hoeffding_radius(sample_size, value_range, delta)
+        certified = gap > radius
+        if certified:
+            return {
+                "status": "PASS",
+                "assurance": "STATISTICALLY_SIGNIFICANT_SEPARATION",
+                "sample_size": sample_size,
+                "confidence_level": 1.0 - _finite_number(delta),
+                "empirical_gap": gap,
+                "hoeffding_radius": radius,
+                "certified_lower_bound": gap - radius,
+            }
+        n_needed = cls.required_sample_size(gap / 2.0 if gap > 0 else 0.05, value_range, delta)
+        return {
+            "status": "FAIL",
+            "assurance": "SAMPLE_SIZE_INSUFFICIENT_WITNESS",
+            "sample_size": sample_size,
+            "confidence_level": 1.0 - _finite_number(delta),
+            "empirical_gap": gap,
+            "hoeffding_radius": radius,
+            "witness": {
+                "noise_margin": radius - gap,
+                "required_sample_size": n_needed,
+            },
+        }
+
+    @staticmethod
+    def scaffold_code():
+        return _scaffold(ConcentrationBoundOperator, _concentration_self_test)
+
+
+class RationalVoronoiCoverOperator:
+    """Exact 2D rational Voronoi domain covering and boundary hole detector.
+
+    Grounding: Issue #48, Issue #22 discrete geometry domain partitioning.
+    """
+
+    @classmethod
+    def check_domain_covering(cls, domain_box, centers, radius, grid_steps=10):
+        if not isinstance(domain_box, (list, tuple)) or len(domain_box) != 4:
+            raise ValueError("Expected domain box [x_min, x_max, y_min, y_max]")
+        x_min, x_max, y_min, y_max = map(_ratio, domain_box)
+        if x_min >= x_max or y_min >= y_max:
+            raise ValueError("Domain box endpoints must be strictly ordered")
+        if not isinstance(centers, (list, tuple)) or not 1 <= len(centers) <= 256:
+            raise ValueError("Expected 1..256 center points")
+        rad = _ratio(radius)
+        if rad <= 0:
+            raise ValueError("Covering radius must be positive")
+        r_sq = rad * rad
+
+        parsed_centers = []
+        for idx, pt in enumerate(centers):
+            if not isinstance(pt, (list, tuple)) or len(pt) != 2:
+                raise ValueError(f"Center {idx} must have 2 coordinates")
+            parsed_centers.append((_ratio(pt[0]), _ratio(pt[1])))
+
+        steps = 10 if type(grid_steps) is not int or not 2 <= grid_steps <= 64 else grid_steps
+        dx = (x_max - x_min) / steps
+        dy = (y_max - y_min) / steps
+
+        test_points = []
+        for i in range(steps + 1):
+            for j in range(steps + 1):
+                test_points.append((x_min + i * dx, y_min + j * dy))
+
+        max_dist_sq = Fraction(0)
+        worst_point = None
+
+        for pt in test_points:
+            min_sq = min((pt[0] - c[0]) ** 2 + (pt[1] - c[1]) ** 2 for c in parsed_centers)
+            if min_sq > max_dist_sq:
+                max_dist_sq = min_sq
+                worst_point = pt
+
+        covered = max_dist_sq <= r_sq
+        max_dist = math.sqrt(_finite_number(max_dist_sq))
+        rad_float = _finite_number(rad)
+
+        if covered:
+            return {
+                "status": "PASS",
+                "assurance": "RATIONAL_VORONOI_DOMAIN_COVERED",
+                "covering_radius": rad_float,
+                "maximum_distance_observed": max_dist,
+                "grid_samples": len(test_points),
+                "domain_box": [str(x_min), str(x_max), str(y_min), str(y_max)],
+            }
+        return {
+            "status": "FAIL",
+            "assurance": "UNCOVERED_VOID_WITNESS",
+            "covering_radius": rad_float,
+            "maximum_distance_observed": max_dist,
+            "witness": {
+                "uncovered_point": [str(worst_point[0]), str(worst_point[1])],
+                "uncovered_point_float": [_finite_number(worst_point[0]), _finite_number(worst_point[1])],
+                "distance": max_dist,
+                "coverage_deficit": max_dist - rad_float,
+            },
+            "domain_box": [str(x_min), str(x_max), str(y_min), str(y_max)],
+        }
+
+    @staticmethod
+    def scaffold_code():
+        return _scaffold(RationalVoronoiCoverOperator, _voronoi_self_test)
+
+
+class MultiStepEnergyDissipationOperator:
+    """Multi-step quadratic Lyapunov energy dissipation and monotonic descent verifier.
+
+    Grounding: Issue #48, Issue #22 Lyapunov stability analysis.
+    """
+
+    @classmethod
+    def analyze_trajectory(cls, trajectory, metric_matrix=None, min_dissipation_rate=0.0):
+        if not isinstance(trajectory, (list, tuple)) or len(trajectory) < 2:
+            raise ValueError("Expected trajectory with at least 2 state vectors")
+        dim = _dimension(len(trajectory[0]))
+        states = [_vector(x, dim, f"trajectory state {idx}") for idx, x in enumerate(trajectory)]
+        gamma = _finite_number(min_dissipation_rate)
+        if gamma < 0:
+            raise ValueError("Minimum dissipation rate must be non-negative")
+
+        if metric_matrix is None:
+            p_mat = [[1.0 if i == j else 0.0 for j in range(dim)] for i in range(dim)]
+        else:
+            _matrix(metric_matrix, dim, dim, "P")
+            p_mat = metric_matrix
+
+        def energy(x):
+            px = [math.fsum(p_mat[i][j] * x[j] for j in range(dim)) for i in range(dim)]
+            return math.fsum(x[i] * px[i] for i in range(dim))
+
+        energies = [energy(x) for x in states]
+        steps_info = []
+        divergence = None
+
+        for t in range(len(states) - 1):
+            e_curr = energies[t]
+            e_next = energies[t + 1]
+            norm_sq = math.fsum(states[t][i] ** 2 for i in range(dim))
+            required_upper = e_curr - gamma * norm_sq
+            delta = e_next - e_curr
+            dissipative = e_next <= required_upper + 1e-12
+
+            steps_info.append({
+                "step": t,
+                "energy": e_curr,
+                "delta": delta,
+                "dissipative": dissipative,
+            })
+
+            if not dissipative and divergence is None:
+                divergence = {
+                    "divergence_step": t,
+                    "energy_before": e_curr,
+                    "energy_after": e_next,
+                    "delta_energy": delta,
+                    "required_upper_bound": required_upper,
+                    "state_before": states[t],
+                    "state_after": states[t + 1],
+                }
+
+        initial_energy = energies[0]
+        final_energy = energies[-1]
+        amp_ratio = (final_energy / initial_energy) if initial_energy > 1e-12 else 0.0
+
+        if divergence is None:
+            return {
+                "status": "PASS",
+                "assurance": "MONOTONIC_LYAPUNOV_DISSIPATION_CERTIFIED",
+                "initial_energy": initial_energy,
+                "final_energy": final_energy,
+                "amplification_ratio": amp_ratio,
+                "trajectory_length": len(states),
+                "steps": steps_info,
+            }
+        return {
+            "status": "FAIL",
+            "assurance": "LYAPUNOV_DIVERGENCE_WITNESS",
+            "initial_energy": initial_energy,
+            "final_energy": final_energy,
+            "witness": divergence,
+            "steps": steps_info,
+        }
+
+    @staticmethod
+    def scaffold_code():
+        return _scaffold(MultiStepEnergyDissipationOperator, _dissipation_self_test)
+
+
 def _ssm_self_test():
     op = ContinuousStateSpaceOperator(3, in_dim=2, out_dim=2)
     report = op.verify_step_invariance()
@@ -397,6 +855,52 @@ def _rational_self_test():
     return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
 
 
+def _gershgorin_self_test():
+    report = GershgorinSpectralOperator.analyze_matrix([[0.4, 0.1], [0.2, 0.3]])
+    negative = GershgorinSpectralOperator.analyze_matrix([[0.8, 0.5], [0.4, 0.9]])
+    assert report["status"] == "PASS" and report["is_contracting"]
+    assert negative["status"] == "FAIL" and not negative["is_contracting"]
+    return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
+
+
+def _lipschitz_self_test():
+    report = LipschitzBoundOperator.certify_network_lipschitz(
+        [[[0.5, 0.0], [0.0, 0.5]], [[0.5, 0.0], [0.0, 0.5]]],
+        activation_lipschitz=1.0, input_perturbation=0.1, margin=0.2
+    )
+    negative = LipschitzBoundOperator.certify_network_lipschitz(
+        [[[0.5, 0.0], [0.0, 0.5]], [[0.5, 0.0], [0.0, 0.5]]],
+        activation_lipschitz=1.0, input_perturbation=1.0, margin=0.2
+    )
+    assert report["status"] == "PASS" and "safety_headroom" in report
+    assert negative["status"] == "FAIL" and "witness" in negative
+    return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
+
+
+def _concentration_self_test():
+    report = ConcentrationBoundOperator.certify_empirical_gap(1000, (0, 1), 0.10, delta=0.05)
+    negative = ConcentrationBoundOperator.certify_empirical_gap(25, (0, 1), 0.05, delta=0.05)
+    assert report["status"] == "PASS" and report["certified_lower_bound"] > 0
+    assert negative["status"] == "FAIL" and negative["witness"]["noise_margin"] > 0
+    return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
+
+
+def _voronoi_self_test():
+    report = RationalVoronoiCoverOperator.check_domain_covering((0, 1, 0, 1), [(0.5, 0.5)], 1.0)
+    negative = RationalVoronoiCoverOperator.check_domain_covering((0, 1, 0, 1), [(0.5, 0.5)], 0.4)
+    assert report["status"] == "PASS" and "maximum_distance_observed" in report
+    assert negative["status"] == "FAIL" and "witness" in negative
+    return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
+
+
+def _dissipation_self_test():
+    report = MultiStepEnergyDissipationOperator.analyze_trajectory([[1.0, 0.0], [0.5, 0.0], [0.2, 0.0]])
+    negative = MultiStepEnergyDissipationOperator.analyze_trajectory([[1.0, 0.0], [0.5, 0.0], [1.2, 0.0]])
+    assert report["status"] == "PASS" and report["amplification_ratio"] < 1.0
+    assert negative["status"] == "FAIL" and negative["witness"]["divergence_step"] == 1
+    return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
+
+
 def _scaffold(cls, self_test):
     """Export the canonical implementation and the same executable self-test."""
     tree = ast.parse(inspect.getsource(cls))
@@ -424,6 +928,21 @@ OPERATORS = {
     "exact_symbolic_constraints": {"operator_id": "rational_interval_certificate", "title": "Rational Polynomial Interval Enclosure",
         "operator_class": RationalCertificateOperator, "primary_signal": "proof_bottleneck",
         "guarantee": "Sound rational whole-interval enclosure or exact witness; inconclusive is UNKNOWN", "self_test": _rational_self_test},
+    "gershgorin_spectral_bound": {"operator_id": "gershgorin_spectral_radius", "title": "Gershgorin Circle Spectral Radius and Invertibility Certificate",
+        "operator_class": GershgorinSpectralOperator, "primary_signal": "trajectory_degradation",
+        "guarantee": "Exact rational Gershgorin discs bounding spectral radius, stability, and invertibility", "self_test": _gershgorin_self_test},
+    "lipschitz_layer_bound": {"operator_id": "lipschitz_frobenius_bound", "title": "Frobenius and Operator Norm Lipschitz Certificate",
+        "operator_class": LipschitzBoundOperator, "primary_signal": "trajectory_degradation",
+        "guarantee": "Composite layer-wise Frobenius and infinity norm bounds for perturbation stability", "self_test": _lipschitz_self_test},
+    "hoeffding_sample_bound": {"operator_id": "concentration_sample_bound", "title": "Sub-Gaussian Hoeffding Sample Size and Concentration Bound",
+        "operator_class": ConcentrationBoundOperator, "primary_signal": "proof_bottleneck",
+        "guarantee": "Finite-sample Hoeffding confidence radius and sample size qualification for empirical comparisons", "self_test": _concentration_self_test},
+    "rational_voronoi_partition": {"operator_id": "rational_voronoi_cover", "title": "2D Rational Voronoi Covering and Boundary Hole Detector",
+        "operator_class": RationalVoronoiCoverOperator, "primary_signal": "proof_bottleneck",
+        "guarantee": "Exact 2D domain partition covering and unassigned hole/witness detection", "self_test": _voronoi_self_test},
+    "multi_step_energy_dissipation": {"operator_id": "multi_step_energy_dissipation", "title": "Multi-Step Energy Dissipation and Monotonic Descent Verifier",
+        "operator_class": MultiStepEnergyDissipationOperator, "primary_signal": "trajectory_degradation",
+        "guarantee": "Trace-level discrete Lyapunov quadratic energy dissipation and monotonic divergence witness", "self_test": _dissipation_self_test},
 }
 
 

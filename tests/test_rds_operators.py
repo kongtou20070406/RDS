@@ -141,12 +141,17 @@ class OperatorUnitTests(unittest.TestCase):
 
     def test_registry_and_scaffolding(self):
         available = ops.list_available_operators()
-        self.assertEqual(len(available), 4)
+        self.assertEqual(len(available), 9)
         card_ids = [item["card_id"] for item in available]
         self.assertIn("state_space_refinement", card_ids)
         self.assertIn("contraction_target_bias", card_ids)
         self.assertIn("structural_preflight", card_ids)
         self.assertIn("exact_symbolic_constraints", card_ids)
+        self.assertIn("gershgorin_spectral_bound", card_ids)
+        self.assertIn("lipschitz_layer_bound", card_ids)
+        self.assertIn("hoeffding_sample_bound", card_ids)
+        self.assertIn("rational_voronoi_partition", card_ids)
+        self.assertIn("multi_step_energy_dissipation", card_ids)
 
         for card_id in card_ids:
             scaffold = ops.get_operator_scaffold(card_id)
@@ -311,10 +316,184 @@ class OperatorUnitTests(unittest.TestCase):
                     exported_class.analyze_system = lambda *args, **kwargs: {"status": "FAIL"}
                 elif card_id == "structural_preflight":
                     exported_class.preflight_callable = lambda *args, **kwargs: {"status": "PASS"}
-                else:
+                elif card_id == "exact_symbolic_constraints":
                     exported_class.certify_interval_bound = lambda *args, **kwargs: {"status": "FAIL"}
+                elif card_id == "gershgorin_spectral_bound":
+                    exported_class.analyze_matrix = lambda *args, **kwargs: {"status": "FAIL", "is_contracting": False}
+                elif card_id == "lipschitz_layer_bound":
+                    exported_class.certify_network_lipschitz = lambda *args, **kwargs: {"status": "FAIL"}
+                elif card_id == "hoeffding_sample_bound":
+                    exported_class.certify_empirical_gap = lambda *args, **kwargs: {"status": "FAIL", "certified_lower_bound": -1}
+                elif card_id == "rational_voronoi_partition":
+                    exported_class.check_domain_covering = lambda *args, **kwargs: {"status": "FAIL"}
+                elif card_id == "multi_step_energy_dissipation":
+                    exported_class.analyze_trajectory = lambda *args, **kwargs: {"status": "FAIL", "amplification_ratio": 2.0}
                 with self.assertRaises(AssertionError):
                     namespace["operator_self_test"]()
+
+    def test_gershgorin_spectral_operator(self):
+        # Discrete contractive stability: spectral bound < 1
+        A_stable = [[0.4, 0.1], [0.2, 0.3]]
+        res = ops.GershgorinSpectralOperator.analyze_matrix(A_stable, target_property="discrete_stability")
+        self.assertEqual(res["status"], "PASS")
+        self.assertEqual(res["assurance"], "GERSHGORIN_SPECTRAL_CERTIFICATE")
+        self.assertTrue(res["is_contracting"])
+        self.assertLess(res["spectral_radius_bound"], 1.0)
+        self.assertEqual(len(res["discs"]), 2)
+
+        # Spectral radius breach: disc extends past 1
+        A_unstable = [[0.8, 0.5], [0.4, 0.9]]
+        res_fail = ops.GershgorinSpectralOperator.analyze_matrix(A_unstable, target_property="discrete_stability")
+        self.assertEqual(res_fail["status"], "FAIL")
+        self.assertEqual(res_fail["assurance"], "SPECTRAL_RADIUS_BREACH_WITNESS")
+        self.assertFalse(res_fail["is_contracting"])
+        self.assertIn("offending_row", res_fail["witness"])
+
+        # Strict diagonal dominance / invertibility
+        A_diag = [[3.0, 1.0], [0.5, 2.0]]
+        res_inv = ops.GershgorinSpectralOperator.analyze_matrix(A_diag, target_property="invertibility")
+        self.assertEqual(res_inv["status"], "PASS")
+        self.assertTrue(res_inv["is_invertible"])
+
+        A_singular_candidate = [[1.0, 2.0], [0.5, 2.0]]
+        res_inv_fail = ops.GershgorinSpectralOperator.analyze_matrix(A_singular_candidate, target_property="invertibility")
+        self.assertEqual(res_inv_fail["status"], "FAIL")
+        self.assertEqual(res_inv_fail["assurance"], "ZERO_INTERSECTING_DISC_WITNESS")
+
+        # Continuous Hurwitz stability
+        A_hurwitz = [[-2.0, 0.5], [0.5, -3.0]]
+        res_hur = ops.GershgorinSpectralOperator.analyze_matrix(A_hurwitz, target_property="hurwitz_stability")
+        self.assertEqual(res_hur["status"], "PASS")
+        self.assertTrue(res_hur["is_hurwitz_stable"])
+
+        A_hurwitz_fail = [[-1.0, 2.0], [0.5, -3.0]]
+        res_hur_fail = ops.GershgorinSpectralOperator.analyze_matrix(A_hurwitz_fail, target_property="hurwitz_stability")
+        self.assertEqual(res_hur_fail["status"], "FAIL")
+        self.assertFalse(res_hur_fail["is_hurwitz_stable"])
+
+        # Invalid inputs
+        with self.assertRaises(ValueError):
+            ops.GershgorinSpectralOperator.analyze_matrix([[1.0, 2.0]], target_property="discrete_stability")
+        with self.assertRaises(ValueError):
+            ops.GershgorinSpectralOperator.analyze_matrix([[1.0]], target_property="unknown_prop")
+
+    def test_lipschitz_bound_operator(self):
+        # Two-layer network with contraction
+        w1 = [[0.5, 0.0], [0.0, 0.5]]
+        w2 = [[0.5, 0.0], [0.0, 0.5]]
+        res = ops.LipschitzBoundOperator.certify_network_lipschitz([w1, w2], activation_lipschitz=1.0,
+                                                                   input_perturbation=0.1, margin=0.2)
+        self.assertEqual(res["status"], "PASS")
+        self.assertEqual(res["assurance"], "LIPSCHITZ_ROBUSTNESS_CERTIFICATE")
+        self.assertLess(res["output_deviation_bound"], res["margin"])
+        self.assertGreater(res["safety_headroom"], 0.0)
+
+        # Margin breach case
+        res_breach = ops.LipschitzBoundOperator.certify_network_lipschitz([w1, w2], activation_lipschitz=1.0,
+                                                                          input_perturbation=1.0, margin=0.2)
+        self.assertEqual(res_breach["status"], "FAIL")
+        self.assertEqual(res_breach["assurance"], "MARGIN_BREACH_WITNESS")
+        self.assertGreater(res_breach["witness"]["excess_ratio"], 1.0)
+
+        # Pure bound computation without margin
+        res_pure = ops.LipschitzBoundOperator.certify_network_lipschitz([w1, w2])
+        self.assertEqual(res_pure["status"], "PASS")
+        self.assertEqual(res_pure["assurance"], "LIPSCHITZ_BOUND_CERTIFIED")
+        self.assertAlmostEqual(res_pure["lipschitz_bound"], 0.25, places=4)
+
+        # Dimension mismatch between layers
+        w_bad = [[0.5, 0.0, 0.1], [0.0, 0.5, 0.2]]  # 2x3
+        with self.assertRaises(ValueError):
+            ops.LipschitzBoundOperator.certify_network_lipschitz([w1, w_bad])  # 2x2 then 2x3 input requires 2 output 3
+
+    def test_concentration_bound_operator(self):
+        # Sub-Gaussian Hoeffding radius computation
+        radius = ops.ConcentrationBoundOperator.compute_hoeffding_radius(sample_size=1000, value_range=(0, 1), delta=0.05)
+        self.assertLess(radius, 0.05)
+        self.assertGreater(radius, 0.03)
+
+        # Required sample size computation
+        n_req = ops.ConcentrationBoundOperator.required_sample_size(target_epsilon=0.05, value_range=(0, 1), delta=0.05)
+        self.assertGreater(n_req, 500)
+
+        # Statistically significant empirical gap: PASS
+        res = ops.ConcentrationBoundOperator.certify_empirical_gap(sample_size=1000, value_range=(0, 1),
+                                                                  empirical_gap=0.10, delta=0.05)
+        self.assertEqual(res["status"], "PASS")
+        self.assertEqual(res["assurance"], "STATISTICALLY_SIGNIFICANT_SEPARATION")
+        self.assertGreater(res["certified_lower_bound"], 0.0)
+
+        # Small sample size inconclusive / insufficient: FAIL
+        res_fail = ops.ConcentrationBoundOperator.certify_empirical_gap(sample_size=20, value_range=(0, 1),
+                                                                       empirical_gap=0.05, delta=0.05)
+        self.assertEqual(res_fail["status"], "FAIL")
+        self.assertEqual(res_fail["assurance"], "SAMPLE_SIZE_INSUFFICIENT_WITNESS")
+        self.assertGreater(res_fail["witness"]["noise_margin"], 0.0)
+
+        # Invalid parameters
+        with self.assertRaises(ValueError):
+            ops.ConcentrationBoundOperator.compute_hoeffding_radius(0, (0, 1))
+        with self.assertRaises(ValueError):
+            ops.ConcentrationBoundOperator.compute_hoeffding_radius(100, (1, 0))
+        with self.assertRaises(ValueError):
+            ops.ConcentrationBoundOperator.compute_hoeffding_radius(100, (0, 1), delta=1.5)
+
+    def test_rational_voronoi_cover_operator(self):
+        # Fully covered domain: center at (0.5, 0.5), radius 1.0 covers [0, 1] x [0, 1]
+        res = ops.RationalVoronoiCoverOperator.check_domain_covering((0, 1, 0, 1), [(0.5, 0.5)], radius=1.0)
+        self.assertEqual(res["status"], "PASS")
+        self.assertEqual(res["assurance"], "RATIONAL_VORONOI_DOMAIN_COVERED")
+        self.assertLess(res["maximum_distance_observed"], 1.0)
+
+        # Uncovered domain: radius 0.4 leaves corners uncovered
+        res_void = ops.RationalVoronoiCoverOperator.check_domain_covering((0, 1, 0, 1), [(0.5, 0.5)], radius=0.4)
+        self.assertEqual(res_void["status"], "FAIL")
+        self.assertEqual(res_void["assurance"], "UNCOVERED_VOID_WITNESS")
+        self.assertIn("uncovered_point", res_void["witness"])
+        self.assertGreater(res_void["witness"]["coverage_deficit"], 0.0)
+
+        # Multiple generator partition covering
+        centers = [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)]
+        res_multi = ops.RationalVoronoiCoverOperator.check_domain_covering((0, 1, 0, 1), centers, radius=0.4)
+        self.assertEqual(res_multi["status"], "PASS")
+
+        # Invalid bounds
+        with self.assertRaises(ValueError):
+            ops.RationalVoronoiCoverOperator.check_domain_covering((1, 0, 0, 1), [(0.5, 0.5)], 1.0)
+        with self.assertRaises(ValueError):
+            ops.RationalVoronoiCoverOperator.check_domain_covering((0, 1, 0, 1), [(0.5, 0.5)], -0.5)
+
+    def test_multi_step_energy_dissipation_operator(self):
+        # Monotonically dissipative trajectory: PASS
+        traj_decay = [[1.0, 0.0], [0.5, 0.0], [0.2, 0.0], [0.05, 0.0]]
+        res = ops.MultiStepEnergyDissipationOperator.analyze_trajectory(traj_decay)
+        self.assertEqual(res["status"], "PASS")
+        self.assertEqual(res["assurance"], "MONOTONIC_LYAPUNOV_DISSIPATION_CERTIFIED")
+        self.assertLess(res["amplification_ratio"], 1.0)
+        self.assertEqual(res["trajectory_length"], 4)
+
+        # Divergent step: FAIL with divergence step witness
+        traj_diverge = [[1.0, 0.0], [0.5, 0.0], [1.2, 0.0]]
+        res_div = ops.MultiStepEnergyDissipationOperator.analyze_trajectory(traj_diverge)
+        self.assertEqual(res_div["status"], "FAIL")
+        self.assertEqual(res_div["assurance"], "LYAPUNOV_DIVERGENCE_WITNESS")
+        self.assertEqual(res_div["witness"]["divergence_step"], 1)
+        self.assertGreater(res_div["witness"]["delta_energy"], 0.0)
+
+        # Custom positive-definite metric matrix
+        P = [[2.0, 0.0], [0.0, 3.0]]
+        res_p = ops.MultiStepEnergyDissipationOperator.analyze_trajectory(traj_decay, metric_matrix=P)
+        self.assertEqual(res_p["status"], "PASS")
+
+        # Strict dissipation rate required
+        res_strict = ops.MultiStepEnergyDissipationOperator.analyze_trajectory(traj_decay, min_dissipation_rate=0.8)
+        self.assertEqual(res_strict["status"], "FAIL")
+
+        # Invalid trajectory inputs
+        with self.assertRaises(ValueError):
+            ops.MultiStepEnergyDissipationOperator.analyze_trajectory([[1.0, 0.0]])
+        with self.assertRaises(ValueError):
+            ops.MultiStepEnergyDissipationOperator.analyze_trajectory([[1.0, 0.0], [0.5]])
 
 
 if __name__ == "__main__":

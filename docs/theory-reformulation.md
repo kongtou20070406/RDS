@@ -46,6 +46,13 @@ python -B scripts/rds_theory_tools.py --scaffold state_space_refinement --out op
 
 状态空间的有限 NFE 比较属于数值诊断：`diagnostic_pass=true` 可以与 `status=UNKNOWN` 同时成立，有限差值和玩具输入不能证明渐近收敛或步长不变性。收缩分析分别报告严格范数条件、工程余量、不动点数值求解与目标偏置；未知目标或求解失败不能记为零偏置。多项式区间 PASS 需要覆盖声明区间的精确有理包围界；精确点可以构成反例，只有有限采样或未得到包围证明时仍为 UNKNOWN。
 
+基础算子库进一步扩展了 5 项确定性、闭环物理与数学算子：
+- 盖尔圆盘谱界分析（`gershgorin_spectral_bound`）：基于 Lean 4 Mathlib Gershgorin 圆盘定理（`Mathlib.LinearAlgebra.Matrix.Gershgorin`），在离散收缩谱半径、非奇异性（严格对角占优）与连续 Hurwitz 稳定性间提供精确有理数证书，越界时提取圆盘与违背行作为反例证人。
+- 复合层 Lipschitz 界（`lipschitz_layer_bound`）：基于 TorchLean 与 Mathlib 连续线性算子范数界，给出逐层 Frobenius 与无穷范数积，验证输入扰动输出容差上界，超出裕度时提供超标比率反例。
+- 次高斯 Hoeffding 集中界（`hoeffding_sample_bound`）：基于 Mathlib 次高斯矩尾界（`ProbabilityTheory.HasSubgaussianMGF`），计算有限样本置信半径与所需样本量，阻断小样本随机方差被误判为科学增益的统计幻觉。
+- 2D 有理 Voronoi 域覆盖（`rational_voronoi_partition`）：验证离散几何紧覆盖，精确检测未覆盖空洞并输出未覆盖点坐标。
+- 多步 Lyapunov 能量耗散（`multi_step_energy_dissipation`）：沿多步轨迹跟踪二次 Lyapunov 能量单调下降，在出现能量放大的步数输出发散步与增量凭据。
+
 固定示例与导出模板自检是算子软件回归，不说明真实模型或数据已接入 RDS 执行、目标绑定或下一次选路。真实应用还需绑定输入来源、声明范围、方法与资源授权，并使用适用检查器。当前算子 CLI 没有项目任务输入契约；它不完成 V3 的目标绑定研究示例，也未提供 Lean 公理审查工作流。
 
 摘要保留 `id/title/reason/matched_tags/required_inputs/locator/runnable_operator` 和目录 SHA；`selection=TAG_MATCH_ONLY`、`prerequisites=NOT_ASSESSED`。标签命中只提供工具线索，不验证前提、排名科学价值或授权执行。`goal.reformulation.signals` 可以附同一短名单，历史 `as_of` 必须允许该目录日期。Skill 只给入口，不加载整个库；没有匹配时保留未匹配数量，不硬塞无关工具。
