@@ -177,8 +177,9 @@ def audit_sources(spec, base_dir=None):
 def read_project_receipt(root_text, digest_sha):
     """Read one receipt body by sha256 from a project ledger, read-only.
 
-    Returns ``{"status": "RECEIPT_FOUND", "body": ...}``, ``RECEIPT_NOT_FOUND`` or
-    ``LEDGER_UNAVAILABLE`` with the exception type; the caller judges the body.
+    Returns ``{"status": "RECEIPT_FOUND", "body": {...}}``, ``RECEIPT_NOT_FOUND``,
+    ``RECEIPT_BODY_INVALID`` with the JSON type of a stored body that is not an object,
+    or ``LEDGER_UNAVAILABLE`` with the exception type; the caller judges the body.
     """
     try:
         from rds_project import ProjectStore
@@ -187,7 +188,13 @@ def read_project_receipt(root_text, digest_sha):
             hit = db.execute("SELECT body FROM receipts WHERE sha256=?", (digest_sha,)).fetchone()
         if hit is None:
             return {"status": "RECEIPT_NOT_FOUND"}
-        return {"status": "RECEIPT_FOUND", "body": json.loads(hit["body"])}
+        body = json.loads(hit["body"])
+        if not isinstance(body, dict):
+            # An imported or corrupted row is data, not a receipt: nothing is read out of it.
+            kind = ("null" if body is None else "boolean" if isinstance(body, bool) else "array"
+                    if isinstance(body, list) else "string" if isinstance(body, str) else "number")
+            return {"status": "RECEIPT_BODY_INVALID", "reason": kind}
+        return {"status": "RECEIPT_FOUND", "body": body}
     except (ValueError, FileNotFoundError, OSError, RuntimeError, sqlite3.Error) as exc:
         # RuntimeError: Path.resolve() on a symlink loop; the ledger is unreadable, not a crash.
         return {"status": "LEDGER_UNAVAILABLE", "reason": type(exc).__name__}
