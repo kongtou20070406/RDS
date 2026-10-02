@@ -32,6 +32,82 @@ class CapabilityTests(unittest.TestCase):
                 capabilities.probe('import-every-package')
             imported.assert_not_called()
 
+    def test_spec_mastery_qualification_pure_declaration(self):
+        spec = {
+            "schema": 1,
+            "capability_id": "test_operator",
+            "fixtures": {
+                "tier1_smoke_pass": {"input": {"x": 1}, "expected_status": "PASS"},
+                "tier2_counterexample_witness": {"input": {"x": -1}, "expected_status": "CONTRADICTED"},
+                "tier3_boundary_stress": [{"input": {"x": None}, "expected_status": "UNKNOWN"}]
+            }
+        }
+        res = capabilities.verify_capability_mastery(spec)
+        self.assertEqual(res["mastery_status"], "QUALIFIED")
+        self.assertTrue(res["all_tiers_passed"])
+
+    def test_executable_mastery_three_tier_pass(self):
+        spec = {
+            "schema": 1,
+            "capability_id": "rational_check",
+            "fixtures": {
+                "tier1_smoke_pass": {"input": {"r": 1}, "expected_status": "PASS"},
+                "tier2_counterexample_witness": {"input": {"r": -1}, "expected_status": "CONTRADICTED", "expected_witness_present": True},
+                "tier3_boundary_stress": [{"input": {}, "expected_status": "UNKNOWN"}]
+            }
+        }
+        def op(inp):
+            if "r" not in inp:
+                return {"status": "UNKNOWN"}
+            if inp["r"] > 0:
+                return {"status": "PASS"}
+            return {"status": "CONTRADICTED", "witness": {"violating_radius": inp["r"]}}
+
+        res = capabilities.verify_capability_mastery(spec, implementation_callable=op)
+        self.assertEqual(res["mastery_status"], "QUALIFIED")
+        self.assertTrue(res["tier_results"]["tier2_counterexample_witness"]["witness_present"])
+
+    def test_executable_mastery_rejects_missing_witness(self):
+        spec = {
+            "schema": 1,
+            "capability_id": "bad_op",
+            "fixtures": {
+                "tier1_smoke_pass": {"input": {"r": 1}, "expected_status": "PASS"},
+                "tier2_counterexample_witness": {"input": {"r": -1}, "expected_status": "CONTRADICTED", "expected_witness_present": True},
+                "tier3_boundary_stress": [{"input": {}, "expected_status": "UNKNOWN"}]
+            }
+        }
+        # Returns CONTRADICTED but fails to extract structured witness
+        def op(inp):
+            if "r" not in inp:
+                return {"status": "UNKNOWN"}
+            if inp["r"] > 0:
+                return {"status": "PASS"}
+            return {"status": "CONTRADICTED"}
+
+        res = capabilities.verify_capability_mastery(spec, implementation_callable=op)
+        self.assertEqual(res["mastery_status"], "REJECTED")
+        self.assertFalse(res["all_tiers_passed"])
+
+    def test_executable_mastery_rejects_boundary_crash(self):
+        spec = {
+            "schema": 1,
+            "capability_id": "crashing_op",
+            "fixtures": {
+                "tier1_smoke_pass": {"input": {"r": 1}, "expected_status": "PASS"},
+                "tier2_counterexample_witness": {"input": {"r": -1}, "expected_status": "CONTRADICTED", "expected_witness_present": True},
+                "tier3_boundary_stress": [{"input": {}, "expected_status": "UNKNOWN"}]
+            }
+        }
+        def op(inp):
+            if not inp:
+                raise KeyError("missing input!")
+            return {"status": "PASS"}
+
+        res = capabilities.verify_capability_mastery(spec, implementation_callable=op)
+        self.assertEqual(res["mastery_status"], "REJECTED")
+        self.assertEqual(res["tier_results"]["tier3_boundary_stress"]["status"], "FAIL")
+
 
 if __name__ == '__main__':
     unittest.main()
