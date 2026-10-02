@@ -575,6 +575,18 @@ class QuickTests(unittest.TestCase):
         self.assertNotIn('GOAL_ROUTES_REJECTED', flags)
         self.assertEqual(move, 'RESOLVE_PREMISE')
 
+        # A parameter variant in a new scope or with changed relevant evidence is not a repeat.
+        write('round-3', {'gain': 8}, scope={'domain': 'new-scope'})
+        self.assertNotIn('GOAL_ROUTES_REJECTED', full()[1])
+        write('round-3', {'gain': 8})
+        self.context['facts']['long_gain']['binding'] = {'run_id': 'new-measurement'}
+        self.context_path.write_text(json.dumps(self.context), encoding='utf-8')
+        self.assertNotIn('GOAL_ROUTES_REJECTED', full()[1])
+        write('round-3', {'gain': 8})
+        self.context['facts']['unrelated'] = {'value': True, 'source': 'unrelated.json'}
+        self.context_path.write_text(json.dumps(self.context), encoding='utf-8')
+        self.assertIn('GOAL_ROUTES_REJECTED', full()[1])
+
         # A changed operation, other predicates, another revision or no predicates share no variant history.
         for options in ({'operation': 'distill'}, {'goal_conditions': [{'fact': 'long_gain', 'op': 'gte', 'value': 0.1}]},
                         {'revision': 'growth-v2'}, {'goal_conditions': None}):
@@ -594,7 +606,7 @@ class QuickTests(unittest.TestCase):
         rejected_obligation = {'question_id': 'round-0', 'goal_revision': 'growth-v1', 'goal_conditions': goal,
             'scope': {'domain': 'synthetic'}, 'candidate': {'id': 'route:recipe', 'status': 'READY',
             'action': {**self.graph['nodes'][0]['executable']['action'], 'parameters': {'gain': 4}}},
-            'outcome': 'rejected', 'evidence': {}}
+            'outcome': 'rejected', 'evidence': self.context['facts']}
         save_checkpoint(self.ledger, 'rejected-obligation', ProjectStore(self.ledger).snapshot(check_bindings=True),
                         kind='project', decision=rejected_obligation)
         search, flags, move = full()
@@ -649,6 +661,34 @@ class QuickTests(unittest.TestCase):
                 self.assertEqual([c['status'] for c in search['candidates']], ['READY'])
                 self.assertNotIn('GOAL_ROUTES_REJECTED', {f['kind'] for f in search['loop_review']['flags']})
                 self.assertEqual(search['selection_review']['next_move']['kind'], 'RESOLVE_PREMISE')
+
+    def test_same_goal_history_uses_chronology_across_question_names(self):
+        from rds_checkpoints import save_checkpoint
+        self.initialize_ledger()
+        goal = [{'fact': 'x', 'value': True}]
+        self.context['decision']['goal_conditions'] = goal
+        self.context_path.write_text(json.dumps(self.context), encoding='utf-8')
+        report = json.loads(self.advise().stdout)
+        candidate = next(r['search']['candidates'][0] for r in report['recommendations']
+                         if r.get('type') == 'EXECUTABLE_DIRECTION_SEARCH')
+
+        def save(identity, question, outcome, scope=None):
+            decision = self.context['decision']
+            save_checkpoint(self.ledger, identity, ProjectStore(self.ledger).snapshot(), kind='project', decision={
+                'question_id': question, 'goal_revision': decision['goal_revision'], 'goal_conditions': goal,
+                'scope': decision['scope'] if scope is None else scope, 'candidate': candidate,
+                'outcome': outcome, 'evidence': self.context['facts']})
+
+        save('old-accepted', 'choose-next', 'accepted')
+        save('new-rejected', 'renamed', 'rejected')
+        brief = json.loads(self.advise('--brief').stdout)
+        self.assertIn('REPEAT_REJECTED_ROUTE', brief['flags'])
+        save('newest-accepted', 'renamed-again', 'accepted')
+        brief = json.loads(self.advise('--brief').stdout)
+        self.assertNotIn('REPEAT_REJECTED_ROUTE', brief['flags'])
+        save('current-rejected', 'choose-next', 'rejected')
+        save('other-scope-accepted', 'other-scope', 'accepted', {'domain': 'independent'})
+        self.assertIn('REPEAT_REJECTED_ROUTE', json.loads(self.advise('--brief').stdout)['flags'])
 
     def test_prospective_job_cannot_reset_the_parent_budget(self):
         self.initialize_ledger()
