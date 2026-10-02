@@ -50,6 +50,29 @@ def require(condition, message):
         raise ValueError(message)
 
 
+def execution_route(argv, bindings, outpaths, root, objective=None, route=None, arm=None, executor_sha256=None):
+    """Exact declared contents/roles; names, destinations and allowances are not new work."""
+    inputs = {}
+    for binding in bindings:
+        key = os.path.normcase(str((Path(root) / binding['path']).resolve()))
+        item = inputs.setdefault(key, {'sha256': binding['sha256'], 'roles': set()})
+        require(item['sha256'] == binding['sha256'], 'Conflicting execution input hashes')
+        item['roles'].update(binding.get('roles', [binding.get('role')]))
+    normalized = {path: 'input:' + digest({'sha256': item['sha256'], 'roles': sorted(item['roles'])})
+                  for path, item in inputs.items()}
+    outputs = {os.path.normcase(str((Path(root) / path).resolve())) for path in outpaths}
+    command = []
+    for value in argv[1:]:
+        prefix, separator, tail = value.partition('=')
+        token = tail if separator and prefix.startswith('-') else value
+        path = os.path.normcase(str((Path(root) / token).resolve()))
+        replacement = normalized.get(path, 'declared-output' if path in outputs else token)
+        command.append(prefix + '=' + replacement if separator and prefix.startswith('-') else replacement)
+    return digest({'executor_sha256': executor_sha256 if executor_sha256 is not None else file_sha(argv[0]), 'argv': command,
+                   'inputs': sorted(set(normalized.values())), 'objective_sha256': objective,
+                   'scoped_route': route, 'arm': arm})
+
+
 def number(value, name, positive=False):
     require(not isinstance(value, bool) and isinstance(value, (int, float))
             and math.isfinite(value) and (value > 0 if positive else value >= 0),
@@ -259,7 +282,13 @@ class ProjectStore:
     def initialize(self, contract):
         require(isinstance(contract, dict) and type(contract.get("schema")) is int
                 and contract["schema"] == 1, "Project contract schema must be 1")
-        require(set(contract) <= {"schema", "bindings", "allowed_commands", "output_roots", "budget", "description", "objective_sha256"}, "Unknown contract fields")
+        require(set(contract) <= {"schema", "bindings", "allowed_commands", "output_roots", "budget", "description", "objective_sha256", "execution_policy"}, "Unknown contract fields")
+        if 'execution_policy' in contract:
+            policy = contract['execution_policy']
+            require(isinstance(policy, dict) and set(policy) == {'schema', 'max_attempts'}
+                    and type(policy['schema']) is int and policy['schema'] == 1
+                    and type(policy['max_attempts']) is int and 1 <= policy['max_attempts'] <= 32,
+                    'Execution policy requires schema 1 and max_attempts in 1..32')
         if 'objective_sha256' in contract:
             from rds_math import objective
             goal = objective(self.root)
@@ -384,7 +413,7 @@ class ProjectStore:
             require(row is not None, "Unknown theory attempt ID")
             return json.loads(row["body"])
 
-    def register(self, spec):
+    def register(self, spec, *, executor_sha256=None):
         require(isinstance(spec, dict) and type(spec.get("schema")) is int
                 and spec["schema"] == 1, "Run manifest schema must be 1")
         require(set(spec) <= {"schema", "id", "arm", "control_id", "protocol", "argv", "outpaths", "resource_estimates", "timeout_seconds", "description"}, "Unknown manifest fields; handwritten verification is not accepted")
@@ -424,8 +453,21 @@ class ProjectStore:
                    "executor_sha256": file_sha(executor), "attempt_id": None, "worker_pid": None,
                    "pid": None, "started_at": None, "finished_at": None, "observed_wall_seconds": 0.0,
                    "scheduler": None}
+            require(executor_sha256 is None or run['executor_sha256'] == executor_sha256,
+                    'Execution policy: command executable changed before registration')
+            if 'execution_policy' in contract:
+                run['execution_route_sha256'] = execution_route(spec['argv'], bindings, outpaths, self.root,
+                    contract.get('objective_sha256'), arm=spec['arm'], executor_sha256=run['executor_sha256'])
             db.execute("BEGIN IMMEDIATE")
             require(db.execute("SELECT 1 FROM runs WHERE id=?", (run_id,)).fetchone() is None, "Run ID already exists")
+            if 'execution_policy' in contract:
+                previous = [json.loads(row['body']) for row in db.execute(
+                    "SELECT body FROM runs WHERE json_extract(body,'$.execution_route_sha256')=?",
+                    (run['execution_route_sha256'],))]
+                active = next((row for row in previous if row['status'] in {'RESERVED', 'RUNNING', 'COMPLETED'}), None)
+                require(active is None, 'Execution policy: observe or recover existing run ' + (active or {}).get('id', ''))
+                require(len(previous) < contract['execution_policy']['max_attempts'],
+                        'Execution policy: unchanged route reached max_attempts; retained failures are not a scientific impossibility claim')
             if spec.get("control_id"):
                 require(db.execute("SELECT 1 FROM runs WHERE id=?", (spec["control_id"],)).fetchone() is not None, "Unknown control ID")
             for resource, amount in estimates.items():
@@ -461,6 +503,8 @@ class ProjectStore:
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             run = self._run(db, run_id)
+            if 'execution_policy' in self._contract(db) and (run['status'] != 'RESERVED' or run['attempt_id'] is not None):
+                return self._observe(db, run)
             require(run["status"] == "RESERVED" and run["attempt_id"] is None, "Run already dispatched or started; recover never reruns it")
             self._check_start(db, run)
             run["attempt_id"] = uuid.uuid4().hex
@@ -487,6 +531,37 @@ class ProjectStore:
                 self._save(db, current)
             return current
         return self._execute_claim(run_id, run["attempt_id"])
+
+    def _observe(self, db, run):
+        """Existing operational evidence only; never launch, refund or infer scientific success."""
+        contract = self._contract(db)
+        bindings, errors = self._bindings(contract)
+        require(not errors, '; '.join(errors))
+        row = db.execute('SELECT body,sha256 FROM receipts WHERE run_id=?', (run['id'],)).fetchone()
+        if row is None:
+            require(run['status'] not in TERMINAL, 'Existing terminal run has no owned receipt; inspect retained state')
+            return {**run, 'execution_started': False, 'policy_observation': 'Existing attempt; inspect or recover it'}
+        receipt = json.loads(row['body'])
+        require(receipt.get('sha256') == row['sha256'] == digest({key: value for key, value in receipt.items() if key != 'sha256'}),
+                'Existing receipt integrity failure')
+        require(receipt.get('manifest_sha256') == run['manifest_sha256'] and receipt.get('attempt_id') == run['attempt_id'],
+                'Existing receipt differs from its run')
+        require(receipt.get('run_id') == run['id'] and receipt.get('process_status') == run['status']
+                and receipt.get('argv') == run['manifest']['argv'] and receipt.get('executor_sha256') == run['executor_sha256'],
+                'Existing receipt operation differs from its owned run')
+        require(db.execute("SELECT 1 FROM events WHERE json_extract(body,'$.kind')='ATTEMPT_FINISHED' "
+                           "AND json_extract(body,'$.run_id')=? AND json_extract(body,'$.sha256')=?",
+                           (run['id'], receipt['sha256'])).fetchone() is not None,
+                'Existing receipt has no matching owned completion event')
+        if receipt.get('run_status') == 'SUCCEEDED':
+            require(receipt.get('bindings_before') == bindings == receipt.get('bindings_after'),
+                    'Existing successful receipt input bindings differ')
+            inventory = {entry['path']: entry['sha256'] for entry in receipt.get('artifacts', [])}
+            for output in run['manifest']['outpaths']:
+                path = self._path(output, True, contract)
+                require(output in inventory and path.is_file() and file_sha(path) == inventory[output],
+                        'Existing successful output unavailable or changed: ' + output)
+        return {**receipt, 'execution_started': False, 'policy_observation': 'Retained receipt; scientific assessment is unchanged'}
 
     def _execute_claim(self, run_id, attempt_id):
         attempt_start = time.monotonic()

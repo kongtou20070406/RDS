@@ -68,7 +68,7 @@ class ProjectTests(unittest.TestCase):
         self.store.register(spec)
         return self.store.execute(spec["id"])
 
-    def new_store(self, budget=None, commands=()):
+    def new_store(self, budget=None, commands=(), policy=None):
         root = self.root / "other-project"
         root.mkdir()
         for binding in self.contract["bindings"]:
@@ -77,9 +77,133 @@ class ProjectTests(unittest.TestCase):
         if budget is not None:
             contract["budget"] = budget
         contract["allowed_commands"].extend(commands)
+        if policy is not None:
+            contract['execution_policy'] = policy
         store = ProjectStore(root)
         store.initialize(contract)
         return store
+
+    def test_execution_policy_is_opt_in_and_frozen(self):
+        policy = {'schema': 1, 'max_attempts': 1}
+        store = self.new_store(policy=policy)
+        contract = store.snapshot()['contract']
+        for changed in ({**policy, 'max_attempts': 2}, None):
+            update = json.loads(canonical(contract))
+            if changed is None:
+                update.pop('execution_policy')
+            else:
+                update['execution_policy'] = changed
+            with self.assertRaisesRegex(ValueError, 'frozen'):
+                store.initialize(update)
+        for invalid in ({'schema': 1, 'max_attempts': 0}, {'schema': 1, 'max_attempts': True},
+                        {'schema': 1, 'max_attempts': 33}, {'schema': 1, 'max_attempts': 1, 'override': True}):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, 'Execution policy'):
+                self.store.initialize({**self.contract, 'execution_policy': invalid})
+
+    def test_policy_success_reuse_checks_receipt_outputs_without_another_reservation(self):
+        store = self.new_store(policy={'schema': 1, 'max_attempts': 2})
+        store.register(self.spec())
+        receipt = store.execute('r1')
+        before = store.snapshot()['budget']
+        observed = store.execute('r1')
+        self.assertEqual(observed['sha256'], receipt['sha256'])
+        self.assertFalse(observed['execution_started'])
+        self.assertEqual(store.snapshot()['budget'], before)
+        with self.assertRaisesRegex(ValueError, 'observe or recover'):
+            store.register(self.spec('r2'))
+        self.assertEqual(len(store.snapshot()['runs']), 1)
+        (store.root / 'outputs/r1.json').unlink()
+        with self.assertRaisesRegex(ValueError, 'output unavailable'):
+            store.execute('r1')
+        self.assertEqual(store.snapshot()['budget'], before)
+
+    def test_policy_failure_attempt_cap_ignores_names_destinations_and_timeout(self):
+        store = self.new_store(policy={'schema': 1, 'max_attempts': 2})
+        for rid in ('r1', 'r2'):
+            store.register(self.spec(rid, 'nonzero'))
+            self.assertEqual(store.execute(rid)['run_status'], 'FAILED')
+        before = store.snapshot()['budget']
+        with self.assertRaisesRegex(ValueError, 'max_attempts'):
+            store.register(self.spec('r3', 'nonzero', timeout=0.5))
+        self.assertEqual(store.snapshot()['budget'], before)
+        self.assertGreater(before['wall_seconds']['spent_measured'], 0)
+        self.assertEqual(len(store.snapshot()['receipts']), 2)
+
+    def test_policy_observation_requires_owned_completion_not_a_self_signed_receipt(self):
+        store = self.new_store(policy={'schema': 1, 'max_attempts': 1})
+        store.register(self.spec())
+        original = store.execute('r1')
+        before = store.snapshot()['budget']
+        forged = {**original, 'assessment': {'task_gain': 'PASS', 'mechanism': 'PASS'}}
+        forged['sha256'] = digest({key: value for key, value in forged.items() if key != 'sha256'})
+        with store._db() as db:
+            # Simulate a damaged/copied local ledger beyond its append-only SQL guards.
+            db.execute('DROP TRIGGER receipts_no_update')
+            db.execute('UPDATE receipts SET body=?,sha256=? WHERE run_id=?', (canonical(forged), forged['sha256'], 'r1'))
+        with self.assertRaisesRegex(ValueError, 'owned completion'):
+            store.execute('r1')
+        with store._db() as db:
+            db.execute('DROP TRIGGER receipts_no_delete')
+            db.execute('DELETE FROM receipts WHERE run_id=?', ('r1',))
+        with self.assertRaisesRegex(ValueError, 'no owned receipt'):
+            store.execute('r1')
+        self.assertEqual(store.snapshot()['budget'], before)
+
+    def test_policy_atomic_same_route_registration_and_live_observation(self):
+        store = self.new_store(policy={'schema': 1, 'max_attempts': 2})
+        def reserve(rid):
+            try:
+                return store.register(self.spec(rid))['id']
+            except ValueError:
+                return None
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            admitted = list(pool.map(reserve, ('r1', 'r2')))
+        self.assertEqual(len([rid for rid in admitted if rid is not None]), 1)
+        state = store.snapshot()
+        self.assertEqual(len(state['runs']), 1)
+        self.assertEqual(state['budget']['wall_seconds']['reserved'], 2.2)
+        rid = next(rid for rid in admitted if rid is not None)
+        with store._db() as db:
+            run = store._run(db, rid)
+            run.update(status='RUNNING', attempt_id='owned-attempt')
+            store._save(db, run)
+        observed = store.execute(rid)
+        self.assertEqual(observed['status'], 'RUNNING')
+        self.assertFalse(observed['execution_started'])
+        self.assertFalse((store.root / f'outputs/{rid}.json').exists())
+
+    def test_registration_consumes_observed_executor_binding_before_reserving(self):
+        executor = self.root / Path(sys.executable).name
+        shutil.copy2(sys.executable, executor)
+        spec = self.spec()
+        spec['argv'][0] = str(executor)
+        store = self.new_store(policy={'schema': 1, 'max_attempts': 1}, commands=[spec['argv']])
+        expected = file_sha(executor)
+        before = store.snapshot()['budget']
+        with executor.open('ab') as handle:
+            handle.write(b'changed-after-parent-observation')
+        with self.assertRaisesRegex(ValueError, 'changed before registration'):
+            store.register(spec, executor_sha256=expected)
+        self.assertEqual(store.snapshot()['budget'], before)
+        self.assertFalse(store.snapshot()['runs'])
+        shutil.copyfile(sys.executable, executor)
+        registered = store.register(spec, executor_sha256=expected)
+        self.assertEqual(registered['executor_sha256'], expected)
+
+    def test_policy_route_normalizes_bound_file_aliases_to_content_and_role(self):
+        from rds_project import execution_route
+        alias = self.root / 'same-code.py'
+        alias.write_bytes((self.root / 'code.py').read_bytes())
+        bindings = [{'path': 'code.py', 'role': 'code', 'sha256': file_sha(alias)},
+                    {'path': 'same-code.py', 'role': 'code', 'sha256': file_sha(alias)}]
+        one = execution_route([sys.executable, '-B', 'code.py', 'outputs/one'], bindings, ['outputs/one'], self.root)
+        two = execution_route([sys.executable, '-B', 'same-code.py', 'outputs/two'], bindings, ['outputs/two'], self.root)
+        self.assertEqual(one, two)
+        if os.name == 'nt':
+            self.assertEqual(one, execution_route([sys.executable, '-B', 'CODE.PY', 'OUTPUTS/ONE'],
+                                                  bindings, ['outputs/one'], self.root))
+        changed = [{**bindings[0], 'sha256': 'a' * 64}]
+        self.assertNotEqual(one, execution_route([sys.executable, '-B', 'code.py', 'outputs/one'], changed, ['outputs/one'], self.root))
 
     def reserve_overrun_pair(self):
         store = self.new_store({"wall_seconds": 0.002, "cpu_seconds": 2, "gpu_seconds": 0})
