@@ -9,6 +9,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -113,6 +114,25 @@ class UsageTests(unittest.TestCase):
         second = self.cli("usage", "--days", "2")
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertIn("Recorded calls: 2", second.stdout)
+
+    def test_lock_contention_longer_than_old_timeout_retains_start_and_exit(self):
+        usage.run_logged(lambda: 0, ['status'], 'test')
+        with closing(sqlite3.connect(self.path)) as blocker:
+            blocker.execute('BEGIN IMMEDIATE')
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                entering = threading.Event()
+                def invoke():
+                    entering.set()
+                    return usage.run_logged(lambda: 7, ['status'], 'test')
+                pending = pool.submit(invoke)
+                self.assertTrue(entering.wait(timeout=2))
+                time.sleep(2.4)  # Deterministic contention beyond the original 2-second wait.
+                blocker.commit()
+                self.assertEqual(pending.result(timeout=12), 7)
+        report = usage.summarize(days=1)
+        self.assertEqual(report['total_calls'], 2)
+        self.assertEqual(report['daily'][0]['failed'], 1)
+        self.assertIsNone(usage._last_error)
 
     def test_invalid_windows_fail_and_unfinished_starts_remain_visible(self):
         usage._start(["project"], "test")

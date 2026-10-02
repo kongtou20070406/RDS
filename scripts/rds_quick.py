@@ -229,6 +229,8 @@ def _charge_ledger(root, workspace, request, seconds, route=None, source_root=No
     with store._db() as db:
         db.execute('BEGIN IMMEDIATE')
         contract = store._contract(db)
+        require('stop_policy' not in contract and 'maintenance_allowance' not in contract,
+                'Configured stop/maintenance policies require project create/execute; quick child allowance cannot bypass them')
         require(set(contract['budget']) == {'wall_seconds'}, 'Quick exec supports a wall-only parent ledger; use a full project manifest for other resources')
         _, errors = store._bindings(contract)
         require(not errors, '; '.join(errors))
@@ -384,6 +386,8 @@ def execute(args, review=None):
             # Native research records can share this database before project init.
             has_contract = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='contract'").fetchone()
             source_contract = source_store._contract(db) if has_contract else {}
+        require('stop_policy' not in source_contract and 'maintenance_allowance' not in source_contract,
+                'Configured stop/maintenance policies require project create/execute; quick exec cannot bypass them')
         if 'execution_policy' in source_contract:
             require(owner is None or owner == root, 'Frozen source execution policy cannot be replaced by another ledger')
             owner = root
