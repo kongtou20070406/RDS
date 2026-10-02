@@ -25,10 +25,13 @@ def _identity_string(value):
 
 class ArtifactFact(dict):
     """In-memory importer origin; serialized dictionaries cannot self-sign it."""
-    def __init__(self, record):
+    def __init__(self, record, *, reading_identity=None):
         super().__init__(record)
         self.provenance_status = {"OBSERVED": "ARTIFACT_OBSERVED", "DECLARED": "ARTIFACT_DECLARED",
                                   "DERIVED": "PROGRAM_DERIVED"}.get(record.get("kind"), "UNKNOWN")
+        # Importer-owned in-memory identity, like provenance_status. Public
+        # physical locators stay unchanged; serialized flags cannot mint a read.
+        self.reading_identity = reading_identity
 
 
 def strict_json(raw):
@@ -179,10 +182,10 @@ def _extract(document, selector, fmt):
     return _pointer(document, pointer), "pointer:" + pointer, pointer.rsplit("/", 1)[-1]
 
 
-def _fact(fid, value, kind, source, binding, **extra):
+def _fact(fid, value, kind, source, binding, *, reading_identity=None, **extra):
     record = {"id": fid, "value": value, "kind": kind, "source": deepcopy(source),
               "binding": deepcopy(binding), "reliable": kind != "UNKNOWN", **extra}
-    return ArtifactFact(record)
+    return ArtifactFact(record, reading_identity=reading_identity)
 
 
 def _unknown(record, reason):
@@ -212,7 +215,7 @@ def ingest_manifest(path, root=None, receipts=None):
                           "costs": {}, "budget": deepcopy(manifest.get("budget", {}))}}
     require(receipts is None or isinstance(receipts, (list, tuple)), "receipts must be a list")
     receipt_records, by_run, owners, source_ids = list(receipts or []), {}, {}, set()
-    file_cache, source_runs = {}, {}
+    file_cache, source_runs, whole_json = {}, {}, {}
     for spec in sources:
         require(isinstance(spec, dict) and isinstance(spec.get("id"), str) and spec["id"], "source needs an id")
         require(spec["id"] not in source_ids, "duplicate source id")
@@ -230,7 +233,7 @@ def ingest_manifest(path, root=None, receipts=None):
         binding = deepcopy(spec.get("binding", {}))
         require(isinstance(binding, dict), "source binding must be an object")
         source_runs[spec["id"]] = {binding["run_id"]} if _identity_string(binding.get("run_id")) else set()
-        problems, document, actual_sha = [], None, None
+        problems, document, actual_sha, single_json_line = [], None, None, False
         try:
             cache_key = str((base / name).resolve())
             if cache_key not in file_cache:
@@ -241,6 +244,18 @@ def ingest_manifest(path, root=None, receipts=None):
             require(sha256(spec.get("expected_sha256")), "expected_sha256 is missing or invalid")
             require(actual_sha == spec["expected_sha256"], "source hash mismatch")
             document = _parse(raw, kind, fmt)
+            if fmt == "json":
+                whole_json[actual_sha] = True
+            elif fmt == "jsonl" and len(document) == 1:
+                # Only a whole-file JSON value can alias a JSON pointer. Keep
+                # genuine multi-record JSONL line identities and public locators.
+                if actual_sha not in whole_json:
+                    try:
+                        strict_json(raw.decode("utf-8-sig"))
+                        whole_json[actual_sha] = True
+                    except (ValueError, UnicodeError, RecursionError):
+                        whole_json[actual_sha] = False
+                single_json_line = whole_json[actual_sha]
             observed, collisions = _metadata(document, fmt)
             if _identity_string(observed.get("run_id")):
                 source_runs[spec["id"]].add(observed["run_id"])
@@ -296,8 +311,10 @@ def ingest_manifest(path, root=None, receipts=None):
                     reason = str(exc)
                     report["missing"].append({"fact_id": fid, "source_id": spec["id"], "reason": reason})
             fact_kind = "UNKNOWN" if reason else "DECLARED" if kind == "config" else "OBSERVED"
+            reading_locator = "pointer:" + selector["pointer"] if single_json_line and not reason else locator
             fact = _fact(fid, None if reason else value, fact_kind,
                          {"path": name, "sha256": actual_sha, "locator": locator}, binding,
+                         reading_identity=(actual_sha, reading_locator) if fact_kind == "OBSERVED" else None,
                          **({"reason": reason, "declared_value": value} if reason else {}))
             if fid in report["facts"]:
                 report["conflicts"].append({"fact_id": fid, "reason": "duplicate fact identity",

@@ -188,7 +188,11 @@ def _evidence_identity(name, facts, memo, seen=()):
                   bool(parts) and all(p[1] for p in parts))
     elif status == "ARTIFACT_OBSERVED" and isinstance(source, dict) and isinstance(source.get("sha256"), str):
         locator = source.get("locator")
-        result = (frozenset({("read", source["sha256"], locator if isinstance(locator, str) else None)}), True)
+        reading = getattr(record, "reading_identity", None)
+        if not (isinstance(reading, tuple) and len(reading) == 2 and all(isinstance(value, str) for value in reading)):
+            # Older trusted ArtifactFact callers retain their located identity.
+            reading = (source["sha256"], locator if isinstance(locator, str) else None)
+        result = (frozenset({("read", *reading)}), True)
     else:
         result = (frozenset({("fact", name)}), False)
     memo[name] = result
