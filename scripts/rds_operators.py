@@ -1,748 +1,727 @@
-"""Runnable, verifiable code operators and scaffolding for RDS theory tool cards.
-
-Transforms informational theory cards into executable, self-testing operators
-preventing iterative LLM research loops from retreating to naive hyperparameter tuning.
-"""
+"""Bounded stdlib operator examples: exact rational checks and numerical diagnostics."""
+import ast
 import inspect
 import json
 import math
 from fractions import Fraction
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-# ---------------------------------------------------------------------------
-# Operator 1: ContinuousStateSpaceOperator (state_space_refinement)
-# ---------------------------------------------------------------------------
+
+def _finite_number(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float, Fraction)):
+        raise ValueError("Expected a finite real number")
+    try:
+        result = float(value)
+    except (ValueError, OverflowError) as exc:
+        raise ValueError("Number is outside the supported floating range") from exc
+    if not math.isfinite(result):
+        raise ValueError("Expected a finite real number")
+    return result
+
+
+def _vector(value, size, name):
+    if not isinstance(value, (list, tuple)) or len(value) != size:
+        raise ValueError(f"{name} must have exactly {size} coordinates")
+    return [_finite_number(item) for item in value]
+
+
+def _matrix(value, rows, cols, name):
+    if not isinstance(value, (list, tuple)) or len(value) != rows:
+        raise ValueError(f"{name} must be {rows}x{cols}")
+    return [_vector(row, cols, name) for row in value]
+
+
+def _dimension(value):
+    if type(value) is not int or not 1 <= value <= 64:
+        raise ValueError("Dimensions must be integers in 1..64")
+    return value
+
+
+def _ratio(value):
+    if isinstance(value, bool) or not isinstance(value, (int, str, float, Fraction)):
+        raise ValueError("Expected a rational number")
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError("Expected a finite number")
+    if isinstance(value, str) and len(value) > 2500:
+        raise ValueError("Rational input exceeds size limit")
+    try:
+        result = Fraction(value)
+    except (ValueError, TypeError, ZeroDivisionError, OverflowError) as exc:
+        raise ValueError("Expected a finite rational number") from exc
+    if max(result.numerator.bit_length(), result.denominator.bit_length()) > 4096:
+        raise ValueError("Exact arithmetic exceeds the 4096-bit limit")
+    return result
+
+
+def _solve_exact(a_mat, b_vec):
+    n = _dimension(len(b_vec))
+    if len(a_mat) != n or any(len(row) != n for row in a_mat):
+        raise ValueError(f"Matrix must be {n}x{n}")
+    aug = [[_ratio(value) for value in row] + [_ratio(b_vec[i])]
+           for i, row in enumerate(a_mat)]
+    for col in range(n):
+        pivot_row = max(range(col, n), key=lambda row: abs(aug[row][col]))
+        if aug[pivot_row][col] == 0:
+            raise ValueError("Matrix is singular")
+        aug[col], aug[pivot_row] = aug[pivot_row], aug[col]
+        pivot = aug[col][col]
+        for j in range(col, n + 1):
+            aug[col][j] = _ratio(aug[col][j] / pivot)
+        for row in range(n):
+            if row != col:
+                factor = aug[row][col]
+                for j in range(col, n + 1):
+                    aug[row][j] = _ratio(aug[row][j] - factor * aug[col][j])
+    return [aug[i][n] for i in range(n)]
+
 
 class ContinuousStateSpaceOperator:
-    """Continuous-time State-Space Discretization (ZOH) Operator.
+    """Diagonal ZOH updates in a supported finite floating-point domain.
 
-    Converts continuous-time parameters (A_log, B, C, D) into step-invariant discrete updates
-    via Zero-Order Hold (ZOH). Guarantees Hurwitz stability (via -exp(A_log) < 0) and
-    O(dt) error convergence across varying inference step sizes (NFE).
+    NFE comparisons are observations, not proofs of convergence or error bounds.
     """
 
     def __init__(self, state_dim: int, in_dim: int = 1, out_dim: int = 1):
-        self.state_dim = state_dim
-        self.in_dim = in_dim
-        self.out_dim = out_dim
-        # Default initialization: stable continuous eigenvalues in [-5.0, -0.5]
-        self.a_log = [math.log(0.5 + 4.5 * (i / max(1, state_dim - 1))) for i in range(state_dim)]
+        self.state_dim, self.in_dim, self.out_dim = map(_dimension, (state_dim, in_dim, out_dim))
+        self.a_log = [math.log(0.5 + 4.5 * i / max(1, state_dim - 1)) for i in range(state_dim)]
         self.b = [[1.0 / math.sqrt(state_dim)] * in_dim for _ in range(state_dim)]
         self.c = [[1.0 / math.sqrt(state_dim)] * state_dim for _ in range(out_dim)]
         self.d = [[0.0] * in_dim for _ in range(out_dim)]
 
-    def discretize_zoh(self, dt: float) -> Tuple[List[float], List[List[float]]]:
-        """Discretizes continuous diagonal A = -exp(a_log) and B via exact Zero-Order Hold.
+    def _parameters(self):
+        _dimension(self.state_dim)
+        _dimension(self.in_dim)
+        _dimension(self.out_dim)
+        _vector(self.a_log, self.state_dim, "a_log")
+        _matrix(self.b, self.state_dim, self.in_dim, "B")
+        _matrix(self.c, self.out_dim, self.state_dim, "C")
+        _matrix(self.d, self.out_dim, self.in_dim, "D")
 
-        A_bar_i = exp(-dt * exp(a_log_i)) in (0, 1)
-        B_bar_ij = (1 - A_bar_i) / exp(a_log_i) * B_ij
-        """
+    def discretize_zoh(self, dt: float) -> Tuple[List[float], List[List[float]]]:
+        """Use expm1 to avoid cancellation; reject lost strict decay or overflow."""
+        self._parameters()
+        dt = _finite_number(dt)
         if dt <= 0:
-            raise ValueError(f"Step size dt must be positive, got {dt}")
-        a_bar = []
-        b_bar = []
+            raise ValueError("Step size dt must be positive")
+        a_bar, b_bar = [], []
         for i in range(self.state_dim):
-            a_cont = math.exp(self.a_log[i])
-            decay = math.exp(-dt * a_cont)
+            try:
+                rate = math.exp(self.a_log[i])
+                exponent = _finite_number(dt * rate)
+                decay = math.exp(-exponent)
+            except OverflowError as exc:
+                raise ValueError("ZOH rate exceeds the supported floating range") from exc
+            if rate <= 0 or not math.isfinite(rate) or not 0 < decay < 1:
+                raise ValueError("ZOH strict decay is not representable at this rate and dt")
+            scale = -math.expm1(-exponent) / rate
             a_bar.append(decay)
-            # Numerically stable (1 - exp(-dt * a)) / a
-            scale = (1.0 - decay) / a_cont if dt * a_cont > 1e-6 else dt * (1.0 - 0.5 * dt * a_cont)
-            b_row = [scale * self.b[i][j] for j in range(self.in_dim)]
-            b_bar.append(b_row)
+            b_bar.append([_finite_number(scale * value) for value in self.b[i]])
         return a_bar, b_bar
 
-    def step(self, h: List[float], u: List[float], a_bar: List[float], b_bar: List[List[float]]) -> Tuple[List[float], List[float]]:
-        """Computes one discrete state update and output."""
-        h_next = [0.0] * self.state_dim
-        for i in range(self.state_dim):
-            b_contrib = sum(b_bar[i][j] * u[j] for j in range(self.in_dim))
-            h_next[i] = a_bar[i] * h[i] + b_contrib
-        y = [0.0] * self.out_dim
-        for i in range(self.out_dim):
-            c_contrib = sum(self.c[i][j] * h_next[j] for j in range(self.state_dim))
-            d_contrib = sum(self.d[i][j] * u[j] for j in range(self.in_dim))
-            y[i] = c_contrib + d_contrib
+    def step(self, h, u, a_bar, b_bar):
+        """Compute one finite update with exact dimension matching."""
+        self._parameters()
+        h = _vector(h, self.state_dim, "state")
+        u = _vector(u, self.in_dim, "input")
+        a_bar = _vector(a_bar, self.state_dim, "A_bar")
+        b_bar = _matrix(b_bar, self.state_dim, self.in_dim, "B_bar")
+        if any(not 0 < value < 1 for value in a_bar):
+            raise ValueError("A_bar must have representable strict decay")
+        try:
+            h_next = [_finite_number(a_bar[i] * h[i] + math.fsum(b_bar[i][j] * u[j]
+                       for j in range(self.in_dim))) for i in range(self.state_dim)]
+            y = [_finite_number(math.fsum(self.c[i][j] * h_next[j] for j in range(self.state_dim))
+                 + math.fsum(self.d[i][j] * u[j] for j in range(self.in_dim)))
+                 for i in range(self.out_dim)]
+        except OverflowError as exc:
+            raise ValueError("State-space update exceeds the floating range") from exc
         return h_next, y
 
-    def forward_trajectory(self, u_seq: List[List[float]], dt: float, h0: Optional[List[float]] = None) -> Tuple[List[List[float]], List[List[float]]]:
-        """Integrates trajectory over sequence u_seq with fixed step dt."""
+    def forward_trajectory(self, u_seq, dt, h0=None):
         a_bar, b_bar = self.discretize_zoh(dt)
-        h = list(h0) if h0 is not None else [0.0] * self.state_dim
-        h_traj = [list(h)]
-        y_traj = []
+        h = _vector(h0, self.state_dim, "initial state") if h0 is not None else [0.0] * self.state_dim
+        if not isinstance(u_seq, (list, tuple)) or len(u_seq) > 16384:
+            raise ValueError("Expected a sequence of at most 16384 input vectors")
+        h_traj, y_traj = [list(h)], []
         for u in u_seq:
             h, y = self.step(h, u, a_bar, b_bar)
             h_traj.append(list(h))
             y_traj.append(y)
         return h_traj, y_traj
 
-    def verify_step_invariance(self, total_time: float = 1.0, nfe_candidates: Tuple[int, ...] = (16, 32, 64, 128)) -> Dict[str, Any]:
-        """Verifies that trajectory error scales as O(dt) and remains bounded across sampling steps."""
+    def verify_step_invariance(self, total_time=1.0, nfe_candidates=(16, 32, 64, 128)):
+        """Compare all output endpoints; finite refinements cannot certify a limit."""
+        total_time = _finite_number(total_time)
+        if total_time <= 0:
+            raise ValueError("Total time must be positive")
+        if (not isinstance(nfe_candidates, (list, tuple)) or not 2 <= len(nfe_candidates) <= 16
+                or any(type(nfe) is not int or not 1 <= nfe <= 4096 for nfe in nfe_candidates)
+                or len(set(nfe_candidates)) != len(nfe_candidates) or sum(nfe_candidates) > 16384):
+            raise ValueError("Expected 2..16 distinct integer NFE values in 1..4096 within 16384 total steps")
         endpoints = {}
-        for nfe in nfe_candidates:
+        for nfe in sorted(nfe_candidates):
             dt = total_time / nfe
-            # Smooth driving signal: u(t) = sin(2*pi*t)
-            u_seq = [[math.sin(2.0 * math.pi * (k * dt))] for k in range(nfe)]
+            u_seq = [[math.sin(2.0 * math.pi * k * dt)] * self.in_dim for k in range(nfe)]
             _, y_traj = self.forward_trajectory(u_seq, dt)
-            endpoints[nfe] = y_traj[-1][0]
-
-        # Check Cauchy differences between consecutive resolutions
-        sorted_nfe = sorted(nfe_candidates)
-        cauchy_diffs = []
-        for i in range(len(sorted_nfe) - 1):
-            nfe_coarse, nfe_fine = sorted_nfe[i], sorted_nfe[i + 1]
-            diff = abs(endpoints[nfe_fine] - endpoints[nfe_coarse])
-            cauchy_diffs.append({"coarse": nfe_coarse, "fine": nfe_fine, "diff": diff})
-
-        # Monotonic convergence check: differences should shrink as grid refines
-        is_convergent = all(
-            cauchy_diffs[i]["diff"] <= cauchy_diffs[i - 1]["diff"] * 1.2 + 1e-4
-            for i in range(1, len(cauchy_diffs))
-        )
-        finest_err = cauchy_diffs[-1]["diff"]
-        return {
-            "status": "PASS" if is_convergent and finest_err < 0.05 else "FAIL",
-            "finest_nfe": sorted_nfe[-1],
-            "finest_cauchy_error": finest_err,
-            "cauchy_diffs": cauchy_diffs,
-            "endpoints": endpoints,
-            "assurance": "STEP_INVARIANCE_CERTIFIED" if is_convergent else "STEP_SENSITIVITY_DETECTED",
-        }
+            endpoints[nfe] = y_traj[-1]
+        grid = sorted(endpoints)
+        diffs = [{"coarse": coarse, "fine": fine,
+                  "diff": max(abs(a - b) for a, b in zip(endpoints[coarse], endpoints[fine]))}
+                 for coarse, fine in zip(grid, grid[1:])]
+        shrinking = all(diffs[i]["diff"] <= diffs[i - 1]["diff"] * 1.2 + 1e-4
+                        for i in range(1, len(diffs)))
+        return {"status": "UNKNOWN", "assurance": "NUMERICAL_DIAGNOSTIC",
+                "reason": "Finite NFE comparisons can alias and do not certify convergence or error bounds",
+                "diagnostic_pass": shrinking and diffs[-1]["diff"] < 0.05,
+                "finest_nfe": grid[-1], "finest_cauchy_error": diffs[-1]["diff"],
+                "cauchy_diffs": diffs, "endpoints": endpoints}
 
     @staticmethod
-    def scaffold_code() -> str:
-        """Returns standalone copy-pasteable implementation for user models."""
-        return '''# Continuous State Space Operator (ZOH Discretization)
-# Plug-and-play replacement for naive recurrence suffering from step sensitivity.
-import math
+    def scaffold_code():
+        return _scaffold(ContinuousStateSpaceOperator, _ssm_self_test)
 
-class ContinuousStateSpace:
-    def __init__(self, dim, in_dim=1, out_dim=1):
-        self.dim = dim
-        self.a_log = [math.log(1.0 + i) for i in range(dim)]
-        self.b = [[1.0 / math.sqrt(dim)] * in_dim for _ in range(dim)]
-        self.c = [[1.0 / math.sqrt(dim)] * dim for _ in range(out_dim)]
-        self.d = [[0.0] * in_dim for _ in range(out_dim)]
-
-    def discretize_zoh(self, dt):
-        a_bar = [math.exp(-dt * math.exp(al)) for al in self.a_log]
-        b_bar = []
-        for i in range(self.dim):
-            a_cont = math.exp(self.a_log[i])
-            decay = a_bar[i]
-            scale = (1.0 - decay) / a_cont if dt * a_cont > 1e-6 else dt
-            b_bar.append([scale * self.b[i][j] for j in range(len(self.b[i]))])
-        return a_bar, b_bar
-
-    def forward(self, u_seq, dt, h0=None):
-        a_bar, b_bar = self.discretize_zoh(dt)
-        h = list(h0) if h0 else [0.0] * self.dim
-        outputs = []
-        for u in u_seq:
-            h = [a_bar[i] * h[i] + sum(b_bar[i][j] * u[j] for j in range(len(u))) for i in range(self.dim)]
-            y = [sum(self.c[k][i] * h[i] for i in range(self.dim)) + sum(self.d[k][j] * u[j] for j in range(len(u))) for k in range(len(self.c))]
-            outputs.append(y)
-        return outputs
-
-if __name__ == "__main__":
-    op = ContinuousStateSpace(dim=4)
-    out16 = op.forward([[1.0]] * 16, dt=1.0/16)
-    out64 = op.forward([[1.0]] * 64, dt=1.0/64)
-    print("NFE 16 final output:", out16[-1])
-    print("NFE 64 final output:", out64[-1])
-'''
-
-
-# ---------------------------------------------------------------------------
-# Operator 2: ContractionDynamicsOperator (contraction_target_bias)
-# ---------------------------------------------------------------------------
 
 class ContractionDynamicsOperator:
-    """Contraction Dynamics and Target Bias Operator.
+    """Exact infinity-norm and fixed-point checks for the supplied rational values.
 
-    Verifies the induced infinity norm ||A||_inf of an affine iteration x_{k+1} = A x_k + b.
-    Computes exact analytical fixed points and distinguishes contracting dynamics from target bias.
+    A float denotes its exact binary rational, not an uncertain real parameter.
+    Failing the infinity-norm criterion does not prove divergence in every norm.
     """
 
     @staticmethod
-    def infinity_norm(matrix: List[List[float]]) -> float:
-        """Induced infinity norm: max row sum of absolute values."""
-        if not matrix or not matrix[0]:
-            return 0.0
-        return max(sum(abs(val) for val in row) for row in matrix)
+    def infinity_norm(matrix):
+        n = _dimension(len(matrix))
+        _matrix(matrix, n, n, "A")
+        return _finite_number(max(sum(abs(_ratio(value)) for value in row) for row in matrix))
 
     @staticmethod
-    def solve_linear_system(a_mat: List[List[float]], b_vec: List[float]) -> List[float]:
-        """Solves A x = b via Gaussian elimination with partial pivoting."""
-        n = len(b_vec)
-        # Augment matrix
-        aug = [list(a_mat[i]) + [b_vec[i]] for i in range(n)]
-        for col in range(n):
-            # Pivot
-            max_row = max(range(col, n), key=lambda r: abs(aug[r][col]))
-            if abs(aug[max_row][col]) < 1e-12:
-                raise ValueError("Matrix is singular or near-singular")
-            aug[col], aug[max_row] = aug[max_row], aug[col]
-            pivot = aug[col][col]
-            for j in range(col, n + 1):
-                aug[col][j] /= pivot
-            for row in range(n):
-                if row != col:
-                    factor = aug[row][col]
-                    for j in range(col, n + 1):
-                        aug[row][j] -= factor * aug[col][j]
-        return [aug[i][n] for i in range(n)]
+    def solve_linear_system(a_mat, b_vec):
+        _vector(b_vec, _dimension(len(b_vec)), "b")
+        _matrix(a_mat, len(b_vec), len(b_vec), "A")
+        return [_finite_number(value) for value in _solve_exact(a_mat, b_vec)]
 
     @classmethod
-    def analyze_system(
-        cls,
-        a_mat: List[List[float]],
-        b_vec: List[float],
-        target: Optional[List[float]] = None,
-        max_norm_threshold: float = 0.999
-    ) -> Dict[str, Any]:
-        """Evaluates contractivity, computes fixed point x* = (I - A)^(-1) b, and target bias."""
-        n = len(b_vec)
-        if len(a_mat) != n or any(len(row) != n for row in a_mat):
-            raise ValueError(f"Matrix A must be {n}x{n}")
-
-        norm_inf = cls.infinity_norm(a_mat)
-        is_contracting = norm_inf <= max_norm_threshold
-
-        # (I - A) x = b
-        eye_minus_a = [
-            [(1.0 if i == j else 0.0) - a_mat[i][j] for j in range(n)]
-            for i in range(n)
-        ]
+    def analyze_system(cls, a_mat, b_vec, target=None, max_norm_threshold=0.999):
+        n = _dimension(len(b_vec))
+        _matrix(a_mat, n, n, "A")
+        _vector(b_vec, n, "b")
+        if target is not None:
+            _vector(target, n, "target")
+        threshold = _finite_number(max_norm_threshold)
+        if threshold < 0:
+            raise ValueError("Engineering norm threshold must be nonnegative")
+        norm = max(sum(abs(_ratio(value)) for value in row) for row in a_mat)
+        norm_float = _finite_number(norm)
+        contracting = norm < 1
+        system = [[Fraction(i == j) - _ratio(a_mat[i][j]) for j in range(n)] for i in range(n)]
+        fp, fp_float, bias, reason = None, None, None, None
         try:
-            fixed_point = cls.solve_linear_system(eye_minus_a, b_vec)
-            has_unique_fp = True
-        except ValueError:
-            fixed_point = None
-            has_unique_fp = False
-
-        target_bias = None
-        if fixed_point is not None and target is not None:
-            if len(target) != n:
-                raise ValueError(f"Target dimension mismatch: expected {n}, got {len(target)}")
-            target_bias = max(abs(fixed_point[i] - target[i]) for i in range(n))
-
-        status = "PASS" if is_contracting else "FAIL"
-        return {
-            "status": status,
-            "norm_infinity": norm_inf,
-            "is_contracting": is_contracting,
-            "has_unique_fixed_point": has_unique_fp,
-            "fixed_point": fixed_point,
-            "target_bias": target_bias,
-            "diagnosis": (
-                "CONTRACTING_AND_UNBIASED" if is_contracting and (target_bias is None or target_bias < 1e-4)
-                else "CONTRACTING_WITH_TARGET_BIAS" if is_contracting
-                else "NON_CONTRACTIVE_STEP"
-            )
-        }
+            fp = _solve_exact(system, b_vec)
+            fp_float = [_finite_number(value) for value in fp]
+            if target is not None:
+                bias = max(abs(fp[i] - _ratio(target[i])) for i in range(n))
+                _finite_number(bias)
+        except ValueError as exc:
+            fp_float, bias, reason = None, None, str(exc)
+        if not contracting:
+            diagnosis = "INFINITY_NORM_CONTRACTION_NOT_ESTABLISHED"
+        elif fp_float is None:
+            diagnosis = "CONTRACTING_FIXED_POINT_UNAVAILABLE"
+        elif target is None:
+            diagnosis = "CONTRACTING_TARGET_UNASSESSED"
+        else:
+            diagnosis = "CONTRACTING_AND_UNBIASED" if bias == 0 else "CONTRACTING_WITH_TARGET_BIAS"
+        return {"status": "PASS" if contracting and fp_float is not None else "UNKNOWN" if contracting else "FAIL",
+                "assurance": "EXACT_RATIONAL_ANALYSIS", "scope": "supplied_values_infinity_norm_contraction",
+                "norm_infinity": norm_float, "norm_infinity_exact": str(norm),
+                "is_contracting": contracting, "safety_margin_met": norm <= _ratio(max_norm_threshold),
+                "has_unique_fixed_point": True if fp is not None else None,
+                "fixed_point": fp_float, "fixed_point_exact": [str(value) for value in fp] if fp is not None else None,
+                "target_bias": _finite_number(bias) if bias is not None else None,
+                "target_bias_exact": str(bias) if bias is not None else None,
+                "diagnosis": diagnosis, "fixed_point_error": reason}
 
     @staticmethod
-    def scaffold_code() -> str:
-        """Returns standalone copy-pasteable implementation for contraction verification."""
-        return '''# Contraction Dynamics and Target Bias Verifier
-# Detects whether iterative dynamics diverge or converge to a biased equilibrium.
-def check_affine_contraction(a_matrix, b_vector, target=None):
-    n = len(b_vector)
-    norm_inf = max(sum(abs(x) for x in row) for row in a_matrix)
-    is_contracting = norm_inf < 1.0
+    def scaffold_code():
+        return _scaffold(ContractionDynamicsOperator, _contraction_self_test)
 
-    # Gaussian elimination for (I - A) x = b
-    aug = [[(1.0 if i == j else 0.0) - a_matrix[i][j] for j in range(n)] + [b_vector[i]] for i in range(n)]
-    for c in range(n):
-        pivot_r = max(range(c, n), key=lambda r: abs(aug[r][c]))
-        aug[c], aug[pivot_r] = aug[pivot_r], aug[c]
-        p = aug[c][c]
-        for j in range(c, n + 1): aug[c][j] /= p
-        for r in range(n):
-            if r != c:
-                f = aug[r][c]
-                for j in range(c, n + 1): aug[r][j] -= f * aug[c][j]
-    fp = [aug[i][n] for i in range(n)]
-    bias = max(abs(fp[i] - target[i]) for i in range(n)) if target else 0.0
-    return {"norm_inf": norm_inf, "contracting": is_contracting, "fixed_point": fp, "target_bias": bias}
-
-if __name__ == "__main__":
-    A = [[0.5, 0.2], [0.1, 0.6]]
-    b = [0.3, 0.4]
-    target = [1.0, 1.0]
-    result = check_affine_contraction(A, b, target)
-    print("Contraction analysis:", result)
-'''
-
-
-# ---------------------------------------------------------------------------
-# Operator 3: StructuralPreflightOperator (structural_preflight)
-# ---------------------------------------------------------------------------
 
 class StructuralPreflightOperator:
-    """Preflight Contract and Shape Checker Operator.
-
-    Executes sub-10ms CPU contract preflight checks on callables before launching
-    expensive training jobs. Uses signature binding, shape verification, and hook event counters.
-    """
+    """Check the declared signature and shapes of a trusted callable's dry run."""
 
     @staticmethod
-    def preflight_callable(
-        fn: Any,
-        sample_args: Tuple[Any, ...] = (),
-        sample_kwargs: Optional[Dict[str, Any]] = None,
-        expected_shapes: Optional[Dict[str, Tuple[int, ...]]] = None
-    ) -> Dict[str, Any]:
-        """Binds arguments to callable signature and performs structural dry-run."""
+    def preflight_callable(fn: Any, sample_args: Tuple[Any, ...] = (),
+                           sample_kwargs: Optional[Dict[str, Any]] = None,
+                           expected_shapes: Optional[Dict[str, Tuple[int, ...]]] = None,
+                           expected_output_shape: Optional[Tuple[int, ...]] = None):
         sample_kwargs = sample_kwargs or {}
-        sig = inspect.signature(fn)
+        name = getattr(fn, "__name__", str(fn))
         try:
-            bound = sig.bind(*sample_args, **sample_kwargs)
+            bound = inspect.signature(fn).bind(*sample_args, **sample_kwargs)
             bound.apply_defaults()
-        except TypeError as exc:
-            return {
-                "status": "FAIL",
-                "stage": "SIGNATURE_BINDING",
-                "error": str(exc),
-                "callable": getattr(fn, "__name__", str(fn))
-            }
-
-        # Check argument shapes if provided
-        shape_mismatches = []
-        if expected_shapes:
-            for arg_name, expected_shape in expected_shapes.items():
-                if arg_name in bound.arguments:
-                    val = bound.arguments[arg_name]
-                    actual_shape = getattr(val, "shape", None)
-                    if actual_shape is None and isinstance(val, (list, tuple)):
-                        actual_shape = (len(val),)
-                    if actual_shape != expected_shape:
-                        shape_mismatches.append({
-                            "argument": arg_name,
-                            "expected": expected_shape,
-                            "actual": actual_shape
-                        })
-
-        if shape_mismatches:
-            return {
-                "status": "FAIL",
-                "stage": "INPUT_SHAPE_VALIDATION",
-                "callable": getattr(fn, "__name__", str(fn)),
-                "mismatches": shape_mismatches
-            }
-
-        # Dry-run call execution
+        except (TypeError, ValueError) as exc:
+            return {"status": "FAIL", "stage": "SIGNATURE_BINDING", "error": str(exc), "callable": name}
+        mismatches = []
+        for arg_name, expected in (expected_shapes or {}).items():
+            if arg_name not in bound.arguments:
+                actual = None
+            else:
+                value = bound.arguments[arg_name]
+                actual = getattr(value, "shape", None)
+                if actual is None and isinstance(value, (list, tuple)):
+                    actual = (len(value),)
+            if actual != expected:
+                mismatches.append({"argument": arg_name, "expected": expected, "actual": actual})
+        if mismatches:
+            return {"status": "FAIL", "stage": "INPUT_SHAPE_VALIDATION", "callable": name, "mismatches": mismatches}
         try:
             output = fn(*sample_args, **sample_kwargs)
-            output_shape = getattr(output, "shape", None)
-            if output_shape is None and isinstance(output, (list, tuple)):
-                output_shape = (len(output),)
-            return {
-                "status": "PASS",
-                "stage": "EXECUTION_COMPLETE",
-                "callable": getattr(fn, "__name__", str(fn)),
-                "output_shape": output_shape,
-                "bound_arguments": list(bound.arguments.keys())
-            }
+            shape = getattr(output, "shape", None)
+            if shape is None and isinstance(output, (list, tuple)):
+                shape = (len(output),)
+            if expected_output_shape is not None and shape != expected_output_shape:
+                return {"status": "FAIL", "stage": "OUTPUT_SHAPE_VALIDATION", "callable": name,
+                        "expected": expected_output_shape, "actual": shape}
+            return {"status": "PASS", "stage": "EXECUTION_COMPLETE", "callable": name,
+                    "output_shape": shape, "bound_arguments": list(bound.arguments)}
         except Exception as exc:
-            return {
-                "status": "FAIL",
-                "stage": "DRY_RUN_INVOCATION",
-                "callable": getattr(fn, "__name__", str(fn)),
-                "error": f"{type(exc).__name__}: {str(exc)}"
-            }
+            return {"status": "FAIL", "stage": "DRY_RUN_INVOCATION", "callable": name,
+                    "error": f"{type(exc).__name__}: {exc}"}
 
     @staticmethod
-    def scaffold_code() -> str:
-        """Returns standalone copy-pasteable preflight assertion snippet."""
-        return '''# Structural Preflight Assertion Template
-# Add this before GPU launch / model training loop to fail fast on argument/shape mismatch.
-import inspect
+    def scaffold_code():
+        return _scaffold(StructuralPreflightOperator, _preflight_self_test)
 
-def preflight_model_call(model, *args, **kwargs):
-    sig = inspect.signature(model if callable(model) else model.forward)
-    try:
-        bound = sig.bind(*args, **kwargs)
-        bound.apply_defaults()
-    except TypeError as e:
-        raise RuntimeError(f"Preflight signature mismatch on {model}: {e}") from e
-
-    # Dry-run invocation
-    out = model(*args, **kwargs)
-    shape = getattr(out, "shape", len(out) if hasattr(out, "__len__") else None)
-    print(f"[PREFLIGHT PASS] {model.__class__.__name__} successfully produced output shape {shape}")
-    return out
-
-if __name__ == "__main__":
-    def dummy_forward(x, scale=1.0):
-        return [xi * scale for xi in x]
-    preflight_model_call(dummy_forward, [1.0, 2.0, 3.0], scale=2.0)
-'''
-
-
-# ---------------------------------------------------------------------------
-# Operator 4: RationalCertificateOperator (exact_symbolic_constraints)
-# ---------------------------------------------------------------------------
 
 class RationalCertificateOperator:
-    """Exact Rational Polynomial Constraint Operator.
-
-    Evaluates bounds of rational polynomial invariants without floating-point error
-    using fractions.Fraction, generating verifiable replay certificates.
-    """
+    """Sound whole-interval rational enclosures, exact witnesses, or UNKNOWN."""
 
     @staticmethod
-    def eval_polynomial(coeffs: List[Fraction], x: Fraction) -> Fraction:
-        """Evaluates P(x) = sum(c_k * x^k) using Horner's rule."""
-        result = Fraction(0, 1)
-        for c in reversed(coeffs):
-            result = result * x + c
+    def eval_polynomial(coeffs, x):
+        result = Fraction(0)
+        for coeff in reversed(coeffs):
+            result = _ratio(result * x + coeff)
         return result
 
+    @staticmethod
+    def _enclosure(coeffs, left, right):
+        # In the Bernstein basis on t in [0,1], P is a convex combination of
+        # these coefficients. Their extrema enclose every point of the segment.
+        degree, width = len(coeffs) - 1, right - left
+        power = [_ratio(sum(coeffs[k] * math.comb(k, j) * left ** (k - j) * width ** j
+                            for k in range(j, degree + 1))) for j in range(degree + 1)]
+        bernstein = [_ratio(sum(power[j] * Fraction(math.comb(i, j), math.comb(degree, j))
+                                for j in range(i + 1))) for i in range(degree + 1)]
+        return min(bernstein), max(bernstein)
+
     @classmethod
-    def certify_interval_bound(
-        cls,
-        poly_coeffs: List[Union[int, str, Fraction]],
-        interval: Tuple[Union[int, str, Fraction], Union[int, str, Fraction]],
-        bound_range: Tuple[Union[int, str, Fraction], Union[int, str, Fraction]],
-        num_grid_points: int = 10
-    ) -> Dict[str, Any]:
-        """Certifies that polynomial stays within bound_range on grid points of interval."""
-        coeffs = [Fraction(c) for c in poly_coeffs]
-        x_min, x_max = Fraction(interval[0]), Fraction(interval[1])
-        y_min, y_max = Fraction(bound_range[0]), Fraction(bound_range[1])
-
-        if x_min > x_max:
-            raise ValueError(f"Invalid interval: min {x_min} > max {x_max}")
-
-        evaluations = []
-        violations = []
-        step = (x_max - x_min) / Fraction(max(1, num_grid_points - 1), 1)
-
-        for i in range(num_grid_points):
-            x = x_min + step * Fraction(i, 1)
-            y = cls.eval_polynomial(coeffs, x)
-            is_valid = (y_min <= y <= y_max)
-            rec = {"x": str(x), "y": str(y), "valid": is_valid}
-            evaluations.append(rec)
-            if not is_valid:
-                violations.append(rec)
-
-        passed = len(violations) == 0
-        return {
-            "status": "PASS" if passed else "FAIL",
-            "assurance": "EXACT_RATIONAL_CERTIFICATE" if passed else "BOUND_VIOLATION_WITNESS",
-            "interval": [str(x_min), str(x_max)],
-            "bound_range": [str(y_min), str(y_max)],
-            "grid_samples": len(evaluations),
-            "violations": violations[:5],
-            "first_evaluation": evaluations[0],
-            "last_evaluation": evaluations[-1],
-        }
+    def certify_interval_bound(cls, poly_coeffs, interval, bound_range, num_grid_points=10):
+        if not isinstance(poly_coeffs, (list, tuple)) or not 1 <= len(poly_coeffs) <= 33:
+            raise ValueError("Expected 1..33 polynomial coefficients")
+        if not isinstance(interval, (list, tuple)) or len(interval) != 2:
+            raise ValueError("Expected two interval endpoints")
+        if not isinstance(bound_range, (list, tuple)) or len(bound_range) != 2:
+            raise ValueError("Expected lower and upper bounds")
+        if type(num_grid_points) is not int or not 2 <= num_grid_points <= 257:
+            raise ValueError("Expected 2..257 grid points")
+        coeffs = [_ratio(value) for value in poly_coeffs]
+        x_min, x_max = map(_ratio, interval)
+        y_min, y_max = map(_ratio, bound_range)
+        if x_min > x_max or y_min > y_max:
+            raise ValueError("Interval and bound endpoints must be ordered")
+        step = (x_max - x_min) / (num_grid_points - 1)
+        grid = [x_min + step * i for i in range(num_grid_points)]
+        points = sorted(set(grid + [(a + b) / 2 for a, b in zip(grid, grid[1:])]))
+        evaluations = [{"x": str(x), "y": str(cls.eval_polynomial(coeffs, x))} for x in points]
+        for value in evaluations:
+            value["valid"] = y_min <= Fraction(value["y"]) <= y_max
+        violations = [value for value in evaluations if not value["valid"]]
+        enclosures = []
+        for left, right in zip(grid, grid[1:]):
+            lower, upper = cls._enclosure(coeffs, left, right)
+            enclosures.append({"interval": [str(left), str(right)], "range": [str(lower), str(upper)]})
+        proved = all(y_min <= Fraction(item["range"][0]) and Fraction(item["range"][1]) <= y_max
+                     for item in enclosures)
+        status = "FAIL" if violations else "PASS" if proved else "UNKNOWN"
+        return {"status": status,
+                "assurance": {"PASS": "EXACT_RATIONAL_CERTIFICATE", "FAIL": "BOUND_VIOLATION_WITNESS",
+                              "UNKNOWN": "INCONCLUSIVE_RATIONAL_ENCLOSURE"}[status],
+                "method": "RATIONAL_BERNSTEIN_ENCLOSURE", "poly_coeffs": [str(value) for value in coeffs],
+                "interval": [str(x_min), str(x_max)], "bound_range": [str(y_min), str(y_max)],
+                "grid_samples": len(evaluations), "violations": violations[:5],
+                "first_evaluation": evaluations[0], "last_evaluation": evaluations[-1],
+                "enclosures": enclosures}
 
     @staticmethod
-    def scaffold_code() -> str:
-        """Returns standalone rational certificate verifier template."""
-        return '''# Exact Rational Constraint Replay Template
-from fractions import Fraction
-
-def verify_polynomial_bound(coeffs_str, x_val_str, lower_str, upper_str):
-    coeffs = [Fraction(c) for c in coeffs_str]
-    x = Fraction(x_val_str)
-    # Horner evaluation
-    y = Fraction(0)
-    for c in reversed(coeffs):
-        y = y * x + c
-    in_bounds = Fraction(lower_str) <= y <= Fraction(upper_str)
-    return {"x": str(x), "y": str(y), "in_bounds": in_bounds}
-
-if __name__ == "__main__":
-    # P(x) = 1 - x + 0.5 * x^2
-    res = verify_polynomial_bound(["1", "-1", "1/2"], "1/4", "0", "1")
-    print("Exact rational verification:", res)
-'''
+    def scaffold_code():
+        return _scaffold(RationalCertificateOperator, _rational_self_test)
 
 
-# ---------------------------------------------------------------------------
-# Operator 5: EGraphEquivalenceOperator (egraph_equivalence_saturation)
-# ---------------------------------------------------------------------------
+def _ssm_self_test():
+    op = ContinuousStateSpaceOperator(3, in_dim=2, out_dim=2)
+    report = op.verify_step_invariance()
+    assert report["status"] == "UNKNOWN" and report["diagnostic_pass"]
+    try:
+        op.verify_step_invariance(nfe_candidates=(16, 16))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Duplicate NFE values were accepted")
+    return {"self_test_status": "PASS", "positive": report, "negative_status": "REJECTED"}
+
+
+def _contraction_self_test():
+    report = ContractionDynamicsOperator.analyze_system([[0.5]], [0.5], target=[1])
+    negative = ContractionDynamicsOperator.analyze_system([[2]], [1], max_norm_threshold=2)
+    assert report["status"] == "PASS" and report["target_bias"] == 0
+    assert negative["status"] == "FAIL" and not negative["is_contracting"]
+    return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
+
+
+def _preflight_self_test():
+    def forward(x):
+        return [2 * value for value in x]
+    report = StructuralPreflightOperator.preflight_callable(forward, ([1, 2],), expected_shapes={"x": (2,)},
+                                                           expected_output_shape=(2,))
+    negative = StructuralPreflightOperator.preflight_callable(forward, ([1, 2],), expected_output_shape=(3,))
+    assert report["status"] == "PASS"
+    assert negative["status"] == "FAIL" and negative["stage"] == "OUTPUT_SHAPE_VALIDATION"
+    return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
+
+
+def _rational_self_test():
+    report = RationalCertificateOperator.certify_interval_bound([1, -2, 1], (0, 1), (0, 1))
+    negative = RationalCertificateOperator.certify_interval_bound([0, 1, -1], (0, 1), (0, "20/81"))
+    assert report["status"] == "PASS" and report["enclosures"]
+    assert negative["status"] == "FAIL" and negative["violations"]
+    return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
+
+
+def _scaffold(cls, self_test):
+    """Export the canonical implementation and the same executable self-test."""
+    tree = ast.parse(inspect.getsource(cls))
+    tree.body[0].body = [node for node in tree.body[0].body
+                         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or node.name != "scaffold_code"]
+    imports = "import inspect\nimport json\nimport math\nfrom fractions import Fraction\nfrom typing import Any, Dict, List, Optional, Tuple, Union\n\n"
+    helpers = "\n\n".join(inspect.getsource(fn) for fn in
+                           (_finite_number, _vector, _matrix, _dimension, _ratio, _solve_exact))
+    return ("# Standalone RDS example; self-test success is not scientific acceptance.\n" + imports
+            + helpers + "\n\n" + ast.unparse(tree) + "\n\n" + inspect.getsource(self_test)
+            + f"\noperator_self_test = {self_test.__name__}\n\n"
+            + 'if __name__ == "__main__":\n    print(json.dumps(operator_self_test(), allow_nan=False))\n')
+
 
 class EGraphEquivalenceOperator:
-    """Equivalence Saturation and E-Graph Operator.
+    """Bounded rewrites for declared rational-polynomial expressions.
 
-    Compactly encodes exponentially many algebraically equivalent terms simultaneously
-    using congruence closure and union-find, avoiding phase-ordering divergence in equational rewrites.
+    Only commutativity and the 0/1 identities are implemented. Distinct classes
+    do not establish inequality; FAIL requires an exact rational witness.
     """
 
+    DOMAIN = "rational_polynomials"
+    AXIOMS = ("add_commutativity", "mul_commutativity", "add_zero", "mul_one")
+    MAX_INPUT_NODES = 512
+    MAX_DEPTH = 32
+    MAX_CONSTANT_BITS = 128
+    MAX_VALUE_BITS = 4096
+
+    class BudgetExhausted(RuntimeError):
+        pass
+
+    @staticmethod
+    def _limit(value, name, lower, upper):
+        if type(value) is not int or not lower <= value <= upper:
+            raise ValueError(f"{name} must be an integer in {lower}..{upper}")
+        return value
+
+    @classmethod
+    def _variables(cls, variables):
+        import re
+        if not isinstance(variables, (list, tuple)) or len(variables) > 16:
+            raise ValueError("Declare at most 16 rational variables")
+        if not all(isinstance(name, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,31}", name)
+                   for name in variables) or len(set(variables)) != len(variables):
+            raise ValueError("Variables must be distinct bounded identifiers")
+        return tuple(sorted(variables))
+
+    @classmethod
+    def _normalize(cls, expr, variables, count, depth=0):
+        from fractions import Fraction
+        import re
+        count[0] += 1
+        if count[0] > cls.MAX_INPUT_NODES or depth > cls.MAX_DEPTH:
+            raise ValueError("Expression exceeds node/depth limits")
+        if isinstance(expr, (list, tuple)):
+            if len(expr) != 3 or expr[0] not in ("+", "*"):
+                raise ValueError("Only binary + and * expressions are supported")
+            return (expr[0], cls._normalize(expr[1], variables, count, depth + 1),
+                    cls._normalize(expr[2], variables, count, depth + 1))
+        if type(expr) is int or isinstance(expr, Fraction):
+            value = Fraction(expr)
+        elif isinstance(expr, str):
+            if expr in variables:
+                return expr
+            if not re.fullmatch(r"[+-]?\d{1,32}(?:/[1-9]\d{0,31})?", expr):
+                raise ValueError("Unknown symbol or unsupported rational literal")
+            value = Fraction(expr)
+        else:
+            raise ValueError("Leaves must be exact rationals or declared variables; floats/bools are unsupported")
+        if max(abs(value.numerator).bit_length(), value.denominator.bit_length()) > cls.MAX_CONSTANT_BITS:
+            raise ValueError("Rational constant exceeds 128 bits")
+        return value
+
     class EGraph:
-        def __init__(self):
-            self.parent = {}
-            self.classes = {}
-            self.hashcons = {}
+        def __init__(self, variables=(), max_nodes=1024, max_work=50000):
+            self.variables = EGraphEquivalenceOperator._variables(variables)
+            self.max_nodes = EGraphEquivalenceOperator._limit(max_nodes, "max_nodes", 1, 2048)
+            self.max_work = EGraphEquivalenceOperator._limit(max_work, "max_work", 1, 200000)
+            self.work = 0
+            self.parent, self.rank, self.classes, self.hashcons = {}, {}, {}, {}
 
-        def find(self, i: int) -> int:
-            if self.parent[i] != i:
-                self.parent[i] = self.find(self.parent[i])
-            return self.parent[i]
+        def _tick(self):
+            if self.work >= self.max_work:
+                raise EGraphEquivalenceOperator.BudgetExhausted("E-graph work budget exhausted")
+            self.work += 1
 
-        def union(self, id1: int, id2: int) -> int:
+        def find(self, i):
+            if type(i) is not int or i not in self.parent:
+                raise ValueError("Unknown e-class")
+            root = i
+            while self.parent[root] != root:
+                root = self.parent[root]
+            while self.parent[i] != i:
+                parent = self.parent[i]
+                self.parent[i] = root
+                i = parent
+            return root
+
+        def union(self, id1, id2):
+            self._tick()
             root1, root2 = self.find(id1), self.find(id2)
             if root1 != root2:
+                if self.rank[root1] < self.rank[root2]:
+                    root1, root2 = root2, root1
                 self.parent[root2] = root1
-                self.classes[root1].update(self.classes[root2])
-                del self.classes[root2]
-                return root1
+                if self.rank[root1] == self.rank[root2]:
+                    self.rank[root1] += 1
+                self.classes[root1].update(self.classes.pop(root2))
             return root1
 
-        def canonicalize_node(self, node: Tuple[str, Tuple[int, ...]]) -> Tuple[str, Tuple[int, ...]]:
+        def canonicalize_node(self, node):
             op, children = node
-            return (op, tuple(self.find(c) for c in children))
+            return op, tuple(self.find(child) for child in children)
 
-        def _insert_node(self, node: Tuple[str, Tuple[int, ...]]) -> int:
-            c_node = self.canonicalize_node(node)
-            if c_node in self.hashcons:
-                return self.find(self.hashcons[c_node])
-
+        def _insert_node(self, node):
+            self._tick()
+            node = self.canonicalize_node(node)
+            if node in self.hashcons:
+                return self.find(self.hashcons[node])
+            if len(self.parent) >= self.max_nodes:
+                raise EGraphEquivalenceOperator.BudgetExhausted("E-graph node budget exhausted")
             new_id = len(self.parent)
-            self.parent[new_id] = new_id
-            self.classes[new_id] = {c_node}
-            self.hashcons[c_node] = new_id
+            self.parent[new_id], self.rank[new_id] = new_id, 0
+            self.classes[new_id], self.hashcons[node] = {node}, new_id
             return new_id
 
-        def add_node(self, op: str, child_ids: Tuple[int, ...]) -> int:
-            node = (str(op), tuple(self.find(c) for c in child_ids))
-            return self._insert_node(node)
+        def add_node(self, op, child_ids):
+            if op not in ("+", "*") or len(child_ids) != 2:
+                raise ValueError("Expected a binary supported operator")
+            return self._insert_node((op, tuple(child_ids)))
 
-        def add(self, expr: Any) -> int:
-            if not isinstance(expr, (list, tuple)):
-                node = (str(expr), ())
-                return self._insert_node(node)
-            op = str(expr[0])
-            child_ids = tuple(self.add(c) for c in expr[1:])
-            return self.add_node(op, child_ids)
+        def _add(self, expr):
+            from fractions import Fraction
+            if isinstance(expr, Fraction):
+                return self._insert_node(("const:" + str(expr), ()))
+            if isinstance(expr, str):
+                return self._insert_node(("var:" + expr, ()))
+            return self.add_node(expr[0], (self._add(expr[1]), self._add(expr[2])))
+
+        def add(self, expr):
+            normalized = EGraphEquivalenceOperator._normalize(expr, self.variables, [0])
+            return self._add(normalized)
 
         def rebuild(self):
-            changed = True
-            while changed:
-                changed = False
-                new_hashcons = {}
+            while True:
+                changed, rebuilt = False, {}
                 for node, class_id in list(self.hashcons.items()):
-                    canon = self.canonicalize_node(node)
-                    root = self.find(class_id)
-                    if canon in new_hashcons and self.find(new_hashcons[canon]) != root:
-                        self.union(root, new_hashcons[canon])
+                    self._tick()
+                    node, root = self.canonicalize_node(node), self.find(class_id)
+                    if node in rebuilt and self.find(rebuilt[node]) != root:
+                        root = self.union(root, rebuilt[node])
                         changed = True
-                    new_hashcons[canon] = self.find(root)
-                self.hashcons = new_hashcons
+                    rebuilt[node] = self.find(root)
+                self.hashcons = rebuilt
+                if not changed:
+                    break
+            self.classes = {root: set() for root in self.classes}
+            for node, class_id in self.hashcons.items():
+                self.classes[self.find(class_id)].add(node)
 
-        def saturate_standard_algebra(self, max_iter: int = 8):
-            """Applies commutativity, associativity, and identity rules until saturation."""
+        def saturate_standard_algebra(self, max_iter=8):
+            EGraphEquivalenceOperator._limit(max_iter, "max_iter", 0, 16)
             for _ in range(max_iter):
-                unions = []
-                for node, class_id in list(self.hashcons.items()):
-                    op, children = node
-                    # Commutativity for '+' and '*'
-                    if op in ("+", "*") and len(children) == 2:
-                        swapped = self.add_node(op, (children[1], children[0]))
-                        unions.append((class_id, swapped))
-                    # Identity: x + 0 -> x, x * 1 -> x
-                    if op == "+" and len(children) == 2:
-                        for idx_x, idx_zero in ((0, 1), (1, 0)):
-                            for n in self.classes[self.find(children[idx_zero])]:
-                                if n[0] == "0" and len(n[1]) == 0:
-                                    unions.append((class_id, children[idx_x]))
-                    if op == "*" and len(children) == 2:
-                        for idx_x, idx_one in ((0, 1), (1, 0)):
-                            for n in self.classes[self.find(children[idx_one])]:
-                                if n[0] == "1" and len(n[1]) == 0:
-                                    unions.append((class_id, children[idx_x]))
-
                 changed = False
-                for id1, id2 in unions:
-                    if self.find(id1) != self.find(id2):
-                        self.union(id1, id2)
-                        changed = True
+                for node, class_id in list(self.hashcons.items()):
+                    self._tick()
+                    op, children = self.canonicalize_node(node)
+                    if op not in ("+", "*"):
+                        continue
+                    candidates = [self.add_node(op, (children[1], children[0]))]
+                    identity = "const:0" if op == "+" else "const:1"
+                    for child, other in ((children[0], children[1]), (children[1], children[0])):
+                        if (identity, ()) in self.classes[self.find(child)]:
+                            candidates.append(other)
+                    for candidate in candidates:
+                        if self.find(class_id) != self.find(candidate):
+                            self.union(class_id, candidate)
+                            changed = True
                 if changed:
                     self.rebuild()
                 else:
-                    break
+                    return True
+            return False
 
     @classmethod
-    def verify_algebraic_equivalence(cls, expr_a: Any, expr_b: Any, max_iter: int = 8) -> Dict[str, Any]:
-        """Proves algebraic equivalence by evaluating whether expr_a and expr_b share a root eclass."""
-        eg = cls.EGraph()
-        id_a = eg.add(expr_a)
-        id_b = eg.add(expr_b)
-        eg.saturate_standard_algebra(max_iter=max_iter)
-        root_a = eg.find(id_a)
-        root_b = eg.find(id_b)
-        equivalent = (root_a == root_b)
-        return {
-            "status": "PASS" if equivalent else "FAIL",
-            "assurance": "EGRAPH_EQUIVALENCE_CERTIFIED" if equivalent else "EGRAPH_DISTINCT_CLASSES",
-            "equivalent": equivalent,
-            "root_a": root_a,
-            "root_b": root_b,
-            "total_eclasses": len(eg.classes),
-            "total_enodes": len(eg.hashcons),
-        }
+    def _evaluate(cls, expr, values, graph):
+        from fractions import Fraction
+        graph._tick()
+        if isinstance(expr, Fraction):
+            return expr
+        if isinstance(expr, str):
+            return values[expr]
+        left, right = cls._evaluate(expr[1], values, graph), cls._evaluate(expr[2], values, graph)
+        numerator_bits = (max(abs(left.numerator).bit_length() + right.denominator.bit_length(),
+                              abs(right.numerator).bit_length() + left.denominator.bit_length()) + 1
+                          if expr[0] == "+" else abs(left.numerator).bit_length() + abs(right.numerator).bit_length())
+        denominator_bits = left.denominator.bit_length() + right.denominator.bit_length()
+        if max(numerator_bits, denominator_bits) > cls.MAX_VALUE_BITS:
+            raise cls.BudgetExhausted("Exact witness evaluation exceeds 4096 bits")
+        return left + right if expr[0] == "+" else left * right
+
+    @classmethod
+    def verify_algebraic_equivalence(cls, expr_a, expr_b, max_iter=8, *,
+                                     variables=(), domain=DOMAIN, max_nodes=1024, max_work=50000):
+        """Check a scoped rewrite connection or an exact point counterexample."""
+        from fractions import Fraction
+        import hashlib
+        import json
+        if domain != cls.DOMAIN:
+            raise ValueError("Only the rational_polynomials domain is supported")
+        variables = cls._variables(variables)
+        cls._limit(max_iter, "max_iter", 0, 16)
+        count = [0]
+        left = cls._normalize(expr_a, variables, count)
+        right = cls._normalize(expr_b, variables, count)
+
+        def encode(expr):
+            if isinstance(expr, Fraction):
+                return ["rational", str(expr)]
+            if isinstance(expr, str):
+                return ["symbol", expr]
+            return [expr[0], encode(expr[1]), encode(expr[2])]
+
+        binding = {"domain": domain, "variables": list(variables), "axioms": list(cls.AXIOMS),
+                   "expr_a": encode(left), "expr_b": encode(right)}
+        graph = cls.EGraph(variables, max_nodes, max_work)
+        result = {"status": "UNKNOWN", "assurance": "NONE", "equivalent": None,
+                  "domain": domain, "variables": list(variables), "axioms": list(cls.AXIOMS),
+                  "input_sha256": hashlib.sha256(json.dumps(binding, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+                  "limits": {"max_iter": max_iter, "max_nodes": max_nodes, "max_work": max_work},
+                  "saturated": False, "budget_exhausted": False, "certificate_status": "NOT_EMITTED",
+                  "application_status": "UNKNOWN"}
+        try:
+            id_a, id_b = graph._add(left), graph._add(right)
+            if graph.find(id_a) != graph.find(id_b):
+                result["saturated"] = graph.saturate_standard_algebra(max_iter)
+            result["root_a"], result["root_b"] = graph.find(id_a), graph.find(id_b)
+            if result["root_a"] == result["root_b"]:
+                result.update(status="PASS", assurance="BOUNDED_REWRITE_CHECK", equivalent=True,
+                              reason="Connected by supported identities, commutativity and congruence in the declared domain")
+            else:
+                assignments = [{name: Fraction(value) for name in variables} for value in (0, 1, 2, -1)]
+                assignments.extend({name: Fraction(1 if name == selected else 0) for name in variables}
+                                   for selected in variables)
+                for values in assignments:
+                    value_a, value_b = cls._evaluate(left, values, graph), cls._evaluate(right, values, graph)
+                    if value_a != value_b:
+                        result.update(status="FAIL", assurance="EXACT_RATIONAL_COUNTEREXAMPLE", equivalent=False,
+                                      reason="Exact values differ at a declared-domain assignment",
+                                      counterexample={"variables": {name: str(value) for name, value in values.items()},
+                                                      "expr_a": str(value_a), "expr_b": str(value_b)})
+                        break
+                else:
+                    result["reason"] = "No supported rewrite connection or exact counterexample found within limits"
+        except cls.BudgetExhausted as exc:
+            result.update(reason=str(exc), budget_exhausted=True)
+        result.update(total_eclasses=len(graph.classes), total_enodes=len(graph.hashcons), work_used=graph.work)
+        return result
+
+    @classmethod
+    def operator_self_test(cls):
+        positive = cls.verify_algebraic_equivalence(("*", "x", ("+", "y", 0)), ("*", "y", "x"),
+                                                   variables=("x", "y"))
+        negative = cls.verify_algebraic_equivalence(("+", "x", "y"), ("*", "x", "y"),
+                                                   variables=("x", "y"))
+        unresolved = cls.verify_algebraic_equivalence(("+", 1, 1), 2)
+        assert positive["status"] == "PASS" and positive["certificate_status"] == "NOT_EMITTED"
+        assert negative["status"] == "FAIL" and negative["counterexample"]
+        assert unresolved["status"] == "UNKNOWN" and unresolved["equivalent"] is None
+        return {"self_test_status": "PASS", "positive": positive,
+                "negative_status": negative["status"], "unresolved_status": unresolved["status"]}
 
     @staticmethod
-    def scaffold_code() -> str:
-        """Returns standalone copy-pasteable E-Graph equivalence verifier script."""
-        return '''# Equivalence Saturation (E-Graph) Rewriting Template
-# Avoids phase-ordering loops in algebraic equational theories.
-class TinyEGraph:
-    def __init__(self):
-        self.parent = {}
-        self.classes = {}
-        self.hashcons = {}
+    def scaffold_code():
+        """Export this implementation and its positive/negative/unresolved checks."""
+        import ast
+        import inspect
+        source = inspect.getsource(EGraphEquivalenceOperator)
+        lines = source.splitlines()
+        method = next(node for node in ast.parse(source).body[0].body
+                      if isinstance(node, ast.FunctionDef) and node.name == "scaffold_code")
+        start = min([method.lineno] + [decorator.lineno for decorator in method.decorator_list]) - 1
+        del lines[start:method.end_lineno]
+        return "\n".join(lines) + '\n\noperator_self_test = EGraphEquivalenceOperator.operator_self_test\n\nif __name__ == "__main__":\n    import json\n    print(json.dumps(operator_self_test(), sort_keys=True, allow_nan=False))\n'
 
-    def find(self, i):
-        if self.parent[i] != i: self.parent[i] = self.find(self.parent[i])
-        return self.parent[i]
+def _egraph_self_test():
+    return EGraphEquivalenceOperator.operator_self_test()
 
-    def union(self, id1, id2):
-        r1, r2 = self.find(id1), self.find(id2)
-        if r1 != r2:
-            self.parent[r2] = r1
-            self.classes[r1].update(self.classes[r2])
-            del self.classes[r2]
-        return r1
-
-    def add(self, expr):
-        if not isinstance(expr, (list, tuple)): node = (str(expr), ())
-        else: node = (str(expr[0]), tuple(self.add(c) for c in expr[1:]))
-        c_node = (node[0], tuple(self.find(c) for c in node[1]))
-        if c_node in self.hashcons: return self.find(self.hashcons[c_node])
-        nid = len(self.parent)
-        self.parent[nid] = nid; self.classes[nid] = {c_node}; self.hashcons[c_node] = nid
-        return nid
-
-    def saturate_commutativity(self):
-        for node, cid in list(self.hashcons.items()):
-            if node[0] in ("+", "*") and len(node[1]) == 2:
-                swapped = self.add((node[0], node[1][1], node[1][0]))
-                self.union(cid, swapped)
-
-if __name__ == "__main__":
-    eg = TinyEGraph()
-    t1 = eg.add(("+", "x", "y"))
-    t2 = eg.add(("+", "y", "x"))
-    eg.saturate_commutativity()
-    print("Terms equivalent under commutativity:", eg.find(t1) == eg.find(t2))
-'''
-
-
-# ---------------------------------------------------------------------------
-# Registry and CLI Helpers
-# ---------------------------------------------------------------------------
 
 OPERATORS = {
-    "state_space_refinement": {
-        "operator_id": "continuous_state_space",
-        "title": "Continuous-Time State Space Discretization (ZOH)",
-        "operator_class": ContinuousStateSpaceOperator,
-        "primary_signal": "step_sensitivity",
-        "guarantee": "Discretization step-invariance and O(dt) convergence",
-    },
-    "contraction_target_bias": {
-        "operator_id": "contraction_dynamics",
-        "title": "Contraction Dynamics and Fixed-Point Bias Verifier",
-        "operator_class": ContractionDynamicsOperator,
-        "primary_signal": "trajectory_degradation",
-        "guarantee": "Induced infinity-norm contraction and exact equilibrium",
-    },
-    "structural_preflight": {
-        "operator_id": "structural_preflight",
-        "title": "Actual Entrypoint & Shape Preflight Assertion",
-        "operator_class": StructuralPreflightOperator,
-        "primary_signal": "execution_mismatch",
-        "guarantee": "Zero signature mismatches and shape pre-validation",
-    },
-    "exact_symbolic_constraints": {
-        "operator_id": "rational_interval_certificate",
-        "title": "Exact Rational Polynomial Certificate Verifier",
-        "operator_class": RationalCertificateOperator,
-        "primary_signal": "proof_bottleneck",
-        "guarantee": "Zero floating-point error exact rational interval certificate",
-    },
-    "egraph_equivalence_saturation": {
-        "operator_id": "egraph_equivalence",
-        "title": "Equivalence Saturation & E-Graph Congruence Rewriter",
-        "operator_class": EGraphEquivalenceOperator,
-        "primary_signal": "proof_bottleneck",
-        "guarantee": "Confluence without phase-ordering loops in equational theories",
-    },
+    "egraph_equivalence_saturation": {"operator_id": "egraph_equivalence", "title": "Bounded Rational-Polynomial Rewrite Example",
+        "operator_class": EGraphEquivalenceOperator, "primary_signal": "proof_bottleneck",
+        "guarantee": "Scoped supported rewrites or exact rational counterexample; otherwise UNKNOWN; no certificate emitted",
+        "self_test": _egraph_self_test},
+    "state_space_refinement": {"operator_id": "continuous_state_space", "title": "Diagonal ZOH Numerical Example",
+        "operator_class": ContinuousStateSpaceOperator, "primary_signal": "step_sensitivity",
+        "guarantee": "Finite ZOH updates and NFE diagnostics; convergence remains UNKNOWN", "self_test": _ssm_self_test},
+    "contraction_target_bias": {"operator_id": "contraction_dynamics", "title": "Rational Infinity-Norm and Fixed-Point Analysis",
+        "operator_class": ContractionDynamicsOperator, "primary_signal": "trajectory_degradation",
+        "guarantee": "Exact analysis of supplied rational values; floats denote their binary rationals", "self_test": _contraction_self_test},
+    "structural_preflight": {"operator_id": "structural_preflight", "title": "Declared Signature and Shape Dry Run",
+        "operator_class": StructuralPreflightOperator, "primary_signal": "execution_mismatch",
+        "guarantee": "Checks declared signature and shapes of a trusted callable", "self_test": _preflight_self_test},
+    "exact_symbolic_constraints": {"operator_id": "rational_interval_certificate", "title": "Rational Polynomial Interval Enclosure",
+        "operator_class": RationalCertificateOperator, "primary_signal": "proof_bottleneck",
+        "guarantee": "Sound rational whole-interval enclosure or exact witness; inconclusive is UNKNOWN", "self_test": _rational_self_test},
 }
 
 
-def list_available_operators() -> List[Dict[str, Any]]:
-    """Returns metadata for all available runnable operators."""
-    result = []
-    for card_id, meta in OPERATORS.items():
-        result.append({
-            "card_id": card_id,
-            "operator_id": meta["operator_id"],
-            "title": meta["title"],
-            "primary_signal": meta["primary_signal"],
-            "guarantee": meta["guarantee"],
-        })
-    return result
+def list_available_operators():
+    return [{"card_id": card_id, **{key: meta[key] for key in ("operator_id", "title", "primary_signal", "guarantee")}}
+            for card_id, meta in OPERATORS.items()]
 
 
-def get_operator_scaffold(card_id: str) -> str:
-    """Returns the standalone copy-pasteable operator code for a card."""
+def get_operator_scaffold(card_id):
     if card_id not in OPERATORS:
-        raise ValueError(f"No runnable operator available for card '{card_id}'. Available: {list(OPERATORS.keys())}")
-    op_cls = OPERATORS[card_id]["operator_class"]
-    return op_cls.scaffold_code()
+        raise ValueError(f"No runnable operator available for card '{card_id}'")
+    return OPERATORS[card_id]["operator_class"].scaffold_code()
 
 
-def test_operator(card_id: str) -> Dict[str, Any]:
-    """Runs a self-test of the specified operator and returns verification report."""
+def test_operator(card_id):
     if card_id not in OPERATORS:
-        raise ValueError(f"No runnable operator available for card '{card_id}'. Available: {list(OPERATORS.keys())}")
-
+        raise ValueError(f"No runnable operator available for card '{card_id}'")
     meta = OPERATORS[card_id]
-    if card_id == "state_space_refinement":
-        op = ContinuousStateSpaceOperator(state_dim=4, in_dim=1, out_dim=1)
-        res = op.verify_step_invariance()
-    elif card_id == "contraction_target_bias":
-        A = [[0.4, 0.1], [0.2, 0.5]]
-        b = [0.1, 0.2]
-        res = ContractionDynamicsOperator.analyze_system(A, b, target=[0.24, 0.496])
-    elif card_id == "structural_preflight":
-        def sample_forward(x: List[float], weight: float = 1.0) -> List[float]:
-            return [xi * weight for xi in x]
-        res = StructuralPreflightOperator.preflight_callable(
-            sample_forward,
-            sample_args=([1.0, 2.0, 3.0],),
-            sample_kwargs={"weight": 2.0},
-            expected_shapes={"x": (3,)}
-        )
-    elif card_id == "exact_symbolic_constraints":
-        # P(x) = 1 - 2*x + x^2 = (1-x)^2 in [0, 1] on x in [0, 1]
-        res = RationalCertificateOperator.certify_interval_bound(
-            poly_coeffs=[1, -2, 1],
-            interval=(0, 1),
-            bound_range=(0, 1),
-            num_grid_points=10
-        )
-    elif card_id == "egraph_equivalence_saturation":
-        # Proves (x * (y + 0)) == (y * x) under commutativity and identity
-        res = EGraphEquivalenceOperator.verify_algebraic_equivalence(
-            ("*", "x", ("+", "y", "0")),
-            ("*", "y", "x")
-        )
-    else:
-        res = {"status": "UNKNOWN"}
-
-    return {
-        "card_id": card_id,
-        "operator_id": meta["operator_id"],
-        "title": meta["title"],
-        "test_result": res
-    }
+    checks = meta["self_test"]()
+    return {"card_id": card_id, "operator_id": meta["operator_id"], "title": meta["title"],
+            "self_test_status": checks["self_test_status"], "negative_status": checks["negative_status"],
+            "test_result": checks["positive"]}

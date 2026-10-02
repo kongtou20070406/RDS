@@ -36,8 +36,9 @@ class OperatorUnitTests(unittest.TestCase):
     def test_continuous_state_space_step_invariance(self):
         op = ops.ContinuousStateSpaceOperator(state_dim=3, in_dim=1, out_dim=1)
         report = op.verify_step_invariance(total_time=1.0, nfe_candidates=(16, 32, 64, 128))
-        self.assertEqual(report["status"], "PASS")
-        self.assertEqual(report["assurance"], "STEP_INVARIANCE_CERTIFIED")
+        self.assertEqual(report["status"], "UNKNOWN")
+        self.assertEqual(report["assurance"], "NUMERICAL_DIAGNOSTIC")
+        self.assertTrue(report["diagnostic_pass"])
         self.assertLess(report["finest_cauchy_error"], 0.01)
         # Cauchy differences must shrink monotonically
         diffs = [d["diff"] for d in report["cauchy_diffs"]]
@@ -61,7 +62,7 @@ class OperatorUnitTests(unittest.TestCase):
         res_div = ops.ContractionDynamicsOperator.analyze_system(A_divergent, b)
         self.assertEqual(res_div["status"], "FAIL")
         self.assertFalse(res_div["is_contracting"])
-        self.assertEqual(res_div["diagnosis"], "NON_CONTRACTIVE_STEP")
+        self.assertEqual(res_div["diagnosis"], "INFINITY_NORM_CONTRACTION_NOT_ESTABLISHED")
 
         # Invalid matrix shapes
         with self.assertRaises(ValueError):
@@ -138,47 +139,289 @@ class OperatorUnitTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ops.RationalCertificateOperator.certify_interval_bound([1], (2, 1), (0, 1))
 
-    def test_egraph_equivalence_operator(self):
-        # Algebraic equivalence under commutativity and identity
-        res = ops.EGraphEquivalenceOperator.verify_algebraic_equivalence(
-            ("*", "x", ("+", "y", "0")),
-            ("*", "y", "x")
-        )
-        self.assertEqual(res["status"], "PASS")
-        self.assertEqual(res["assurance"], "EGRAPH_EQUIVALENCE_CERTIFIED")
-        self.assertTrue(res["equivalent"])
-        self.assertEqual(res["root_a"], res["root_b"])
-
-        # Non-equivalent terms remain distinct
-        res_distinct = ops.EGraphEquivalenceOperator.verify_algebraic_equivalence(
-            ("+", "x", "y"),
-            ("*", "x", "y")
-        )
-        self.assertEqual(res_distinct["status"], "FAIL")
-        self.assertEqual(res_distinct["assurance"], "EGRAPH_DISTINCT_CLASSES")
-        self.assertFalse(res_distinct["equivalent"])
-
     def test_registry_and_scaffolding(self):
         available = ops.list_available_operators()
-        self.assertEqual(len(available), 5)
+        self.assertEqual({entry['card_id'] for entry in available}, {
+            'state_space_refinement', 'contraction_target_bias', 'structural_preflight',
+            'exact_symbolic_constraints', 'egraph_equivalence_saturation'})
         card_ids = [item["card_id"] for item in available]
         self.assertIn("state_space_refinement", card_ids)
         self.assertIn("contraction_target_bias", card_ids)
         self.assertIn("structural_preflight", card_ids)
         self.assertIn("exact_symbolic_constraints", card_ids)
-        self.assertIn("egraph_equivalence_saturation", card_ids)
 
         for card_id in card_ids:
             scaffold = ops.get_operator_scaffold(card_id)
             self.assertIn("if __name__ == '__main__':", scaffold.replace('"', "'"))
             test_report = ops.test_operator(card_id)
-            self.assertEqual(test_report["test_result"]["status"], "PASS")
+            self.assertEqual(test_report["self_test_status"], "PASS")
+            expected = "UNKNOWN" if card_id == "state_space_refinement" else "PASS"
+            self.assertEqual(test_report["test_result"]["status"], expected)
 
         with self.assertRaises(ValueError):
             ops.get_operator_scaffold("unknown_card_id")
         with self.assertRaises(ValueError):
             ops.test_operator("unknown_card_id")
 
+    def test_interval_missed_peak_and_inconclusive_enclosure(self):
+        # All original ten points satisfy the bound, but the midpoint does not.
+        result = ops.RationalCertificateOperator.certify_interval_bound([0, 1, -1], (0, 1), (0, "20/81"))
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIn({"x": "1/2", "y": "1/4", "valid": False}, result["violations"])
+        # A sound enclosing interval can be too wide; absence of a witness is UNKNOWN.
+        result = ops.RationalCertificateOperator.certify_interval_bound([0, 1, -1], (0, 1), (0, "1/4"), 2)
+        self.assertEqual(result["status"], "UNKNOWN")
+        self.assertEqual(result["violations"], [])
+        self.assertEqual(result["enclosures"][0]["range"], ["0", "1/2"])
+
+    def test_interval_whole_domain_positive_cases(self):
+        for coeffs, domain, bounds in [([1, -2, 1], (0, 1), (0, 1)),
+                                       ([0, 0, 1], (-1, 1), (0, 1)),
+                                       ([3], (2, 2), (3, 3))]:
+            with self.subTest(coeffs=coeffs):
+                result = ops.RationalCertificateOperator.certify_interval_bound(coeffs, domain, bounds, 11)
+                self.assertEqual(result["status"], "PASS")
+                self.assertTrue(result["enclosures"])
+                for segment in result["enclosures"]:
+                    left, right = map(Fraction, segment["interval"])
+                    lower, upper = map(Fraction, segment["range"])
+                    for i in range(17):
+                        value = ops.RationalCertificateOperator.eval_polynomial(list(map(Fraction, coeffs)),
+                                                                                left + (right - left) * i / 16)
+                        self.assertLessEqual(lower, value)
+                        self.assertLessEqual(value, upper)
+
+    def test_interval_invalid_and_bounded_inputs(self):
+        cases = [([], (0, 1), (0, 1), 10), ([1], (0, 1), (1, 0), 10),
+                 ([1], (0, 1), (0, 1), 0), ([1], (0, 1), (0, 1), 1),
+                 ([1], (0, 1), (0, 1), True), ([1], (0, 1), (0, 1), 258),
+                 ([1] * 34, (0, 1), (0, 1), 10), ([float("nan")], (0, 1), (0, 1), 10)]
+        for args in cases:
+            with self.subTest(args=args), self.assertRaises(ValueError):
+                ops.RationalCertificateOperator.certify_interval_bound(*args)
+
+    def test_nfe_aliasing_stays_unknown_and_distinct_grids_required(self):
+        op = ops.ContinuousStateSpaceOperator(1)
+        report = op.verify_step_invariance(total_time=128)
+        self.assertTrue(report["diagnostic_pass"])
+        self.assertEqual(report["status"], "UNKNOWN")
+        # The exact solution for the default scalar system is far from this aliased observation.
+        rate, omega, time = 0.5, 2 * math.pi, 128
+        endpoint = (rate * math.sin(omega * time) - omega * math.cos(omega * time)
+                    + omega * math.exp(-rate * time)) / (rate * rate + omega * omega)
+        self.assertGreater(abs(report["endpoints"][128][0] - endpoint), 0.15)
+        for grid in [(16, 16), (16,), (), (0, 16), (-1, 16), (True, 16), (1.5, 16), (16, 4097)]:
+            with self.subTest(grid=grid), self.assertRaises(ValueError):
+                op.verify_step_invariance(nfe_candidates=grid)
+        for time in [0, -1, float("nan"), float("inf")]:
+            with self.subTest(time=time), self.assertRaises(ValueError):
+                op.verify_step_invariance(total_time=time)
+        self.assertEqual(ops.ContinuousStateSpaceOperator(2, 2, 2).verify_step_invariance()["status"], "UNKNOWN")
+
+    def test_zoh_cancellation_and_unsupported_floating_ranges(self):
+        op = ops.ContinuousStateSpaceOperator(1)
+        _, b_bar = op.discretize_zoh(1e-8)
+        expected = -math.expm1(-0.5e-8) / 0.5
+        self.assertAlmostEqual(b_bar[0][0], expected, delta=expected * 1e-15)
+        for dt in [float("nan"), float("inf"), 1e-300, 1e308]:
+            with self.subTest(dt=dt), self.assertRaises(ValueError):
+                op.discretize_zoh(dt)
+        for rate_log in [-1000, 1000, float("nan"), float("inf")]:
+            with self.subTest(rate_log=rate_log), self.assertRaises(ValueError):
+                op.a_log = [rate_log]
+                op.discretize_zoh(0.1)
+
+    def test_ssm_dimensions_and_nonfinite_updates(self):
+        for dims in [(0, 1, 1), (-1, 1, 1), (True, 1, 1), (1, 0, 1), (1, 1, 65)]:
+            with self.subTest(dims=dims), self.assertRaises(ValueError):
+                ops.ContinuousStateSpaceOperator(*dims)
+        op = ops.ContinuousStateSpaceOperator(1)
+        for sequence, state in [([[1, 99]], [0]), ([[1]], [0, 42]), ([[]], [0]),
+                                ([[float("inf")]], [0]), ([[1]], [float("nan")])]:
+            with self.subTest(sequence=sequence, state=state), self.assertRaises(ValueError):
+                op.forward_trajectory(sequence, 0.1, state)
+        for name, value in [("b", [[float("nan")]]), ("c", [[float("inf")]]), ("d", [[0, 0]])]:
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                op = ops.ContinuousStateSpaceOperator(1)
+                setattr(op, name, value)
+                op.discretize_zoh(0.1)
+
+    def test_contraction_threshold_does_not_change_mathematics(self):
+        divergent = ops.ContractionDynamicsOperator.analyze_system([[2]], [1], max_norm_threshold=2)
+        self.assertEqual(divergent["status"], "FAIL")
+        self.assertFalse(divergent["is_contracting"])
+        slow = ops.ContractionDynamicsOperator.analyze_system([[0.9995]], [0], target=[0])
+        self.assertEqual(slow["status"], "PASS")
+        self.assertTrue(slow["is_contracting"])
+        self.assertFalse(slow["safety_margin_met"])
+        boundary = ops.ContractionDynamicsOperator.analyze_system([[1]], [1])
+        self.assertFalse(boundary["is_contracting"])
+        self.assertIsNone(boundary["fixed_point"])
+        self.assertIsNone(boundary["target_bias"])
+        # The display float rounds to one; the exact binary-rational sum remains below one.
+        rounded = ops.ContractionDynamicsOperator.analyze_system([[0.5, math.nextafter(0.5, 0)], [0, 0]], [0, 0])
+        self.assertEqual(rounded["norm_infinity"], 1.0)
+        self.assertLess(Fraction(rounded["norm_infinity_exact"]), 1)
+        self.assertEqual(rounded["status"], "PASS")
+
+    def test_contraction_exact_near_singular_and_unknown_target(self):
+        a = 1 - 5e-13
+        report = ops.ContractionDynamicsOperator.analyze_system([[a]], [1], target=[0], max_norm_threshold=math.nextafter(1, 0))
+        expected = Fraction(1) / (1 - Fraction(a))
+        self.assertEqual(Fraction(report["fixed_point_exact"][0]), expected)
+        self.assertEqual(report["diagnosis"], "CONTRACTING_WITH_TARGET_BIAS")
+        self.assertGreater(report["target_bias"], 1e12)
+        unknown = ops.ContractionDynamicsOperator.analyze_system([[0.5]], [1])
+        self.assertIsNone(unknown["target_bias"])
+        self.assertEqual(unknown["diagnosis"], "CONTRACTING_TARGET_UNASSESSED")
+        unavailable = ops.ContractionDynamicsOperator.analyze_system([[math.nextafter(1, 0)]], [1e308], target=[0])
+        self.assertEqual(unavailable["status"], "UNKNOWN")
+        self.assertIsNone(unavailable["target_bias"])
+        self.assertEqual(unavailable["diagnosis"], "CONTRACTING_FIXED_POINT_UNAVAILABLE")
+
+    def test_contraction_nonfinite_and_dimension_inputs(self):
+        cases = [([[0, 0], [0, float("nan")]], [0, 0], None), ([[0.5]], [float("inf")], None),
+                 ([[0.5]], [0], [float("nan")]), ([[0.5]], [0], []), ([[0.5]], [0], [0, 0]),
+                 ([], [], None), ([[0.5, 1]], [0], None)]
+        for matrix, offset, target in cases:
+            with self.subTest(matrix=matrix, offset=offset, target=target), self.assertRaises(ValueError):
+                ops.ContractionDynamicsOperator.analyze_system(matrix, offset, target)
+        for threshold in [float("nan"), float("inf"), -1]:
+            with self.subTest(threshold=threshold), self.assertRaises(ValueError):
+                ops.ContractionDynamicsOperator.analyze_system([[0.5]], [1], max_norm_threshold=threshold)
+
+    def test_preflight_output_contract_and_absent_argument(self):
+        wrong = ops.StructuralPreflightOperator.preflight_callable(lambda x: [x], (1,), expected_output_shape=(2,))
+        self.assertEqual(wrong["status"], "FAIL")
+        self.assertEqual(wrong["stage"], "OUTPUT_SHAPE_VALIDATION")
+        absent = ops.StructuralPreflightOperator.preflight_callable(lambda x: [x], (1,), expected_shapes={"missing": (1,)})
+        self.assertEqual(absent["status"], "FAIL")
+
+    def test_exports_use_canonical_implementations_with_failing_self_checks(self):
+        for card_id, meta in ops.OPERATORS.items():
+            with self.subTest(card_id=card_id):
+                namespace = {"__name__": "exported_operator"}
+                exec(compile(ops.get_operator_scaffold(card_id), "<exported-operator>", "exec"), namespace)
+                self.assertIn(meta["operator_class"].__name__, namespace)
+                result = namespace["operator_self_test"]()
+                self.assertEqual(result["self_test_status"], "PASS")
+                # Break the exported class: its self-test must fail, not merely print a demonstration.
+                exported_class = namespace[meta["operator_class"].__name__]
+                if card_id == "state_space_refinement":
+                    exported_class.verify_step_invariance = lambda *args, **kwargs: {"status": "PASS"}
+                elif card_id == "contraction_target_bias":
+                    exported_class.analyze_system = lambda *args, **kwargs: {"status": "FAIL"}
+                elif card_id == "structural_preflight":
+                    exported_class.preflight_callable = lambda *args, **kwargs: {"status": "PASS"}
+                elif card_id == "egraph_equivalence_saturation":
+                    exported_class.verify_algebraic_equivalence = lambda *args, **kwargs: {"status": "FAIL"}
+                else:
+                    exported_class.certify_interval_bound = lambda *args, **kwargs: {"status": "FAIL"}
+                with self.assertRaises(AssertionError):
+                    namespace["operator_self_test"]()
+
+
+
+class EGraphTests(unittest.TestCase):
+    def test_egraph_equivalence_operator(self):
+        # Algebraic equivalence under commutativity and identity
+        res = ops.EGraphEquivalenceOperator.verify_algebraic_equivalence(
+            ("*", "x", ("+", "y", "0")),
+            ("*", "y", "x"), variables=("x", "y")
+        )
+        self.assertEqual(res["status"], "PASS")
+        self.assertEqual(res["assurance"], "BOUNDED_REWRITE_CHECK")
+        self.assertEqual(res["domain"], "rational_polynomials")
+        self.assertEqual(res["certificate_status"], "NOT_EMITTED")
+        self.assertEqual(res["application_status"], "UNKNOWN")
+        self.assertTrue(res["equivalent"])
+        self.assertEqual(res["root_a"], res["root_b"])
+
+        # Non-equivalent terms remain distinct
+        res_distinct = ops.EGraphEquivalenceOperator.verify_algebraic_equivalence(
+            ("+", "x", "y"),
+            ("*", "x", "y"), variables=("x", "y")
+        )
+        self.assertEqual(res_distinct["status"], "FAIL")
+        self.assertEqual(res_distinct["assurance"], "EXACT_RATIONAL_COUNTEREXAMPLE")
+        witness = res_distinct["counterexample"]
+        x, y = (Fraction(witness["variables"][name]) for name in ("x", "y"))
+        self.assertEqual(Fraction(witness["expr_a"]), x + y)
+        self.assertEqual(Fraction(witness["expr_b"]), x * y)
+        self.assertNotEqual(x + y, x * y)
+        self.assertFalse(res_distinct["equivalent"])
+
+    def test_egraph_unresolved_and_resource_limits_remain_unknown(self):
+        check = ops.EGraphEquivalenceOperator.verify_algebraic_equivalence
+        # Associativity is valid in this domain but is not an implemented rewrite.
+        unresolved = check(("+", "x", ("+", "y", "z")), ("+", ("+", "x", "y"), "z"),
+                           variables=("x", "y", "z"))
+        self.assertEqual(unresolved["status"], "UNKNOWN")
+        self.assertIsNone(unresolved["equivalent"])
+        self.assertTrue(unresolved["saturated"])
+        for limits in ({"max_iter": 0}, {"max_nodes": 1}, {"max_work": 1}):
+            result = check(("+", "x", "y"), ("+", "y", "x"), variables=("x", "y"), **limits)
+            self.assertEqual(result["status"], "UNKNOWN")
+            self.assertIsNone(result["equivalent"])
+            self.assertLessEqual(result["work_used"], result["limits"]["max_work"])
+            self.assertLessEqual(result["total_enodes"], result["limits"]["max_nodes"])
+        # A finite exact counterexample can still settle inequality without rewriting.
+        self.assertEqual(check(("+", "x", 1), "x", variables=("x",), max_iter=0)["status"], "FAIL")
+
+    def test_egraph_domain_symbols_ast_and_budget_validation(self):
+        check = ops.EGraphEquivalenceOperator.verify_algebraic_equivalence
+        invalid = [True, False, 0.0, float("nan"), float("inf"), {}, {"x"}, (),
+                   ("+", "x"), ("/", "x", 1), ("sin", "x", 0), "unknown", "1/0", 1 << 129]
+        for expr in invalid:
+            with self.subTest(expr=expr), self.assertRaises(ValueError):
+                check(expr, 0, variables=("x",))
+        for variables in ("x", (True,), ("x", "x"), ("x y",), ("x" * 33,), tuple("v" + str(i) for i in range(17))):
+            with self.subTest(variables=variables), self.assertRaises(ValueError):
+                check(0, 0, variables=variables)
+        for domain in ("float64", "matrices", "noncommutative_ring", False):
+            with self.subTest(domain=domain), self.assertRaises(ValueError):
+                check(0, 0, domain=domain)
+        for limits in ({"max_iter": True}, {"max_iter": 17}, {"max_nodes": 0},
+                       {"max_nodes": 2049}, {"max_work": 1.0}, {"max_work": 200001}):
+            with self.subTest(limits=limits), self.assertRaises(ValueError):
+                check(0, 0, **limits)
+        deep = 0
+        for _ in range(33):
+            deep = ("+", deep, 0)
+        with self.assertRaises(ValueError):
+            check(deep, 0)
+        large = 0
+        for _ in range(9):
+            large = ("+", large, large)
+        with self.assertRaises(ValueError):
+            check(large, 0)
+
+    def test_egraph_congruence_and_input_binding(self):
+        check = ops.EGraphEquivalenceOperator.verify_algebraic_equivalence
+        left, right = ("+", "z", ("*", "x", ("+", "y", 0))), ("+", "z", ("*", "x", "y"))
+        result = check(left, right, variables=("x", "y", "z"))
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["input_sha256"], check(left, right, variables=("z", "y", "x"))["input_sha256"])
+        self.assertNotEqual(result["input_sha256"], check(left, ("+", right, 1), variables=("x", "y", "z"))["input_sha256"])
+        self.assertEqual(result["axioms"], list(ops.EGraphEquivalenceOperator.AXIOMS))
+
+    def test_egraph_actual_export_runs_isolated_positive_negative_unknown_checks(self):
+        import json
+        import subprocess
+        import tempfile
+        code = ops.EGraphEquivalenceOperator.scaffold_code()
+        with tempfile.TemporaryDirectory() as folder:
+            target = Path(folder) / "egraph.py"
+            target.write_text(code, encoding="utf-8")
+            result = subprocess.run([sys.executable, "-I", "-B", str(target)], cwd=folder,
+                                    capture_output=True, encoding="utf-8", timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = json.loads(result.stdout)
+            self.assertEqual(report["self_test_status"], "PASS")
+            self.assertEqual(report["positive"]["status"], "PASS")
+            self.assertEqual(report["positive"]["certificate_status"], "NOT_EMITTED")
+            self.assertEqual(report["negative_status"], "FAIL")
+            self.assertEqual(report["unresolved_status"], "UNKNOWN")
 
 if __name__ == "__main__":
     unittest.main()

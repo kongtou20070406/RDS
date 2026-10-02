@@ -25,14 +25,14 @@ Advisor 从已有的 `selection_review` 与同作用域 checkpoint 审查生成 
 
 ## 按需查预载工具与可运行算子脚手架
 
-九张有适用条件的工具卡预载在[目录](../references/theory-tools.json)，按当前信号查一至三张摘要，再按 ID 读取需要的一张：
+八张有适用条件的工具卡预载在[目录](../references/theory-tools.json)，按当前信号查一至三张摘要，再按 ID 读取需要的一张：
 
 ```text
 python -B scripts/rds_theory_tools.py --signals trajectory_degradation local_global_gap --limit 3
 python -B scripts/rds_theory_tools.py --id <returned-card-id>
 ```
 
-为避免 AI 智能体在面对理论卡片时因缺乏可落地算子而退化为调参（如学习率、Loss 系数回退），理论工具集为核心卡片提供了原生、可验证的代码算子脚手架（[scripts/rds_operators.py](../scripts/rds_operators.py)）：
+核心卡片提供标准库可运行的算子模板（[scripts/rds_operators.py](../scripts/rds_operators.py)），用于固定合成示例和后续集成参考。导出使用与内置算子相同的实现，并包含正反例断言：
 
 ```text
 python -B scripts/rds_theory_tools.py --list-operators
@@ -40,9 +40,13 @@ python -B scripts/rds_theory_tools.py --test-operator state_space_refinement
 python -B scripts/rds_theory_tools.py --scaffold state_space_refinement --out operator.py
 ```
 
-- `--list-operators`：列出当前所有已实现可运行算子的理论卡、主信号与其数学保证（例如状态空间 ZOH 离散化的 $\mathcal{O}(\Delta t)$ 步长不变性、无穷范数收缩与不动点分析、预检接口断言、以及基于 E-Graph 的等式饱和无序重写验证等）；
-- `--test-operator <card-id>`：直接在当前环境执行算子内置验证，检验柯西收敛序列或范数界，输出标准 JSON 报告；
-- `--scaffold <card-id> [--out <path>]`：导出独立、自包含且带自测的 Python 模板代码，可直接写入目标文件供模型集成。
+- `--list-operators`：列出理论卡、主信号与检查范围；元数据不验证当前研究的适用性。
+- `--test-operator <card-id>`：完整运行固定合成示例诊断，输出 JSON 中的 `test_result`。退出码对应科学检查状态：`PASS=0`、`FAIL=1`、`UNKNOWN=2`。状态空间示例正常完成有限诊断后仍为 UNKNOWN、退出 2；自动化应读取报告，区分执行故障和未解决的科学断言。
+- `--scaffold <card-id> [--out <path>]`：导出独立 Python 模板。直接运行模板会执行正反例断言，输出独立的 `self_test_status`；自检成功不提升其中的科学检查状态。`--out` 仅适用于该模式，默认独占创建新文件，拒绝覆盖已有文件；省略时在 JSON 中返回代码。
+
+状态空间的有限 NFE 比较属于数值诊断：`diagnostic_pass=true` 可以与 `status=UNKNOWN` 同时成立，有限差值和玩具输入不能证明渐近收敛或步长不变性。收缩分析分别报告严格范数条件、工程余量、不动点数值求解与目标偏置；未知目标或求解失败不能记为零偏置。多项式区间 PASS 需要覆盖声明区间的精确有理包围界；精确点可以构成反例，只有有限采样或未得到包围证明时仍为 UNKNOWN。
+
+固定示例与导出模板自检是算子软件回归，不说明真实模型或数据已接入 RDS 执行、目标绑定或下一次选路。真实应用还需绑定输入来源、声明范围、方法与资源授权，并使用适用检查器。当前算子 CLI 没有项目任务输入契约；它不完成 V3 的目标绑定研究示例，也未提供 Lean 公理审查工作流。
 
 摘要保留 `id/title/reason/matched_tags/required_inputs/locator/runnable_operator` 和目录 SHA；`selection=TAG_MATCH_ONLY`、`prerequisites=NOT_ASSESSED`。标签命中只提供工具线索，不验证前提、排名科学价值或授权执行。`goal.reformulation.signals` 可以附同一短名单，历史 `as_of` 必须允许该目录日期。Skill 只给入口，不加载整个库；没有匹配时保留未匹配数量，不硬塞无关工具。
 
@@ -147,3 +151,9 @@ CLI 默认只打印简短估计与各部分状态；`--output probe.json` 保存
 | 连续若干变体没有改变判断 | 保留共享失败证据，按新信息选择预载工具与一个决定性检查；没有新 scope/证据时不重新包装同一尝试 |
 
 GPU 实验启动前须使用项目实际配置的 runner 做 preflight，核对容量、占用与可执行工作，再走原授权/预算准入。原档案的“空闲”描述不代替当前检查，入口与参数从现有配置读取。公共文档不复制私人路径或原始指标。
+
+## 有界代数重写示例
+
+`python -B scripts/rds_theory_tools.py --test-operator egraph_equivalence_saturation` 检查显式声明变量的有理多项式表达式。示例只实现二元加法/乘法的交换律、加零和乘一；未连通且没有精确反例时保持 UNKNOWN，达到节点、工作或迭代预算时也不判不等。PASS 的 assurance 是 `BOUNDED_REWRITE_CHECK`，没有独立证书，不能据此声明原研究目标完成。
+
+`--scaffold egraph_equivalence_saturation --out rewrite_example.py` 导出相同实现与正例、反例、未决例自测；拒绝覆盖已有文件。导出后必须绑定自己的表达式、变量和适用域。这个标准库示例没有安装 Rust egg/egglog。超图 Rust 后端的实际构建、兼容回退和测量范围见[原生加速](native-acceleration.md)。

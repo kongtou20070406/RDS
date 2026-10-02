@@ -12,3 +12,4 @@ __pycache__/
 obq-*.mjs
 dist/
 formal/.lake/
+native/**/target/

@@ -30,7 +30,7 @@ def probe(capability):
             )
             valid = (acc_info['status'] == 'AVAILABLE')
             if not valid:
-                report.update(status='UNAVAILABLE', error='Neither compiled native library nor cargo toolchain detected')
+                report.update(status='UNAVAILABLE', error='No usable compiled native ABI; cargo presence is reported separately')
                 report['wall_seconds'] = round(time.perf_counter() - started, 6)
                 return report
         else:
