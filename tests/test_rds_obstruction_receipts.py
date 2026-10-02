@@ -339,5 +339,83 @@ class ObstructionReceiptReviewTests(unittest.TestCase):
         self.assertIn('records an execution cap', entries[1]['reason'])
 
 
+class SharedReceiptReadTests(unittest.TestCase):
+    """One advise call: a receipt named by the dependency map and by an obstruction is read once."""
+    SHA = ObstructionReceiptReviewTests.SHA
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name) / 'project'
+        stopped_ledger(self.root, self.SHA)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def call(self, map_root, obstruction_root, templates=None, audit=True):
+        import rds_hypergraph
+        goal = DEEP_LEARNING[0]
+        ctx = context(*DEEP_LEARNING)
+        ctx['dependency_map'] = {
+            'schema': 1, 'goals': [goal],
+            'nodes': [{'id': 'run', 'status': 'SUPPORTED', 'source': 'synthetic-run-log.txt',
+                       'evidence': {'receipt': {'project_root': str(map_root), 'sha256': self.SHA}}},
+                      {'id': goal, 'status': 'UNKNOWN', 'source': 'synthetic-goal.json'}],
+            'hyperedges': [{'id': 'e1', 'premises': ['run'], 'conclusion': goal, 'status': 'SUPPORTED',
+                            'source': 'synthetic-protocol.json'}]}
+        ctx['obstructions'] = [obstruction(goal, 'EXECUTION_CAP',
+                                           receipt={'project_root': str(obstruction_root), 'sha256': self.SHA})]
+        ctx['audit_receipts'] = audit
+        if templates is not None:
+            ctx['templates'] = templates
+        calls, original = [], rds_hypergraph.read_project_receipt
+
+        def counting(root_text, digest_sha):
+            calls.append((root_text, digest_sha))
+            return original(root_text, digest_sha)
+
+        with mock.patch.object(rds_hypergraph, 'read_project_receipt', counting):
+            review = advisor_review(ctx, route(goal))['selection_review']
+        return review, calls
+
+    def test_the_same_declared_receipt_is_read_once_per_call(self):
+        for templates in (None, []):  # Direct review and the operation-cached dependency path.
+            with self.subTest(templates=templates):
+                review, calls = self.call(self.root, self.root, templates)
+                self.assertEqual(calls, [(str(self.root), self.SHA)])
+                # Both consumers judge the one read by their own rules.
+                [row] = review['dependency_review']['receipt_audit']['audits']
+                self.assertEqual((row['status'], row['run_status']), ('RECEIPT_NOT_SUCCEEDED', 'FAILED'))
+                self.assertIn('run', review['dependency_review']['receipt_blocked_node_ids'])
+                audit = review['obstruction_review'][0]['receipt_audit']
+                self.assertEqual((audit['status'], audit['execution_cap']), ('RECEIPT_FOUND', 'PROGRESS_NO_GROWTH'))
+
+    def test_each_call_reads_again(self):
+        _, first = self.call(self.root, self.root)
+        _, second = self.call(self.root, self.root)
+        self.assertEqual((first, second), ([(str(self.root), self.SHA)],) * 2)
+
+    def test_different_root_texts_stay_distinct_identities(self):
+        alias = str(self.root) + '/.'  # Same directory, different declared project_root.
+        review, calls = self.call(self.root, alias)
+        self.assertEqual(sorted(calls), sorted([(str(self.root), self.SHA), (alias, self.SHA)]))
+        self.assertEqual(review['obstruction_review'][0]['receipt'], {'project_root': alias, 'sha256': self.SHA})
+
+    def test_a_shared_failed_read_fails_closed_for_both(self):
+        missing = Path(self.tmp.name) / 'absent'
+        review, calls = self.call(missing, missing)
+        self.assertEqual(calls, [(str(missing), self.SHA)])
+        [row] = review['dependency_review']['receipt_audit']['audits']
+        self.assertEqual(row['status'], 'LEDGER_UNAVAILABLE')
+        self.assertIn('run', review['dependency_review']['receipt_blocked_node_ids'])
+        entry = review['obstruction_review'][0]
+        self.assertEqual(entry['receipt_audit']['status'], 'LEDGER_UNAVAILABLE')
+        self.assertEqual(entry['response'], 'DISCRIMINATING_CHECK')
+
+    def test_without_the_opt_in_neither_consumer_reads(self):
+        review, calls = self.call(self.root, self.root, audit=False)
+        self.assertEqual(calls, [])
+        self.assertEqual(review['obstruction_review'][0]['receipt_audit'], {'status': 'NOT_AUDITED'})
+
+
 if __name__ == '__main__':
     unittest.main()

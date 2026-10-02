@@ -344,12 +344,14 @@ def _discrimination(action, facts):
             "issues": issues}
 
 
-def _dependency_review(context, *, audit_receipts=False, audit_files=False):
+def _dependency_review(context, *, audit_receipts=False, audit_files=False, read_receipt=None):
     """Consume the existing bounded AND/OR analyzer only when a map is supplied.
 
     ``audit_receipts``/``audit_files`` mirror the analyzer CLI flags: receipt
     grounding and byte checks change which records the closure may use. Both
     stay read-only; a run or file bytes are never statement verification.
+    ``read_receipt`` is the operation's shared lookup, so a receipt also named
+    by an obstruction is read once per call.
     """
     if "dependency_map" not in context:
         return None
@@ -371,7 +373,8 @@ def _dependency_review(context, *, audit_receipts=False, audit_files=False):
         if input_review['errors']:
             raise ValueError('; '.join(row['path'] + ': ' + row['reason'] for row in input_review['errors']))
         try:
-            result = analyze_hypergraph(spec, audit_receipts_enabled=audit_receipts) if audit_receipts \
+            shared = {} if read_receipt is None else {"read_receipt": read_receipt}
+            result = analyze_hypergraph(spec, audit_receipts_enabled=audit_receipts, **shared) if audit_receipts \
                 else analyze_hypergraph(spec)
         except TypeError:
             # Analyzer without the receipts slice: no receipt audit is possible,
@@ -404,7 +407,7 @@ def _dependency_review(context, *, audit_receipts=False, audit_files=False):
                 "assurance": "INPUT_REPORTED_DEPENDENCY_ANALYSIS_NOT_PROOF"}
 
 
-def _operation_dependency(context, *, audit_receipts=False, audit_files=False):
+def _operation_dependency(context, *, audit_receipts=False, audit_files=False, read_receipt=None):
     """Own one map snapshot and reuse its analysis only within this operation."""
     snapshot = dict(context)
     snapshot["dependency_map"] = deepcopy(context["dependency_map"])
@@ -413,7 +416,7 @@ def _operation_dependency(context, *, audit_receipts=False, audit_files=False):
     def review():
         if not cached:
             cached.append(_dependency_review(snapshot, audit_receipts=audit_receipts,
-                                             audit_files=audit_files))
+                                             audit_files=audit_files, read_receipt=read_receipt))
         return deepcopy(cached[0])
 
     return review
@@ -621,7 +624,7 @@ def _obstruction_records(context):
     return records
 
 
-def _receipt_audits(records, context):
+def _receipt_audits(records, context, read_receipt=None):
     """Read each distinct declared receipt once, read-only, only under the audit_receipts opt-in.
 
     A receipt records execution, not why a goal is blocked: only a recorded timeout or stop policy
@@ -630,10 +633,11 @@ def _receipt_audits(records, context):
     keys = {(r["receipt"]["project_root"], r["receipt"]["sha256"].lower()) for r in records if "receipt" in r}
     if context.get("audit_receipts") is not True:
         return dict.fromkeys(keys, {"status": "NOT_AUDITED"})
-    from rds_hypergraph import read_project_receipt
+    if read_receipt is None:
+        from rds_hypergraph import read_project_receipt as read_receipt
     audits = {}
     for root_text, digest_sha in sorted(keys):
-        found = read_project_receipt(root_text, digest_sha)
+        found = read_receipt(root_text, digest_sha)
         body = found.get("body")
         if found["status"] == "RECEIPT_FOUND" and not (isinstance(body, dict) and body.get("sha256") == digest_sha):
             found = {"status": "RECEIPT_BODY_MISMATCH"}
@@ -706,7 +710,7 @@ def _canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
-def _obstruction_review(records, context, goal):
+def _obstruction_review(records, context, goal, read_receipt=None):
     """Map declared obstructions on open goal obligations to bounded responses."""
     targets = _goal_targets(context)
     truths = {}
@@ -715,7 +719,7 @@ def _obstruction_review(records, context, goal):
     decision = context.get("decision")
     # The ledger keys loop history by decision.scope; the context-level scope is the documented fallback.
     scope = decision["scope"] if isinstance(decision, dict) and "scope" in decision else context.get("scope")
-    audits = _receipt_audits(records, context)
+    audits = _receipt_audits(records, context, read_receipt)
     entries = []
     for record in records:
         entry = {"id": record["id"], "obligation": record["obligation"], "cause": record["cause"]}
@@ -789,7 +793,7 @@ def _specify_capability(move, review, entries, integrity):
             (move["kind"] == "RESOLVE_PREMISE" and move["reason"] == GOAL_EVIDENCE_REASON and bool(unknown)))
 
 
-def review_obstructions(search, context):
+def review_obstructions(search, context, *, _read_receipt=None):
     """Validate and consume declared obstructions after every existing context check.
 
     Responses are added to selection_review and referenced from the existing next_move. A move is
@@ -801,7 +805,7 @@ def review_obstructions(search, context):
     review = search.get("selection_review") if isinstance(search, dict) else None
     if not isinstance(review, dict):
         return None
-    review["obstruction_review"] = entries = _obstruction_review(records, context, review.get("goal"))
+    review["obstruction_review"] = entries = _obstruction_review(records, context, review.get("goal"), _read_receipt)
     move = review.get("next_move")
     applicable = [(index, entry) for index, entry in enumerate(entries) if entry["status"] == "APPLICABLE"]
     if move is None or not applicable:
@@ -915,12 +919,14 @@ def _next_move(review, search):
             "prompt": prompt + MOVE_PRESERVE_CLAUSES}
 
 
-def review_selection(search, context, *, _dependency=None, audit_receipts=False, audit_files=False):
+def review_selection(search, context, *, _dependency=None, audit_receipts=False, audit_files=False,
+                     _read_receipt=None):
     """Expose what the supplied directions can decide; never invent utility."""
     ready = [c for c in search.get("candidates", []) if c.get("status") == "READY"]
     flags, candidates = [], []
     dependency = _dependency() if _dependency is not None else \
-        _dependency_review(context, audit_receipts=audit_receipts, audit_files=audit_files)
+        _dependency_review(context, audit_receipts=audit_receipts, audit_files=audit_files,
+                           read_receipt=_read_receipt)
     if search.get("truncation", {}).get("truncated"):
         flags.append({"kind": "SEARCH_TRUNCATED", "next": "Review the omitted search scope before claiming a best route."})
     obligations = all(c.get("action", {}).get("kind") == "OBLIGATION_CHECK" for c in ready)

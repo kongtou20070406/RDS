@@ -193,7 +193,23 @@ def read_project_receipt(root_text, digest_sha):
         return {"status": "LEDGER_UNAVAILABLE", "reason": type(exc).__name__}
 
 
-def audit_receipts(spec):
+def receipt_reader():
+    """One operation's receipt lookup: each declared (project_root, sha256) pair is read at most once.
+
+    The key is the declared pair itself, so different root texts are never merged into one
+    identity, and a failed read is reused as the same fail-closed result.
+    """
+    seen = {}
+
+    def read(root_text, digest_sha):
+        if (root_text, digest_sha) not in seen:
+            seen[root_text, digest_sha] = read_project_receipt(root_text, digest_sha)
+        return deepcopy(seen[root_text, digest_sha])
+
+    return read
+
+
+def audit_receipts(spec, read_receipt=None):
     """Verify receipt-bound evidence against frozen, append-only project ledgers.
 
     A binding is GROUNDED only when the named ledger holds a receipt with the
@@ -201,6 +217,7 @@ def audit_receipts(spec):
     statement proof; the result only upgrades the receipt, never the claim.
     """
     nodes, edges, _, _ = _validate(spec)
+    read_receipt = read_receipt or read_project_receipt
     bindings = {}
     for kind, records in (("node", nodes.values()), ("rule", edges)):
         for record in records:
@@ -213,7 +230,7 @@ def audit_receipts(spec):
     audited = []
     for (root_text, digest_sha), users in sorted(bindings.items()):
         row = {"receipt": {"project_root": root_text, "sha256": digest_sha}, "used_by": sorted(users)}
-        found = read_project_receipt(root_text, digest_sha)
+        found = read_receipt(root_text, digest_sha)
         if found["status"] != "RECEIPT_FOUND":
             row.update(found)
         elif (body := found["body"]).get("sha256") != digest_sha or body.get("run_status") != "SUCCEEDED":
@@ -306,12 +323,12 @@ def _goal_relevance(edges, goals):
     return relevant_nodes, relevant_edges
 
 
-def analyze_hypergraph(spec, audit_receipts_enabled=False):
+def analyze_hypergraph(spec, audit_receipts_enabled=False, read_receipt=None):
     """Least declared closure and complete minimal missing-evidence sets, or UNKNOWN."""
     nodes, edges, goals, limits = _validate(spec)
     grounded, receipt_audit = frozenset(), None
     if audit_receipts_enabled:
-        receipt_audit = audit_receipts(spec)
+        receipt_audit = audit_receipts(spec, read_receipt)
         grounded = frozenset(receipt_audit["grounded_receipts"])
     closure, derivations, conflicts, receipt_block = _supported_closure(nodes, edges, grounded)
     blocked_nodes = set(receipt_block)
