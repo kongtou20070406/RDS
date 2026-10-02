@@ -406,18 +406,19 @@ def _next_move(review, search):
     if "LOOP_HISTORY_REVIEW_ERROR" in loop_flags:
         kind, reason = "RESOLVE_PREMISE", "Recorded history integrity is unresolved; inspect the existing loop review."
     elif supported_route and goal.get("conditions") and any(
-            c["truth"] == UNKNOWN for c in goal.get("conditions", [])):
+            c["truth"] == UNKNOWN for c in goal.get("conditions", [])) and any(
+            c["basis"] == "CONDITIONAL_RIVAL_TEST" and not c["unresolved_pairs"]
+            for c in review["candidates"]):
         # A supported discriminating observation that measures the unresolved
         # predicate IS the evidence repair: name it instead of a generic premise step.
         unresolved_facts = {c["fact"] for c in goal["conditions"] if c["truth"] == UNKNOWN}
         measuring = [c["id"] for c in review["candidates"]
                      if c["basis"] == "CONDITIONAL_RIVAL_TEST" and not c["unresolved_pairs"]]
-        if measuring:
-            kind, reason = "DESIGN_DISCRIMINATOR", (
-                "Local success does not measure the open application/transfer obligation; run the ready "
-                f"discriminating check ({', '.join(sorted(measuring))}) whose rival predictions resolve "
-                f"{', '.join(sorted(unresolved_facts))}. Replication and healthy local routes stay preserved; "
-                "another local qualification is not application progress.")
+        kind, reason = "DESIGN_DISCRIMINATOR", (
+            "Local success does not measure the open application/transfer obligation; run the ready "
+            f"discriminating check ({', '.join(sorted(measuring))}) whose rival predictions resolve "
+            f"{', '.join(sorted(unresolved_facts))}. Replication and healthy local routes stay preserved; "
+            "another local qualification is not application progress.")
     elif (goal.get("status") == UNKNOWN or any(c["truth"] == UNKNOWN for c in goal.get("conditions", []))) and not goal_history:
         kind, reason = "RESOLVE_PREMISE", "The original goal has unresolved evidence; no scientific failure is established."
     elif ("PREDICTION_PREMISES_UNRESOLVED" in flags and not supported_route) or (not ready_ids and (pending or blocked)):
