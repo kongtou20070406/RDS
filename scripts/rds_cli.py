@@ -1594,8 +1594,12 @@ def _main():
             return 1
         if args.command == "checkpoint" and args.action == "restore" and result.get("status") == "CONFLICT":
             return 1
-    except (ValueError, KeyError, TypeError, RecursionError, OSError, sqlite3.Error, SyntaxError, ImportError, subprocess.SubprocessError) as exc:
+    except (ValueError, OSError, RecursionError, SyntaxError) as exc:
         print("[RDS-REJECT] " + str(exc), file=sys.stderr)
+        return 1
+    except (KeyError, TypeError, ImportError, sqlite3.Error, subprocess.SubprocessError) as exc:
+        # Nothing was refused: RDS code, its state database or its environment failed.
+        print("[RDS-ERROR] " + type(exc).__name__ + ": " + str(exc), file=sys.stderr)
         return 1
     return 0
 
