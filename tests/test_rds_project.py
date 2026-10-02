@@ -331,34 +331,144 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual(self.store.snapshot()["budget"]["cpu_seconds"]["reserved"], 1)
 
     def test_recover_during_foreground_startup_preserves_reservation(self):
-        self.store.register(self.spec())
+        from startup_recovery_fixture import run_fixture
+        result = run_fixture(self.root, self.spec())
+        self.assertFalse(result["watchdog_expired"], result)
+        self.assertEqual(result["returncode"], 0, result)
+
+    def test_startup_recovery_waits_for_real_sqlite_settlement(self):
+        from startup_recovery_fixture import run_fixture
+        result = run_fixture(self.root, self.spec(), scenario="sqlite_wait")
+        self.assertFalse(result["watchdog_expired"], result)
+        self.assertEqual(result["returncode"], 0, result)
+        self.assertGreaterEqual(result["report"]["writer_lock_seconds"], 5.2)
+        self.assertEqual(result["report"]["snapshot"]["receipts"][0]["run_status"], "SUCCEEDED")
+
+    def test_startup_fixture_does_not_hide_nonzero_child_failure(self):
+        from startup_recovery_fixture import run_fixture
+        result = run_fixture(self.root, self.spec(mode="nonzero"))
+        self.assertFalse(result["watchdog_expired"], result)
+        self.assertEqual(result["returncode"], 1, result)
+        self.assertEqual(result["report"]["exception"]["type"], "AssertionError")
+        receipt = result["report"]["snapshot"]["receipts"][0]
+        self.assertEqual((receipt["run_status"], receipt["exit_code"]), ("FAILED", 7))
+        self._assert_single_failed_startup(receipt)
+
+    def test_startup_fixture_preserves_actual_runtime_timeout_failure(self):
+        from startup_recovery_fixture import run_fixture
+        result = run_fixture(self.root, self.spec(mode="timeout", timeout=0.15))
+        self.assertFalse(result["watchdog_expired"], result)
+        self.assertEqual(result["returncode"], 1, result)
+        receipt = result["report"]["snapshot"]["receipts"][0]
+        self.assertEqual(receipt["run_status"], "FAILED")
+        self.assertTrue(receipt["timeout"])
+        self._assert_single_failed_startup(receipt)
+
+    def _assert_single_failed_startup(self, receipt):
+        snapshot = self.store.snapshot()
+        self.assertEqual((len(snapshot["runs"]), len(snapshot["receipts"]), len(snapshot["exposures"])), (1, 1, 1))
+        self.assertEqual(snapshot["runs"][0]["attempt_id"], receipt["attempt_id"])
+        self.assertEqual(snapshot["receipts"][0]["sha256"], receipt["sha256"])
+        self.assertEqual(snapshot["budget"]["cpu_seconds"]["charged_estimate"], 1)
+        self.assertEqual(snapshot["budget"]["cpu_seconds"]["reserved"], 0)
+        self.assertTrue(receipt["process_started"])
+        self.assertEqual(self.store.recover("r1")["sha256"], receipt["sha256"])
+        with self.assertRaises(ValueError):
+            self.store.execute("r1")
+        self.assertEqual(self.store.snapshot(), snapshot)
+
+    def test_startup_fixture_watchdog_fails_and_stops_its_controller(self):
+        from startup_recovery_fixture import run_fixture
+        result = run_fixture(self.root, self.spec(), scenario="stalled_claim", watchdog=0.2)
+        self.assertTrue(result["watchdog_expired"], result)
+        self.assertNotEqual(result["returncode"], 0)
+        self.assertEqual(result["report"]["phase"], "stalled_claim")
+        self.assertIn("Thread", result["stderr"])
+        snapshot = self.store.snapshot()
+        self.assertEqual(snapshot["runs"][0]["status"], "RESERVED")
+        self.assertIsNone(snapshot["runs"][0]["pid"])
+        self.assertFalse(snapshot["receipts"])
+        self.assertEqual(snapshot["budget"]["cpu_seconds"]["reserved"], 1)
+        self.assertEqual(snapshot["budget"]["cpu_seconds"]["charged_estimate"], 0)
+        from rds_project import _alive
+        self.assertEqual(snapshot["runs"][0]["worker_pid"], result["report"]["controller_pid"])
+        self.assertFalse(_alive(snapshot["runs"][0]["worker_pid"]))
+        recovered = self.store.recover("r1")
+        self.assertEqual(recovered["run_status"], "INTERRUPTED")
+        self.assertEqual(recovered["attempt_id"], snapshot["runs"][0]["attempt_id"])
+        self.assertIsNone(recovered["exit_code"])
+        self.assertIsNone(recovered["resources"]["cpu_seconds"]["measured"])
+        self.assertEqual(recovered["assessment"], {"task_gain": "UNKNOWN", "mechanism": "UNKNOWN"})
+        after = self.store.snapshot()
+        self.assertEqual((len(after["runs"]), len(after["receipts"])), (1, 1))
+        self.assertEqual(after["budget"]["cpu_seconds"]["reserved"], 0)
+        self.assertEqual(after["budget"]["cpu_seconds"]["charged_estimate"], 1)
+        self.assertEqual(self.store.recover("r1")["sha256"], recovered["sha256"])
+        with self.assertRaises(ValueError):
+            self.store.execute("r1")
+        self.assertEqual(self.store.snapshot(), after)
+
+    def _assert_foreground_startup_recovery(self, spec, record):
+        self.store.register(spec)
         claimed, resume = threading.Event(), threading.Event()
         execute_claim = self.store._execute_claim
 
         def pause_claim(run_id, attempt_id):
             claimed.set()
-            self.assertTrue(resume.wait(5))
+            # The isolated controller's parent watchdog bounds this rendezvous.
+            resume.wait()
             return execute_claim(run_id, attempt_id)
 
         with patch.object(self.store, "_execute_claim", side_effect=pause_claim), \
                 concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             execution = pool.submit(self.store.execute, "r1")
+            # A pre-claim worker exception must wake the gate and retain its
+            # original traceback instead of waiting for the parent watchdog.
+            execution.add_done_callback(lambda future: claimed.set())
             try:
-                self.assertTrue(claimed.wait(5))
+                record("waiting_for_claim")
+                claimed.wait()
+                if execution.done():
+                    execution.result()
+                record("claimed")
                 recovered = self.store.recover("r1")
                 self.assertEqual(recovered.get("status"), "RESERVED")
                 self.assertEqual(recovered["worker_pid"], os.getpid())
+                attempt_id = recovered["attempt_id"]
                 snapshot = self.store.snapshot()
                 self.assertFalse(snapshot["receipts"])
                 self.assertEqual(snapshot["budget"]["cpu_seconds"]["reserved"], 1)
+                self.assertEqual(snapshot["budget"]["cpu_seconds"]["charged_estimate"], 0)
                 with self.assertRaises(ValueError):
                     self.store.execute("r1")
+                record("recovered_without_duplicate")
             finally:
-                resume.set()
-            receipt = execution.result(timeout=5)
+                try:
+                    record("waiting_for_receipt")
+                finally:
+                    resume.set()
+            # Five seconds was a fixture limit, shorter than the existing ten-
+            # second SQLite wait, not a bound on the frozen child runtime.
+            receipt = execution.result()
+        record("settled")
         self.assertEqual(receipt["run_status"], "SUCCEEDED")
         self.assertEqual(receipt["exit_code"], 0)
-        self.assertEqual(self.store.snapshot()["budget"]["cpu_seconds"]["charged_estimate"], 1)
+        self.assertEqual(receipt["attempt_id"], attempt_id)
+        snapshot = self.store.snapshot()
+        self.assertEqual(snapshot["budget"]["cpu_seconds"]["charged_estimate"], 1)
+        self.assertEqual(snapshot["budget"]["cpu_seconds"]["reserved"], 0)
+        self.assertEqual(len(snapshot["runs"]), 1)
+        self.assertEqual(len(snapshot["receipts"]), 1)
+        self.assertEqual(len(snapshot["exposures"]), 1)
+        self.assertEqual(snapshot["receipts"][0]["sha256"], receipt["sha256"])
+        self.assertTrue(receipt["process_started"])
+        self.assertIsNotNone(receipt["pid"])
+        output = next(a for a in receipt["artifacts"] if a["kind"] == "project_output")
+        self.assertEqual(file_sha(self.root / output["path"]), output["sha256"])
+        self.assertEqual(self.store.recover("r1")["sha256"], receipt["sha256"])
+        with self.assertRaises(ValueError):
+            self.store.execute("r1")
+        self.assertEqual(self.store.snapshot(), snapshot)
 
     def test_stale_recovery_cannot_settle_a_newly_claimed_worker(self):
         # An existing reservation may predate foreground controller identity.

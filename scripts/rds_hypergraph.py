@@ -174,7 +174,58 @@ def audit_sources(spec, base_dir=None):
             "all_requested_files_match": all(row["status"] == "MATCH" for row in rows)}
 
 
-def audit_receipts(spec):
+def read_project_receipt(root_text, digest_sha):
+    """Read one receipt body by sha256 from a project ledger, read-only.
+
+    Returns ``{"status": "RECEIPT_FOUND", "body": {...}}``, ``RECEIPT_NOT_FOUND``,
+    ``RECEIPT_AMBIGUOUS`` when more than one stored receipt carries the sha256,
+    ``RECEIPT_BODY_INVALID`` with the type of a stored body that is not a JSON object,
+    or ``LEDGER_UNAVAILABLE`` with the exception type; the caller judges the body.
+    """
+    try:
+        from rds_project import ProjectStore
+        store = ProjectStore(root_text)
+        with store._db(True) as db:
+            hits = db.execute("SELECT body FROM receipts WHERE sha256=? LIMIT 2", (digest_sha,)).fetchall()
+        if not hits:
+            return {"status": "RECEIPT_NOT_FOUND"}
+        if len(hits) > 1:
+            # The ledger writer never repeats a sha256 (it covers the run_id key); no row order picks one.
+            return {"status": "RECEIPT_AMBIGUOUS"}
+        raw = hits[0]["body"]
+        if not isinstance(raw, (str, bytes)):
+            # An untyped imported column can hold NULL or a number; neither is stored JSON text.
+            kind = "null" if raw is None else "integer" if isinstance(raw, int) else "real"
+            return {"status": "RECEIPT_BODY_INVALID", "reason": "sqlite " + kind}
+        body = json.loads(raw)
+        if not isinstance(body, dict):
+            # An imported or corrupted row is data, not a receipt: nothing is read out of it.
+            kind = ("null" if body is None else "boolean" if isinstance(body, bool) else "array"
+                    if isinstance(body, list) else "string" if isinstance(body, str) else "number")
+            return {"status": "RECEIPT_BODY_INVALID", "reason": kind}
+        return {"status": "RECEIPT_FOUND", "body": body}
+    except (ValueError, FileNotFoundError, OSError, RuntimeError, sqlite3.Error) as exc:
+        # RuntimeError: Path.resolve() on a symlink loop; the ledger is unreadable, not a crash.
+        return {"status": "LEDGER_UNAVAILABLE", "reason": type(exc).__name__}
+
+
+def receipt_reader():
+    """One operation's receipt lookup: each declared (project_root, sha256) pair is read at most once.
+
+    The key is the declared pair itself, so different root texts are never merged into one
+    identity, and a failed read is reused as the same fail-closed result.
+    """
+    seen = {}
+
+    def read(root_text, digest_sha):
+        if (root_text, digest_sha) not in seen:
+            seen[root_text, digest_sha] = read_project_receipt(root_text, digest_sha)
+        return deepcopy(seen[root_text, digest_sha])
+
+    return read
+
+
+def audit_receipts(spec, read_receipt=None):
     """Verify receipt-bound evidence against frozen, append-only project ledgers.
 
     A binding is GROUNDED only when the named ledger holds a receipt with the
@@ -182,6 +233,7 @@ def audit_receipts(spec):
     statement proof; the result only upgrades the receipt, never the claim.
     """
     nodes, edges, _, _ = _validate(spec)
+    read_receipt = read_receipt or read_project_receipt
     bindings = {}
     for kind, records in (("node", nodes.values()), ("rule", edges)):
         for record in records:
@@ -194,22 +246,13 @@ def audit_receipts(spec):
     audited = []
     for (root_text, digest_sha), users in sorted(bindings.items()):
         row = {"receipt": {"project_root": root_text, "sha256": digest_sha}, "used_by": sorted(users)}
-        try:
-            from rds_project import ProjectStore
-            store = ProjectStore(root_text)
-            with store._db(True) as db:
-                hit = db.execute("SELECT body FROM receipts WHERE sha256=?", (digest_sha,)).fetchone()
-            if hit is None:
-                row.update(status="RECEIPT_NOT_FOUND")
-            else:
-                body = json.loads(hit["body"])
-                if body.get("sha256") != digest_sha or body.get("run_status") != "SUCCEEDED":
-                    row.update(status="RECEIPT_NOT_SUCCEEDED",
-                               run_status=body.get("run_status"))
-                else:
-                    row.update(status="GROUNDED", run_id=body.get("run_id"))
-        except (ValueError, FileNotFoundError, OSError, sqlite3.Error) as exc:
-            row.update(status="LEDGER_UNAVAILABLE", reason=type(exc).__name__)
+        found = read_receipt(root_text, digest_sha)
+        if found["status"] != "RECEIPT_FOUND":
+            row.update(found)
+        elif (body := found["body"]).get("sha256") != digest_sha or body.get("run_status") != "SUCCEEDED":
+            row.update(status="RECEIPT_NOT_SUCCEEDED", run_status=body.get("run_status"))
+        else:
+            row.update(status="GROUNDED", run_id=body.get("run_id"))
         audited.append(row)
     grounded = {(row["receipt"]["project_root"], row["receipt"]["sha256"])
                 for row in audited if row["status"] == "GROUNDED"}
@@ -296,12 +339,12 @@ def _goal_relevance(edges, goals):
     return relevant_nodes, relevant_edges
 
 
-def analyze_hypergraph(spec, audit_receipts_enabled=False):
+def analyze_hypergraph(spec, audit_receipts_enabled=False, read_receipt=None):
     """Least declared closure and complete minimal missing-evidence sets, or UNKNOWN."""
     nodes, edges, goals, limits = _validate(spec)
     grounded, receipt_audit = frozenset(), None
     if audit_receipts_enabled:
-        receipt_audit = audit_receipts(spec)
+        receipt_audit = audit_receipts(spec, read_receipt)
         grounded = frozenset(receipt_audit["grounded_receipts"])
     closure, derivations, conflicts, receipt_block = _supported_closure(nodes, edges, grounded)
     blocked_nodes = set(receipt_block)

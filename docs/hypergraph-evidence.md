@@ -20,8 +20,10 @@ a frozen, append-only project ledger (`.rds/project.sqlite3`):
 binding: the named ledger must contain a receipt with that sha256 whose
 `run_status` is `SUCCEEDED` (read-only; append-only triggers are never
 touched). Outcomes per binding land in `receipt_audit.audits`:
-`GROUNDED`, `RECEIPT_NOT_FOUND`, `RECEIPT_NOT_SUCCEEDED`, or
-`LEDGER_UNAVAILABLE`.
+`GROUNDED`, `RECEIPT_NOT_FOUND`, `RECEIPT_NOT_SUCCEEDED`,
+`RECEIPT_BODY_INVALID` (the stored body does not decode to a JSON object;
+`reason` names its type), `RECEIPT_AMBIGUOUS` (more than one stored receipt
+carries the sha256), or `LEDGER_UNAVAILABLE`.
 
 - **Fail-closed in both modes**: declaring a binding never promotes the
   record. Without the audit (or when grounding fails) the record stays out
