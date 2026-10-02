@@ -58,19 +58,39 @@ def latest_decision(root, checkpoint_id=None):
     return decision, restored
 
 
+def _discarded_choice_hint(records):
+    def bounded(value, limit):
+        value = value if isinstance(value, str) else 'UNKNOWN'
+        escaped = json.dumps(value[:limit], ensure_ascii=True)[1:-1]
+        return escaped[:limit] + ('...' if len(value) > limit or len(escaped) > limit else '')
+
+    hints = ['"' + bounded(c.get('id', c.get('rule_id')), 96) + '": ' + bounded(c.get('reason'), 200)
+             for c in records[:3]]
+    if len(records) > 3:
+        hints.append(str(len(records) - 3) + ' more discarded actions')
+    return '; '.join(hints) + '. Repair the configured action; inspect full advice for original reasons'
+
+
 def choice(advice, context, candidate_id=None):
     from rds_advisor import _scope, _text, _loop_route
     decision = context.get('decision', {})
     require(isinstance(decision, dict) and _text(decision.get('id')) and _text(decision.get('goal_revision')),
             'Recording a choice needs decision.id and goal_revision in the context')
     _scope(decision.get('scope'))
-    available = [c for r in advice.get('recommendations', []) if r.get('type') == 'EXECUTABLE_DIRECTION_SEARCH'
-                 for c in r['search']['candidates']]
+    searches = [r['search'] for r in advice.get('recommendations', []) if r.get('type') == 'EXECUTABLE_DIRECTION_SEARCH']
+    available = [c for search in searches for c in search['candidates']]
+    discarded = [c for search in searches for c in search.get('discarded_candidates', [])]
     matches = ([c for c in available if c.get('status') == 'READY'] if candidate_id is None else
                [c for c in available if c.get('id') == candidate_id or c.get('action', {}).get('id') == candidate_id])
+    discarded_matches = ([] if candidate_id is None else
+                         [c for c in discarded if c.get('id') == candidate_id or c.get('action_id') == candidate_id])
     if not matches and candidate_id is None:
         unresolved = [c for c in available if c.get('method_review', {}).get('status') == 'UNKNOWN']
         require(not unresolved, 'Method scope is unresolved; inspect method_review questions and clarify only the affected work')
+        if not available and discarded and not any(search.get('blocked_candidates') for search in searches):
+            raise ValueError('No READY candidate; configured actions were discarded: ' + _discarded_choice_hint(discarded))
+    if not matches and len(discarded_matches) == 1:
+        raise ValueError('Selected candidate was discarded: ' + _discarded_choice_hint(discarded_matches))
     require(len(matches) == 1, 'Choose one returned candidate ID; missing, pruned or ambiguous candidate')
     candidate = deepcopy(matches[0])
     from rds_methods import review_candidate

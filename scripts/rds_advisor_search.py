@@ -515,6 +515,12 @@ def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nod
     candidates = {}
     memo = {}
 
+    def discard(rule_id, action, reason):
+        record = {"rule_id": rule_id, "reason": reason}
+        if isinstance(action, dict) and isinstance(action.get("id"), str):
+            record.update(id=f"{rule_id}:{action['id']}", action_id=action["id"])
+        result["discarded_candidates"].append(record)
+
     def query(rule_id, condition, reason):
         name = condition.get("fact", f"rule:{rule_id}:satisfied")
         query_id = f"query:{rule_id}:{name}"
@@ -529,7 +535,7 @@ def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nod
     def emit(rule_id, action, status, derivation, pending=()):
         valid, reason = _action_valid(action, current_choice)
         if not valid:
-            result["discarded_candidates"].append({"rule_id": rule_id, "reason": reason})
+            discard(rule_id, action, reason)
             return
         candidate_id = f"{rule_id}:{action['id']}"
         if candidate_id in candidates:
@@ -631,7 +637,7 @@ def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nod
         action = nodes[rid]["executable"].get("action")
         valid, reason = _action_valid(action, current_choice)
         if not valid:
-            result["discarded_candidates"].append({"rule_id": rid, "reason": reason})
+            discard(rid, action, reason)
             continue
         derivation = [{"step": "decision_to_rule", "decision": decision_id, "rule_id": rid,
                        "rule_sources": deepcopy(nodes[rid].get("sources", []))}]
