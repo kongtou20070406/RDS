@@ -4,6 +4,7 @@ Synthetic fixtures only: the receipts table is append-only by trigger, so each c
 drops that guard to simulate a damaged or copied local ledger, as the existing
 owned-completion test does.
 """
+from contextlib import closing
 import json
 import os
 from pathlib import Path
@@ -43,7 +44,8 @@ def damaged_bodies(receipt):
 
 
 def ledger_rows(store):
-    with sqlite3.connect(store.path) as db:
+    # closing(): the sqlite3 context manager only commits; an open handle blocks Windows temp cleanup.
+    with closing(sqlite3.connect(store.path)) as db:
         return {table: db.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall()
                 for table in ("budget", "runs", "receipts", "events", "exposures", "output_claims")}
 
