@@ -259,7 +259,28 @@ class ProjectStore:
     def initialize(self, contract):
         require(isinstance(contract, dict) and type(contract.get("schema")) is int
                 and contract["schema"] == 1, "Project contract schema must be 1")
-        require(set(contract) <= {"schema", "bindings", "allowed_commands", "output_roots", "budget", "description", "objective_sha256"}, "Unknown contract fields")
+        require(set(contract) <= {"schema", "bindings", "allowed_commands", "output_roots", "budget", "description",
+                                  "objective_sha256", "stop_policy", "maintenance_allowance"}, "Unknown contract fields")
+        if "stop_policy" in contract:
+            policy = contract["stop_policy"]
+            require(isinstance(policy, dict) and set(policy) == {"schema", "wall_seconds", "progress"},
+                    "stop_policy must define schema, wall_seconds and progress")
+            require(type(policy["schema"]) is int and policy["schema"] == 1, "stop_policy schema must be 1")
+            number(policy["wall_seconds"], "stop_policy.wall_seconds", True)
+            progress = policy["progress"]
+            require(isinstance(progress, dict) and set(progress) == {"window_seconds", "min_bytes"},
+                    "stop_policy.progress must define window_seconds and min_bytes")
+            number(progress["window_seconds"], "stop_policy.progress.window_seconds", True)
+            require(type(progress["min_bytes"]) is int and not isinstance(progress["min_bytes"], bool)
+                    and progress["min_bytes"] >= 0, "stop_policy.progress.min_bytes must be a nonnegative integer")
+        if "maintenance_allowance" in contract:
+            allowance = contract["maintenance_allowance"]
+            require(isinstance(allowance, dict) and set(allowance) == {"schema", "wall_seconds", "max_uses"},
+                    "maintenance_allowance must define schema, wall_seconds and max_uses")
+            require(type(allowance["schema"]) is int and allowance["schema"] == 1, "maintenance_allowance schema must be 1")
+            number(allowance["wall_seconds"], "maintenance_allowance.wall_seconds")
+            require(type(allowance["max_uses"]) is int and not isinstance(allowance["max_uses"], bool)
+                    and 1 <= allowance["max_uses"] <= 64, "maintenance_allowance.max_uses must be an integer in 1..64")
         if 'objective_sha256' in contract:
             from rds_math import objective
             goal = objective(self.root)
@@ -387,7 +408,8 @@ class ProjectStore:
     def register(self, spec):
         require(isinstance(spec, dict) and type(spec.get("schema")) is int
                 and spec["schema"] == 1, "Run manifest schema must be 1")
-        require(set(spec) <= {"schema", "id", "arm", "control_id", "protocol", "argv", "outpaths", "resource_estimates", "timeout_seconds", "description"}, "Unknown manifest fields; handwritten verification is not accepted")
+        require(set(spec) <= {"schema", "id", "arm", "control_id", "protocol", "argv", "outpaths", "resource_estimates",
+                              "timeout_seconds", "description", "maintenance"}, "Unknown manifest fields; handwritten verification is not accepted")
         run_id = spec.get("id", "")
         require(isinstance(run_id, str) and 1 <= len(run_id) <= 80 and all(c.isalnum() or c in "-_" for c in run_id), "Invalid run ID")
         require(spec.get("arm") in {"control", "treatment", "tool"}, "Invalid arm")
@@ -395,6 +417,15 @@ class ProjectStore:
         require(spec["arm"] != "treatment" or spec.get("control_id"), "Treatment requires a control ID")
         timeout = number(spec.get("timeout_seconds"), "timeout_seconds", True)
         executor = self._command(spec.get("argv"))
+        if "maintenance" in spec:
+            maintenance = spec["maintenance"]
+            require(isinstance(maintenance, dict)
+                    and set(maintenance) == {"reason", "blocker", "affected_obligation", "repair", "acceptance"},
+                    "maintenance must declare reason, blocker, affected_obligation, repair and acceptance")
+            require(maintenance.get("reason") == "MAINTENANCE", "Maintenance reason must be MAINTENANCE")
+            require(all(isinstance(maintenance[key], str) and maintenance[key].strip()
+                        for key in ("blocker", "affected_obligation", "repair", "acceptance")),
+                    "Maintenance blocker, affected_obligation, repair and acceptance must be nonempty strings")
         with self._db() as db:
             contract = self._contract(db)
             require(spec["argv"] in contract["allowed_commands"], "Command is not authorized")
@@ -428,6 +459,17 @@ class ProjectStore:
             require(db.execute("SELECT 1 FROM runs WHERE id=?", (run_id,)).fetchone() is None, "Run ID already exists")
             if spec.get("control_id"):
                 require(db.execute("SELECT 1 FROM runs WHERE id=?", (spec["control_id"],)).fetchone() is not None, "Unknown control ID")
+            if "maintenance" in spec:
+                require("maintenance_allowance" in contract, "Maintenance runs require a contract maintenance_allowance")
+                if contract["maintenance_allowance"]["wall_seconds"] > 0:
+                    require(estimates["wall_seconds"] <= contract["maintenance_allowance"]["wall_seconds"] + 1e-9,
+                            "Maintenance wall estimate exceeds the frozen maintenance_allowance.wall_seconds")
+                uses = db.execute("SELECT COUNT(*) FROM events WHERE json_extract(body,'$.kind')='MAINTENANCE_USE'",
+                                  ()).fetchone()[0]
+                require(uses < contract["maintenance_allowance"]["max_uses"], "Maintenance allowance is exhausted")
+                db.execute("INSERT INTO events(body) VALUES (?)",
+                           (canonical({"kind": "MAINTENANCE_USE", "run_id": run_id,
+                                       "manifest_sha256": digest(spec), **spec["maintenance"]}),))
             for resource, amount in estimates.items():
                 row = db.execute("SELECT * FROM budget WHERE resource=?", (resource,)).fetchone()
                 require(row["spent"] + row["charged"] + row["reserved"] + amount <= row["cap"] + 1e-9, f"Insufficient {resource} budget")
@@ -527,8 +569,13 @@ class ProjectStore:
         process = job = None
         started = False
         timeout = False
+        stop_reason = None
         exit_code = None
-        status = "FAILED"
+        progress = contract.get("stop_policy", {}).get("progress")
+        policy_deadline = (start + contract["stop_policy"]["wall_seconds"]) if "stop_policy" in contract else None
+        stream_bytes = [(work / "stdout.bin").stat().st_size if (work / "stdout.bin").exists() else 0,
+                        (work / "stderr.bin").stat().st_size if (work / "stderr.bin").exists() else 0]
+        samples = [(start, sum(stream_bytes))]
         try:
             with (work / "stdout.bin").open("xb") as out, (work / "stderr.bin").open("xb") as err:
                 flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
@@ -555,11 +602,31 @@ class ProjectStore:
                         timeout = True
                         job.stop()
                         break
+                    now = time.monotonic()
+                    if policy_deadline is not None and now >= policy_deadline:
+                        stop_reason = "CAMPAIGN_DEADLINE"
+                        job.stop()
+                        break
+                    if progress is not None:
+                        total = sum(path.stat().st_size if path.exists() else 0
+                                    for path in ((work / "stdout.bin"), (work / "stderr.bin")))
+                        samples.append((now, total))
+                        cutoff = now - progress["window_seconds"]
+                        # Keep exactly one baseline sample at or before the cutoff.
+                        while len(samples) > 2 and samples[1][0] <= cutoff:
+                            del samples[0]
+                        baseline = samples[0]
+                        if now - baseline[0] >= progress["window_seconds"] and total - baseline[1] < progress["min_bytes"]:
+                            stop_reason = "PROGRESS_NO_GROWTH"
+                            job.stop()
+                            break
                     time.sleep(min(0.05, max(0.001, run["manifest"]["timeout_seconds"] - elapsed)))
                 exit_code = process.wait()
-                status = "COMPLETED" if exit_code == 0 and not timeout else "FAILED"
+                status = "COMPLETED" if exit_code == 0 and not timeout and not stop_reason else "FAILED"
                 if timeout:
                     errors.append("Process timeout")
+                elif stop_reason:
+                    errors.append(f"Stop policy: {stop_reason}")
                 elif exit_code != 0:
                     errors.append(f"Nonzero process exit: {exit_code}")
         except BaseException as exc:
@@ -575,9 +642,10 @@ class ProjectStore:
             if job:
                 job.close()
         return self._finish(run_id, attempt_id, status, exit_code, time.monotonic() - attempt_start,
-                            started, errors, before, timeout)
+                            started, errors, before, timeout, stop_reason=stop_reason)
 
-    def _finish(self, run_id, attempt_id, status, exit_code, wall, started, errors, before=None, timeout=False, only_unstarted=False, recovering=False):
+    def _finish(self, run_id, attempt_id, status, exit_code, wall, started, errors, before=None, timeout=False,
+                only_unstarted=False, recovering=False, stop_reason=None):
         with self._db() as db:
             run = self._run(db, run_id)
             contract = self._contract(db)
@@ -631,6 +699,11 @@ class ProjectStore:
                    # RDS attempt lifecycle, not a query of the OS task's current state.
                    "errors": errors, "scheduler": ({**run["scheduler"], "status": status}
                                                      if run["scheduler"] else None)}
+        if stop_reason is not None:
+            receipt["stop_reason"] = stop_reason
+        if run["manifest"].get("maintenance") is not None:
+            receipt["maintenance"] = True
+            receipt["assessment"] = {"task_gain": "UNKNOWN", "mechanism": "UNKNOWN", "purpose": "MAINTENANCE"}
         receipt["sha256"] = digest(receipt)
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
