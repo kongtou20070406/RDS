@@ -1,21 +1,23 @@
 # Cross-task acceptance for RDS 5.8
 
-This refines the existing [V1–V6 plan](5.8-vision.md#focused-work-packages-and-acceptance)
+RDS is a general-purpose research direction selector. This refines the existing [V1–V6 plan](5.8-vision.md#focused-work-packages-and-acceptance)
 and [issue #22](https://github.com/kongtou20070406/research-direction-selector/issues/22).
 It is an implementation and review plan, not a claim that the checks below are
-already enforced. Use the same core for experimental research, mathematical
-research and RDS development, with the appropriate domain acceptance predicates.
+already enforced. Initial priority is deep learning, software/tool development,
+then mathematics. They provide the first acceptance coverage, not a restriction
+to three domains. Other fields can use the same core with applicable optional
+adapters and declared acceptance predicates.
 
-## What the three settings test together
+## What the initial settings test together
 
-| Shared requirement | Empirical research example | Theory example | RDS development example |
+| Shared requirement | Deep-learning example | Software/tool example | Mathematics example |
 | --- | --- | --- | --- |
-| Original-goal progress | Training runs but the required quality curve still fails. | A covering upper bound leaves global optimality open. | Tests pass but the advertised CLI never reaches its consumer. |
-| Applicable checks | An inactive loss has a finite zero derivative; connectivity needs a controlled probe. | An inconclusive interval box is unresolved, not a counterexample. | A missing optional backend differs from malformed input or a software failure. |
-| Valid transfer | Different evaluation shapes require checking the declared geometry and metric protocol. | A changed problem size requires reinstantiating the theorem's premises. | A faster kernel must preserve callers, witnesses and recovery semantics. |
-| Useful next decision | Compare interventions with different predictions, preserving failed recipes. | Identify a missing reduction or stronger bound instead of renaming an open branch. | Repair the demonstrated boundary before adding another abstraction. |
-| Recovery and cost | Reconcile the original remote launch and committed checkpoint after interruption. | Retain the unresolved frontier and consumed search allowance. | A charged interrupted attempt must not trigger another launch or refund. |
-| Proportionate evidence | Reuse unchanged metric/calibration evidence without rerunning training. | Reuse a bound certificate without reprinting its entire proof tree. | Reuse per-operation graph/hash work and measure complete-entry latency. |
+| Original-goal progress | Training runs but the required quality curve still fails. | Tests pass but the advertised CLI never reaches its consumer. | A covering upper bound leaves global optimality open. |
+| Applicable checks | An inactive loss has a finite zero derivative; connectivity needs a controlled probe. | A missing optional backend differs from malformed input or a software failure. | An inconclusive interval box is unresolved, not a counterexample. |
+| Valid transfer | Different evaluation shapes require checking the declared geometry and metric protocol. | A faster kernel must preserve callers, witnesses and recovery semantics. | A changed problem size requires reinstantiating the theorem's premises. |
+| Useful next decision | Compare interventions with different predictions, preserving failed recipes. | Repair the demonstrated boundary before adding another abstraction. | Identify a missing reduction or stronger bound instead of renaming an open branch. |
+| Recovery and cost | Reconcile the original remote launch and committed checkpoint after interruption. | A charged interrupted attempt must not trigger another launch or refund. | Retain the unresolved frontier and consumed search allowance. |
+| Proportionate evidence | Reuse unchanged metric/calibration evidence without rerunning training. | Reuse per-operation graph/hash work and measure complete-entry latency. | Reuse a bound certificate without reprinting its entire proof tree. |
 
 The examples describe failure patterns rather than assigning every historical
 failure to RDS. Check raw evidence and the exact installed revision first. For
