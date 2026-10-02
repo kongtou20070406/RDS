@@ -483,49 +483,7 @@ class EGraphEquivalenceOperator:
 
     @staticmethod
     def scaffold_code() -> str:
-        """Returns standalone copy-pasteable E-Graph equivalence verifier script."""
-        return '''# Equivalence Saturation (E-Graph) Rewriting Template
-# Avoids phase-ordering loops in algebraic equational theories.
-class TinyEGraph:
-    def __init__(self):
-        self.parent = {}
-        self.classes = {}
-        self.hashcons = {}
-
-    def find(self, i):
-        if self.parent[i] != i: self.parent[i] = self.find(self.parent[i])
-        return self.parent[i]
-
-    def union(self, id1, id2):
-        r1, r2 = self.find(id1), self.find(id2)
-        if r1 != r2:
-            self.parent[r2] = r1
-            self.classes[r1].update(self.classes[r2])
-            del self.classes[r2]
-        return r1
-
-    def add(self, expr):
-        if not isinstance(expr, (list, tuple)): node = (str(expr), ())
-        else: node = (str(expr[0]), tuple(self.add(c) for c in expr[1:]))
-        c_node = (node[0], tuple(self.find(c) for c in node[1]))
-        if c_node in self.hashcons: return self.find(self.hashcons[c_node])
-        nid = len(self.parent)
-        self.parent[nid] = nid; self.classes[nid] = {c_node}; self.hashcons[c_node] = nid
-        return nid
-
-    def saturate_commutativity(self):
-        for node, cid in list(self.hashcons.items()):
-            if node[0] in ("+", "*") and len(node[1]) == 2:
-                swapped = self.add((node[0], node[1][1], node[1][0]))
-                self.union(cid, swapped)
-
-if __name__ == "__main__":
-    eg = TinyEGraph()
-    t1 = eg.add(("+", "x", "y"))
-    t2 = eg.add(("+", "y", "x"))
-    eg.saturate_commutativity()
-    print("Terms equivalent under commutativity:", eg.find(t1) == eg.find(t2))
-'''
+        return _scaffold(EGraphEquivalenceOperator, _egraph_self_test)
 
 
 # ---------------------------------------------------------------------------
@@ -591,31 +549,7 @@ class LeanAxiomReviewOperator:
 
     @staticmethod
     def scaffold_code() -> str:
-        return r'''# Lean 4 Axiom Dependency Audit Template
-# Prevents unproved 'sorry' placeholders or unauthorized classical axioms from passing as proofs.
-import re
-
-def audit_axioms(theorem_name, lean_output, allowed_axioms=None):
-    if allowed_axioms is None:
-        allowed_axioms = {"propext", "Classical.choice", "Quot.sound"}
-    if "sorry" in lean_output:
-        return {"status": "FAIL", "reason": "Proof contains 'sorry'"}
-    if f"'{theorem_name}' does not depend on any axioms" in lean_output:
-        return {"status": "PASS", "axioms": [], "constructive": True}
-    match = re.search(rf"'{re.escape(theorem_name)}'\s+depends\s+on\s+axioms:\s*\[(.*?)\]", lean_output)
-    if match:
-        axioms = [a.strip() for a in match.group(1).split(",") if a.strip()]
-        disallowed = [a for a in axioms if a not in allowed_axioms]
-        if disallowed:
-            return {"status": "FAIL", "disallowed": disallowed}
-        return {"status": "PASS", "axioms": axioms, "constructive": False}
-    return {"status": "UNKNOWN", "reason": "No axiom audit line found"}
-
-if __name__ == "__main__":
-    sample_audit = "'RDS.obligation' depends on axioms: [propext, Quot.sound]"
-    res = audit_axioms("RDS.obligation", sample_audit)
-    print("Axiom audit result:", res)
-'''
+        return _scaffold(LeanAxiomReviewOperator, _lean_axiom_self_test)
 
 
 # ---------------------------------------------------------------------------
@@ -732,29 +666,7 @@ class BoundedFiniteModelOperator:
 
     @staticmethod
     def scaffold_code() -> str:
-        return '''# Bounded Finite Model and Cayley Table Verifier Template
-# Checks algebraic closure and associativity on finite structures (e.g. GAP small groups).
-def check_associativity(elements, table):
-    for a in elements:
-        for b in elements:
-            ab = table[(a, b)]
-            for c in elements:
-                bc = table[(b, c)]
-                if table[(ab, c)] != table[(a, bc)]:
-                    return False, (a, b, c)
-    return True, None
-
-if __name__ == "__main__":
-    elems = ["e", "a", "b", "c"]
-    v4 = {
-        ("e","e"): "e", ("e","a"): "a", ("e","b"): "b", ("e","c"): "c",
-        ("a","e"): "a", ("a","a"): "e", ("a","b"): "c", ("a","c"): "b",
-        ("b","e"): "b", ("b","a"): "c", ("b","b"): "e", ("b","c"): "a",
-        ("c","e"): "c", ("c","a"): "b", ("c","b"): "a", ("c","c"): "e",
-    }
-    is_assoc, witness = check_associativity(elems, v4)
-    print("Klein four-group associativity verified:", is_assoc)
-'''
+        return _scaffold(BoundedFiniteModelOperator, _bounded_finite_model_self_test)
 
 
 # ---------------------------------------------------------------------------
@@ -847,24 +759,7 @@ class ExplicitReductionTransferOperator:
 
     @staticmethod
     def scaffold_code() -> str:
-        return '''# Explicit Reduction and Representation Transfer Template
-# Verifies that transforming problem representation preserves semantic validity.
-def verify_transfer(instances, forward_fn, eval_source, eval_target):
-    for x in instances:
-        y = forward_fn(x)
-        if eval_source(x) != eval_target(y):
-            return False, x, y
-    return True, None, None
-
-if __name__ == "__main__":
-    test_cases = [-5, -2, 0, 3, 7]
-    def f_map(x): return (max(0, x), max(0, -x))
-    def eval_src(x): return x > 0
-    def eval_tgt(pair): return pair[0] > pair[1]
-
-    ok, bad_x, bad_y = verify_transfer(test_cases, f_map, eval_src, eval_tgt)
-    print("Reduction semantics preserved:", ok)
-'''
+        return _scaffold(ExplicitReductionTransferOperator, _reduction_self_test)
 
 
 # ---------------------------------------------------------------------------
