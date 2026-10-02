@@ -55,7 +55,8 @@ class CLIInputErrorTests(unittest.TestCase):
         split = contract["splits"]["development"]
         cases = [
             ("5", "Contract must be a JSON object"),
-            ("[]", "Contract must be a JSON object"),
+            ("null", "Contract must be a JSON object"),
+            (json.dumps(" ".join(contract)), "Contract must be a JSON object"),
             ({**contract, "primary_metric": "mse"}, "Contract primary_metric must be a JSON object"),
             ({**contract, "primary_metric": {"name": "mse", "direction": "min"}},
              "Missing contract primary_metric field: min_useful_delta"),
@@ -86,8 +87,12 @@ class CLIInputErrorTests(unittest.TestCase):
     def test_existing_contract_rejections_keep_their_messages(self):
         contract = example("contract.json")
         cases = [
+            ("[]", "Missing contract field: project_id"),
+            ([{"manipulation_verified": True}], "Self-signed verification fields are forbidden"),
             ({k: v for k, v in contract.items() if k != "budget"}, "Missing contract field: budget"),
             ({**contract, "splits": {}}, "Register at least one data partition"),
+            ({**contract, "splits": []}, "Register at least one data partition"),
+            ({**contract, "splits": None}, "Register at least one data partition"),
             ({**contract, "primary_metric": {**contract["primary_metric"], "name": "mae"}},
              "The reference runner supports only paired MSE minimization"),
             ({**contract, "budget": {**contract["budget"], "limits": {"runs": 2}}},
@@ -105,6 +110,8 @@ class CLIInputErrorTests(unittest.TestCase):
         hypothesis, plan = example("hypothesis.json"), example("plan.json")
         cases = [
             (("hypothesis", "add", "--spec"), [hypothesis], "Hypothesis spec must be a JSON object"),
+            (("hypothesis", "add", "--spec"), [{"falsifier_triggered": True}],
+             "Self-signed verification fields are forbidden"),
             (("hypothesis", "add", "--spec"), {k: v for k, v in hypothesis.items() if k != "id"},
              "Missing hypothesis field: id"),
             (("plan", "create", "--spec"), [plan], "Plan spec must be a JSON object"),

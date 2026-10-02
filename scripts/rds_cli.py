@@ -105,7 +105,7 @@ def path_field(value, label):
 
 
 def known_plan(state, plan_id):
-    require(plan_id in state["plans"], "Unknown plan ID: " + plan_id)
+    require(plan_id in state["plans"], "Unknown plan ID: " + str(plan_id))
     return state["plans"][plan_id]
 
 
@@ -294,10 +294,13 @@ class RDSState:
 
 
 def cmd_init(args, rds):
-    contract = json_object(load_spec(args.contract), "Contract")
+    contract = load_spec(args.contract)
     reject_self_signatures(contract)
+    # Scalars cannot be searched for fields; lists and strings keep their missing-field message.
+    require(isinstance(contract, (dict, list, str)), "Contract must be a JSON object")
     for key in ("project_id", "claim", "primary_metric", "budget", "splits"):
         require(key in contract, "Missing contract field: " + key)
+    json_object(contract, "Contract")
     identity(contract["project_id"])
     metric = json_object(contract["primary_metric"], "Contract primary_metric")
     require(metric.get("name") == "mse" and metric.get("direction") == "min",
@@ -310,8 +313,8 @@ def cmd_init(args, rds):
     limits = resource_vector(required_field(budget, "limits", "contract budget"))
     floor = resource_vector(required_field(budget, "confirmation_floor", "contract budget"))
     require(all(floor[k] <= limits[k] for k in RESOURCES), "Confirmation reserve exceeds cap")
-    json_object(contract["splits"], "Contract splits")
     require(contract["splits"], "Register at least one data partition")
+    json_object(contract["splits"], "Contract splits")
     registry = {}
     for sid, split in contract["splits"].items():
         identity(sid)
@@ -357,8 +360,9 @@ def cmd_init(args, rds):
 
 
 def cmd_hypothesis(args, rds):
-    spec = json_object(load_spec(args.spec), "Hypothesis spec")
+    spec = load_spec(args.spec)
     reject_self_signatures(spec)
+    json_object(spec, "Hypothesis spec")
     hid = identity(required_field(spec, "id", "hypothesis"))
     require(spec.get("proposition") and spec.get("falsifier"), "Precommit proposition and falsifier")
     require(spec.get("type") in {"task_gain", "mechanism", "search_policy"}, "Unknown hypothesis type")
