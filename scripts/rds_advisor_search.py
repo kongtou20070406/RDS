@@ -6,6 +6,7 @@ artifacts retain their provenance labels; caller dictionaries remain INPUT_REPOR
 from copy import deepcopy
 from itertools import combinations
 import hashlib
+import inspect
 import json
 import math
 import re
@@ -373,7 +374,10 @@ def _dependency_review(context, *, audit_receipts=False, audit_files=False, read
         if input_review['errors']:
             raise ValueError('; '.join(row['path'] + ': ' + row['reason'] for row in input_review['errors']))
         try:
-            shared = {} if read_receipt is None else {"read_receipt": read_receipt}
+            shared = {}
+            if read_receipt is not None and "read_receipt" in inspect.signature(analyze_hypergraph).parameters:
+                # An analyzer without the shared lookup still audits, reading on its own.
+                shared["read_receipt"] = read_receipt
             result = analyze_hypergraph(spec, audit_receipts_enabled=audit_receipts, **shared) if audit_receipts \
                 else analyze_hypergraph(spec)
         except TypeError:

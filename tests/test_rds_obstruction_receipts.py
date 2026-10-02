@@ -351,14 +351,14 @@ class SharedReceiptReadTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def call(self, map_root, obstruction_root, templates=None, audit=True):
+    def call(self, map_root, obstruction_root, templates=None, audit=True, map_sha=None):
         import rds_hypergraph
         goal = DEEP_LEARNING[0]
         ctx = context(*DEEP_LEARNING)
         ctx['dependency_map'] = {
             'schema': 1, 'goals': [goal],
             'nodes': [{'id': 'run', 'status': 'SUPPORTED', 'source': 'synthetic-run-log.txt',
-                       'evidence': {'receipt': {'project_root': str(map_root), 'sha256': self.SHA}}},
+                       'evidence': {'receipt': {'project_root': str(map_root), 'sha256': map_sha or self.SHA}}},
                       {'id': goal, 'status': 'UNKNOWN', 'source': 'synthetic-goal.json'}],
             'hyperedges': [{'id': 'e1', 'premises': ['run'], 'conclusion': goal, 'status': 'SUPPORTED',
                             'source': 'synthetic-protocol.json'}]}
@@ -410,6 +410,35 @@ class SharedReceiptReadTests(unittest.TestCase):
         entry = review['obstruction_review'][0]
         self.assertEqual(entry['receipt_audit']['status'], 'LEDGER_UNAVAILABLE')
         self.assertEqual(entry['response'], 'DISCRIMINATING_CHECK')
+
+    def test_a_succeeded_receipt_grounds_the_map_and_adds_no_cap(self):
+        root = Path(self.tmp.name) / 'succeeded'
+        stopped_ledger(root, self.SHA, run_status='SUCCEEDED', stop_reason=None)
+        review, calls = self.call(root, root)
+        self.assertEqual(calls, [(str(root), self.SHA)])
+        [row] = review['dependency_review']['receipt_audit']['audits']
+        self.assertEqual(row['status'], 'GROUNDED')
+        self.assertNotIn('run', review['dependency_review']['receipt_blocked_node_ids'])
+        audit = review['obstruction_review'][0]['receipt_audit']
+        self.assertEqual((audit['status'], audit['execution_cap']), ('RECEIPT_FOUND', None))
+
+    def test_sha_case_does_not_split_the_shared_read(self):
+        _, calls = self.call(self.root, self.root, map_sha=self.SHA.upper())
+        self.assertEqual(calls, [(str(self.root), self.SHA)])
+
+    def test_an_analyzer_without_the_shared_lookup_still_audits(self):
+        import rds_hypergraph
+        original = rds_hypergraph.analyze_hypergraph
+
+        def older(spec, audit_receipts_enabled=False):
+            return original(spec, audit_receipts_enabled)
+
+        with mock.patch.object(rds_hypergraph, 'analyze_hypergraph', older):
+            review, calls = self.call(self.root, self.root)
+        # No shared read is possible, but the map audit is not dropped: each consumer reads once.
+        self.assertEqual(calls, [(str(self.root), self.SHA)] * 2)
+        [row] = review['dependency_review']['receipt_audit']['audits']
+        self.assertEqual(row['status'], 'RECEIPT_NOT_SUCCEEDED')
 
     def test_without_the_opt_in_neither_consumer_reads(self):
         review, calls = self.call(self.root, self.root, audit=False)
