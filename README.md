@@ -10,7 +10,7 @@
 [![stars](https://img.shields.io/github/stars/kongtou20070406/research-direction-selector?style=flat-square)](https://github.com/kongtou20070406/research-direction-selector/stargazers)
 [![version](https://img.shields.io/github/v/tag/kongtou20070406/research-direction-selector?label=version&style=flat-square)](https://github.com/kongtou20070406/research-direction-selector/releases)
 [![license](https://img.shields.io/badge/license-Apache%202.0-blue.svg?style=flat-square)](LICENSE)
-[![tests](https://github.com/kongtou20070406/research-direction-selector/actions/workflows/test.yml/badge.svg)](https://github.com/kongtou20070406/research-direction-selector/actions/workflows/test.yml)
+[![tests](https://github.com/kongtou20070406/research-direction-selector/actions/workflows/test.yml/badge.svg?branch=main&event=push)](https://github.com/kongtou20070406/research-direction-selector/actions/workflows/test.yml)
 
 Turn a research question, existing evidence, and a limited budget into a decision-changing experiment -- driven by your agent, verified by your kernel.
 
@@ -29,6 +29,8 @@ RDS has two sides that share one research state:
 **Kernel side** — the local reference engine (`scripts/rds_cli.py`) manages transactional SQLite budgets, AST and bounded declarative formal gates, baseline caching, telemetry compression, and an evidence-grounded advisor.
 
 Both read from and write to the same `.rds/` state store and `references/judgment-graph.yaml` causal rules.
+
+The [5.8 vision and collaboration plan](docs/5.8-vision.md) describes the proposed goal-linked decision loop, testable reformulation, conditional tool library and work packages. It distinguishes existing behavior from work under review; 5.8.0 remains Unreleased.
 
 ---
 

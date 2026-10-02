@@ -98,6 +98,30 @@ def choice(advice, context, candidate_id=None):
     require(method_review is None or method_review['status'] in {'COMPATIBLE', 'UNCONSTRAINED'},
             'Method scope is unresolved or conflicting; describe missing steps or ask the user to clarify the affected restriction')
     require(candidate.get('status') == 'READY', 'Candidate still needs evidence; inspect its pending prerequisites')
+    require(type(context.get('require_goal_link', False)) is bool, 'require_goal_link must be boolean')
+    goal_guard = None
+    if context.get('require_goal_link'):
+        from rds_advisor_search import _dependency_review, _goal_contribution
+        guarded_context = deepcopy(context)
+        if advice.get('objective_binding') is not None:
+            require(guarded_context.get('objective_binding') == advice['objective_binding'],
+                    'Goal-link guard: advice objective binding differs from the current checked context')
+        dependency = _dependency_review(guarded_context)
+        contribution = _goal_contribution(candidate.get('action', {}), guarded_context, dependency)
+        mapped = (contribution or {}).get('graph_path', {})
+        require(dependency is not None and mapped.get('status') == 'DECLARED_CONNECTED_PATH'
+                and mapped.get('goal_review', {}).get('blocker_sets_complete') is True,
+                'Goal-link guard needs a complete actual dependency map and a connected original-goal path')
+        require(mapped['goal_review']['status'] != 'DECLARED_SUPPORTED',
+                'Goal-link guard: the declared goal is already closed; inspect retained evidence before another job')
+        require(not set(contribution['path'][1:-1]).intersection(dependency['declared_supported_closure']),
+                'Goal-link guard: the path crosses an already closed intermediate obligation; inspect retained evidence')
+        token = mapped['start_token']
+        require(token in {row['token'] for row in dependency['ready_obligations']},
+                'Goal-link guard: this target is not a current ready obligation; inspect existing evidence or earlier premises')
+        goal_guard = {'dependency_map': deepcopy(guarded_context['dependency_map']),
+                      'input_sha256': dependency['input_sha256'], 'ready_obligation': token,
+                      'contribution': deepcopy(contribution)}
     require(not any(f.get('kind') == 'LOOP_HISTORY_REVIEW_ERROR' for r in advice.get('recommendations', [])
                     for f in r.get('review', {}).get('flags', [])), 'Repair checkpoint integrity before executing a candidate')
     require(_loop_route(candidate) is not None, 'Candidate has no structured route identity')
@@ -105,6 +129,8 @@ def choice(advice, context, candidate_id=None):
               'scope': deepcopy(decision['scope']), 'candidate': deepcopy(candidate),
               'outcome': 'plan_locked', 'evidence': deepcopy(context.get('facts', {})),
               'scientific_support': 'UNKNOWN'}
+    if goal_guard is not None:
+        record['goal_guard'] = goal_guard
     for recommendation in advice.get('recommendations', []):
         search = recommendation.get('search', {})
         if any(c.get('id') == candidate['id'] for c in search.get('candidates', [])) and 'selection_review' in search:
@@ -114,6 +140,8 @@ def choice(advice, context, candidate_id=None):
         record['goal_conditions'] = deepcopy(decision['goal_conditions'])
     if 'method_constraints' in context:
         record['method_constraints'] = deepcopy(context['method_constraints'])
+    if 'require_goal_link' in context:
+        record['require_goal_link'] = context['require_goal_link']
     return record
 
 
@@ -294,6 +322,12 @@ def execute(args, review=None):
     if argv[0].endswith('.py') and (root / argv[0]).is_file():
         argv = [sys.executable, '-B'] + argv
     if review is not None:
+        if review[1].get('require_goal_link'):
+            from rds_math import check_context
+            binding = check_context(args.ledger, review[1])
+            if binding is not None:
+                context = {**deepcopy(review[1]), 'objective_binding': binding}
+                review = (review[0], context)
         selected = choice(review[0], review[1], args.choose)  # Reject ambiguity before creating a job.
         args.choose = selected['candidate']['id']
     argv[0] = ProjectStore._command(argv)
@@ -468,6 +502,10 @@ def brief(root, value, version, formal=False):
                 summary['next_move'] = selection['next_move']['kind']
             if 'goal' in selection:
                 summary['goal_input_status'] = selection['goal']['status']
+        advisory_moves = {'GOAL_CONTRIBUTION_UNDECLARED': 'REVIEW_GOAL_LINK',
+                          'GOAL_CONTRIBUTION_INVALID': 'REVIEW_GOAL_LINK'}
+        relevant = [kind for kind in flags if kind in advisory_moves and advisory_moves[kind] == summary.get('next_move')]
+        flags = relevant + [kind for kind in flags if kind not in advisory_moves]
         summary['flags'] = list(dict.fromkeys(flags))[:3]
     if 'job_root' in value:
         summary['job_root'] = value['job_root']

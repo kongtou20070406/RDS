@@ -781,7 +781,7 @@ def _loop_route(candidate):
         return None
     action = candidate.get("action")
     if isinstance(action, dict) and isinstance(action.get("description"), str) and action["description"].strip():
-        display = {"id"}
+        display = {"id", "goal_contribution"}
         if any(key in action for key in ("target", "intervention", "parameters", "operation")):
             display.update(("description", "question", "competing_explanations", "required_observables", "outcomes", "discrimination", "stop_condition"))
         route = {"action": {key: value for key, value in action.items() if key not in display}}

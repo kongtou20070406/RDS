@@ -10,7 +10,7 @@
 [![stars](https://img.shields.io/github/stars/kongtou20070406/research-direction-selector?style=flat-square)](https://github.com/kongtou20070406/research-direction-selector/stargazers)
 [![version](https://img.shields.io/github/v/tag/kongtou20070406/research-direction-selector?label=version&style=flat-square)](https://github.com/kongtou20070406/research-direction-selector/releases)
 [![license](https://img.shields.io/badge/license-Apache%202.0-blue.svg?style=flat-square)](LICENSE)
-[![tests](https://github.com/kongtou20070406/research-direction-selector/actions/workflows/test.yml/badge.svg)](https://github.com/kongtou20070406/research-direction-selector/actions/workflows/test.yml)
+[![tests](https://github.com/kongtou20070406/research-direction-selector/actions/workflows/test.yml/badge.svg?branch=main&event=push)](https://github.com/kongtou20070406/research-direction-selector/actions/workflows/test.yml)
 
 把研究问题、已有证据和有限预算转化为能改变决策的实验——由你的 Agent 推进，由本地内核验证。
 
@@ -29,6 +29,8 @@ RDS 的两端共享同一套研究状态：
 **内核端** — 本地参考引擎（`scripts/rds_cli.py`）管理事务级 SQLite 预算、AST 与有限声明式形式化门禁、基线缓存、遥测压缩，以及基于证据的 Advisor 建议引擎。
 
 两端共同读写 `.rds/` 状态存储和 `references/judgment-graph.yaml` 因果规则。
+
+[5.8 完整目标与协作计划](docs/5.8-vision.zh-CN.md)公开目标关联的选路闭环、可检验的转向、按需理论工具库和可分工事项，区分已有实现与待审开发；5.8.0 仍未发布。
 
 ---
 

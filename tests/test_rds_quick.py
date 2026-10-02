@@ -521,5 +521,33 @@ class QuickTests(unittest.TestCase):
         self.assertIn('ambiguous candidate', bad.stderr)
 
 
+    def test_goal_link_guard_blocks_before_parent_charge_then_allows_a_real_open_obligation(self):
+        self.initialize_ledger()
+        self.context['require_goal_link'] = True
+        self.context_path.write_text(json.dumps(self.context))
+        before = ProjectStore(self.ledger).snapshot()
+        bad = self.job('missing-goal-link', False, '--context', str(self.context_path),
+                       '--graph', str(self.graph_path), '--ledger', str(self.ledger))
+        self.assertIn('Goal-link guard', bad.stderr)
+        self.assertFalse((self.root / '.rds/exec/missing-goal-link').exists())
+        self.assertEqual(ProjectStore(self.ledger).snapshot(), before)
+        self.context['dependency_map'] = json.loads((ROOT / 'examples/goal-linked-hypergraph.json').read_text())
+        self.context['decision']['goal_conditions'] = [{'fact': 'completion_standard', 'value': True}]
+        self.context['facts']['completion_standard'] = {'value': False, 'source': 'synthetic original contract'}
+        self.context['research_mode'] = 'theory'
+        action = self.graph['nodes'][0]['executable']['action']
+        action.update(kind='OBLIGATION_CHECK', target='unrestricted_lower', claim='An unrestricted bound',
+            outcomes=[{'observation': label, 'next_decision': label}
+                      for label in ('verified', 'counterexample', 'unresolved')],
+            goal_contribution={'target': 'completion_standard',
+                'path': ['unrestricted_lower', 'completion_standard'], 'source': 'synthetic original contract'})
+        action.pop('competing_explanations')
+        self.context_path.write_text(json.dumps(self.context))
+        self.graph_path.write_text(json.dumps(self.graph))
+        result = json.loads(self.job('open-goal-obligation', True, '--context', str(self.context_path),
+            '--graph', str(self.graph_path), '--ledger', str(self.ledger)).stdout)
+        self.assertEqual(result['run_status'], 'SUCCEEDED')
+        self.assertEqual(result['ledger_checkpoints'], 2)
+
 if __name__ == '__main__':
     unittest.main()
