@@ -2,6 +2,7 @@
 
 ## 5.8.0 — Unreleased
 
+- Name the field to repair when `init`, `hypothesis add`, `plan create` or `gate check` receives malformed JSON, for example `Missing contract budget field: limits` instead of `'limits'`. A non-object contract, split or plan no longer crashes with a traceback. An unknown `--id` for `plan cancel`, `run execute` or `run recover` reports `Unknown plan ID: <id>`. Accepted shapes, existing checks and messages, the `[RDS-REJECT]` tag and exit 1 are unchanged, and rejected input still creates no ledger and changes no state.
 - Allow project contracts to freeze an opt-in attempt limit. Project and quick execution compare bound requests within the owning ledger, refuse duplicate or exhausted routes before new reservation/charge, and observe verified existing attempts. Renames do not reset the policy; failed attempts and interrupted charged child creation retain their cost and require reconciliation.
 - Report state, dependency and subprocess faults as `[RDS-ERROR] <ExceptionType>: <message>` instead of `[RDS-REJECT]`. This covers `sqlite3` errors such as a corrupt `.rds/state.sqlite3`, `ImportError` and `subprocess.SubprocessError`. Gate refusals and input errors keep `[RDS-REJECT]`: `ValueError`, `OSError`, `SyntaxError`, `RecursionError`, and the `KeyError`/`TypeError` raised by unvalidated user specs. Both tags exit 1, so exit codes, admission, budget and recorded state are unchanged.
 
