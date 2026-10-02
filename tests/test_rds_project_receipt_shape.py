@@ -23,15 +23,23 @@ CLI = Path(__file__).resolve().parents[1] / "scripts" / "rds_cli.py"
 def damaged_bodies(receipt):
     other = {**receipt, "run_id": "r9"}
     resealed = {**receipt, "sha256": "0" * 64}
+    # An edited value under the original sha256 field: only recomputing the digest catches it.
+    edited = {**receipt, "assessment": {"task_gain": "PASS", "mechanism": "PASS"}, "exit_code": 0}
+    minimal = {"run_id": receipt["run_id"], "sha256": receipt["sha256"]}
+    mismatch = "does not match its recorded sha256"
     return {"array": ("[]", "is a JSON array, not an object"),
             "null": ("null", "is a JSON null, not an object"),
             "string": ('"receipt"', "is a JSON string, not an object"),
             "number": ("3", "is a JSON number, not an object"),
             "boolean": ("true", "is a JSON boolean, not an object"),
             "malformed": ("{", "is not valid JSON"),
+            "too deep": ("[" * 100000 + "]" * 100000, "is not valid JSON"),
+            "repeated key": ('{"run_id":"r9",' + canonical(receipt)[1:], "repeats a JSON key"),
             "empty object": ("{}", "names a different run"),
             "other run": (canonical(other), "names a different run"),
-            "sha256 mismatch": (canonical(resealed), "sha256 differs from its row")}
+            "sha256 field differs": (canonical(resealed), mismatch),
+            "edited under original sha256": (canonical(edited), mismatch),
+            "minimal id and sha256": (canonical(minimal), mismatch)}
 
 
 def ledger_rows(store):
@@ -89,9 +97,17 @@ class ProjectReceiptShapeCliTests(unittest.TestCase):
                     self.assertIn("[RDS-REJECT] Project receipt integrity failure: run r1 body " + reason,
                                   result.stderr)
                     self.assertIn("inspect retained state", result.stderr)
-                    # Rejected before anything is reserved, refunded, rerun or recorded as settled.
+                    # Nothing is reported as a result, and nothing is reserved, refunded, rerun or settled.
+                    self.assertEqual(result.stdout, "")
                     self.assertEqual(ledger_rows(store), before)
-                    self.assertNotIn("execute run r1", result.stdout)
+
+    def test_late_finish_of_a_settled_run_rejects_a_damaged_receipt_without_writing(self):
+        store, receipt = self.policy_store()
+        damage(store, "r1", "[]")
+        before = ledger_rows(store)
+        with self.assertRaisesRegex(ValueError, "Project receipt integrity failure: run r1 body is a JSON array"):
+            store._finish("r1", receipt["attempt_id"], "FAILED", None, None, None, ["late worker"])
+        self.assertEqual(ledger_rows(store), before)
 
     def test_restoring_the_retained_body_restores_every_read(self):
         store, receipt = self.policy_store()
@@ -124,12 +140,36 @@ class ProjectReceiptShapeMaintenanceTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 1, result.stdout)
                 self.assertNotIn("Traceback", result.stderr)
                 self.assertIn("[RDS-REJECT] Project receipt integrity failure: run r1 body", result.stderr)
+                self.assertEqual(result.stdout, "")
                 self.assertEqual(ledger_rows(store), before)
         # The retained body restores admission; the prior maintenance cost is still counted.
         damage(store, "r1", canonical(receipt))
         result = cli(store, "create", "--manifest", str(manifest))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)["id"], "r2")
+
+    def test_damaged_prior_receipt_does_not_settle_a_dispatched_maintenance_claim(self):
+        # The claim step (foreground after dispatch, or the scheduler worker) re-runs admission.
+        # A damaged *other* receipt must not become this run's FAILED admission outcome.
+        fx = self.fixture
+        store = fx.contract_with(maintenance_allowance={"schema": 1, "wall_seconds": 16, "max_uses": 4})
+        receipt = fx.run_spec(fx.spec("r1", timeout=0.25, maintenance=True))
+        store.register(fx.spec("r2", timeout=0.25, maintenance=True))
+        attempt = "a" * 32
+        with store._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            run = store._run(db, "r2")
+            run.update(attempt_id=attempt, worker_pid=os.getpid())
+            store._save(db, run)
+        damage(store, "r1", "{}")
+        before = ledger_rows(store)
+        with self.assertRaisesRegex(ValueError, "Project receipt integrity failure: run r1 body names a different run"):
+            store._execute_claim("r2", attempt)
+        self.assertEqual(ledger_rows(store), before)
+        damage(store, "r1", canonical(receipt))
+        settled = store._execute_claim("r2", attempt)
+        self.assertEqual(settled["run_id"], "r2")
+        self.assertNotIn("Project receipt integrity failure", " ".join(settled["errors"]))
 
 
 if __name__ == "__main__":

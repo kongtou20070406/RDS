@@ -86,6 +86,10 @@ def require(condition, message):
         raise ValueError(message)
 
 
+class ReceiptIntegrityError(ValueError):
+    """A damaged owned receipt row: a rejection of the read, never another run's admission outcome (#104)."""
+
+
 def execution_route(argv, bindings, outpaths, root, objective=None, route=None, arm=None, executor_sha256=None):
     """Exact declared contents/roles; names, destinations and allowances are not new work."""
     inputs = {}
@@ -336,14 +340,14 @@ class ProjectStore:
                 'dependency_map_sha256': dependency['input_sha256'], 'contribution': contribution,
                 'assurance': 'INPUT_REPORTED_GRAPH_PATH_NOT_PROOF'}
 
-    @staticmethod
-    def _maintenance_spend(db):
+    @classmethod
+    def _maintenance_spend(cls, db):
         prior = [json.loads(row['body']) for row in db.execute("SELECT body FROM events WHERE json_extract(body,'$.kind')='MAINTENANCE_USE'")]
         used = 0.0
         for event in prior:
-            receipt = db.execute('SELECT body FROM receipts WHERE run_id=?', (event['run_id'],)).fetchone()
+            receipt = db.execute('SELECT run_id,sha256,body FROM receipts WHERE run_id=?', (event['run_id'],)).fetchone()
             run = db.execute('SELECT body FROM runs WHERE id=?', (event['run_id'],)).fetchone()
-            resource = json.loads(receipt['body'])['resources']['wall_seconds'] if receipt else {}
+            resource = cls._receipt(receipt)['resources']['wall_seconds'] if receipt else {}
             observed = json.loads(run['body']).get('observed_wall_seconds', 0.0) if run else 0.0
             used += max(event['wall_seconds'], observed, resource.get('measured') or 0.0, resource.get('charged_estimate') or 0.0)
         return len(prior), used
@@ -681,6 +685,35 @@ class ProjectStore:
         return run
 
     @staticmethod
+    def _receipt(row):
+        """One owned receipt row (run_id, sha256, body); a damaged row is rejected, never repaired (#104)."""
+        prefix = f"Project receipt integrity failure: run {row['run_id']} body "
+        suffix = "; inspect retained state"
+
+        def unique(items):
+            keys = [key for key, _ in items]
+            if len(set(keys)) != len(keys):
+                raise ReceiptIntegrityError(prefix + "repeats a JSON key" + suffix)
+            return dict(items)
+        try:
+            receipt = json.loads(row["body"], object_pairs_hook=unique)
+        except ReceiptIntegrityError:
+            raise
+        except (ValueError, RecursionError):
+            raise ReceiptIntegrityError(prefix + "is not valid JSON" + suffix) from None
+        if not isinstance(receipt, dict):
+            kind = ("null" if receipt is None else "boolean" if isinstance(receipt, bool) else "array"
+                    if isinstance(receipt, list) else "string" if isinstance(receipt, str) else "number")
+            raise ReceiptIntegrityError(prefix + f"is a JSON {kind}, not an object" + suffix)
+        if receipt.get("run_id") != row["run_id"]:
+            raise ReceiptIntegrityError(prefix + "names a different run" + suffix)
+        # The writer stores digest(body without sha256) in both the body and the row; bind the value read.
+        if receipt.get("sha256") != row["sha256"] or digest(
+                {key: value for key, value in receipt.items() if key != "sha256"}) != row["sha256"]:
+            raise ReceiptIntegrityError(prefix + "does not match its recorded sha256" + suffix)
+        return receipt
+
+    @staticmethod
     def _save(db, run):
         run["run_status"] = "SUCCEEDED" if run["status"] == "COMPLETED" else run["status"]
         db.execute("UPDATE runs SET status=?,body=? WHERE id=?", (run["status"], canonical(run), run["id"]))
@@ -726,11 +759,11 @@ class ProjectStore:
         contract = self._contract(db)
         bindings, errors = self._bindings(contract)
         require(not errors, '; '.join(errors))
-        row = db.execute('SELECT body,sha256 FROM receipts WHERE run_id=?', (run['id'],)).fetchone()
+        row = db.execute('SELECT run_id,sha256,body FROM receipts WHERE run_id=?', (run['id'],)).fetchone()
         if row is None:
             require(run['status'] not in TERMINAL, 'Existing terminal run has no owned receipt; inspect retained state')
             return {**run, 'execution_started': False, 'policy_observation': 'Existing attempt; inspect or recover it'}
-        receipt = json.loads(row['body'])
+        receipt = self._receipt(row)
         require(receipt.get('sha256') == row['sha256'] == digest({key: value for key, value in receipt.items() if key != 'sha256'}),
                 'Existing receipt integrity failure')
         require(receipt.get('manifest_sha256') == run['manifest_sha256'] and receipt.get('attempt_id') == run['attempt_id'],
@@ -762,7 +795,9 @@ class ProjectStore:
             try:
                 self._check_start(db, run)
             except ValueError as exc:
-                if 'stop_policy' not in self._contract(db) and 'maintenance' not in run['manifest']:
+                # A damaged prior receipt leaves this run RESERVED and unsettled, recoverable once restored.
+                if isinstance(exc, ReceiptIntegrityError) or (
+                        'stop_policy' not in self._contract(db) and 'maintenance' not in run['manifest']):
                     raise
                 admission_error = str(exc)
             if admission_error is None:
@@ -948,9 +983,9 @@ class ProjectStore:
         receipt["sha256"] = digest(receipt)
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
-            old = db.execute("SELECT body FROM receipts WHERE run_id=?", (run_id,)).fetchone()
+            old = db.execute("SELECT run_id,sha256,body FROM receipts WHERE run_id=?", (run_id,)).fetchone()
             if old:
-                return json.loads(old["body"])
+                return self._receipt(old)
             current = self._run(db, run_id)
             require(current["attempt_id"] == attempt_id and current["status"] not in TERMINAL, "Run already terminal")
             # Evidence collection can race with startup or progress. Recheck
@@ -972,9 +1007,9 @@ class ProjectStore:
     def recover(self, run_id):
         with self._db(True) as db:
             run = self._run(db, run_id)
-            old = db.execute("SELECT body FROM receipts WHERE run_id=?", (run_id,)).fetchone()
+            old = db.execute("SELECT run_id,sha256,body FROM receipts WHERE run_id=?", (run_id,)).fetchone()
             if old:
-                return json.loads(old["body"])
+                return self._receipt(old)
         if run["attempt_id"] is None:
             return {**run, "recovery": "Unstarted reservation; no process to restart"}
         if run["status"] == "RESERVED" and run["scheduler"]:
@@ -998,7 +1033,7 @@ class ProjectStore:
             snapshot = {"schema": 1, "contract": contract, "contract_sha256": digest(contract), "budget": budget,
                     "runs": [json.loads(r["body"]) for r in db.execute("SELECT body FROM runs ORDER BY id")],
                     "exposures": [json.loads(r["body"]) for r in db.execute("SELECT body FROM exposures ORDER BY id")],
-                    "receipts": [json.loads(r["body"]) for r in db.execute("SELECT body FROM receipts ORDER BY run_id")]}
+                    "receipts": [self._receipt(r) for r in db.execute("SELECT run_id,sha256,body FROM receipts ORDER BY run_id")]}
         if check_bindings:
             found, errors = self._bindings(contract)
             snapshot["binding_check"] = {"files": found, "errors": errors}
