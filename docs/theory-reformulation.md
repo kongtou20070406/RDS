@@ -23,7 +23,7 @@ Advisor 从已有的 `selection_review` 与同作用域 checkpoint 审查生成 
 
 近期的 [HALO v2（2026-07-22）](https://arxiv.org/abs/2607.18564v2)通过候选观察、策略识别和策略组合辅助药物假说生成，其研究涉及 10 位药物化学专家，不能外推为无人通用发现。[主动溯因探针（2026-08-04）](https://arxiv.org/abs/2608.03388v1)报告自选证据可能支持当前解释却不足以区分替代解释。这支持检查“下一次观测能改变什么决定”，不支持固定轮数封锁。
 
-## 按需查预载工具
+## 按需查预载工具与可运行算子脚手架
 
 八张有适用条件的工具卡预载在[目录](../references/theory-tools.json)，按当前信号查一至三张摘要，再按 ID 读取需要的一张：
 
@@ -32,7 +32,19 @@ python -B scripts/rds_theory_tools.py --signals trajectory_degradation local_glo
 python -B scripts/rds_theory_tools.py --id <returned-card-id>
 ```
 
-摘要保留 `id/title/reason/matched_tags/required_inputs/locator` 和目录 SHA；`selection=TAG_MATCH_ONLY`、`prerequisites=NOT_ASSESSED`。标签命中只提供工具线索，不验证前提、排名科学价值或授权执行。`goal.reformulation.signals` 可以附同一短名单，历史 `as_of` 必须允许该目录日期。Skill 只给入口，不加载整个库；没有匹配时保留未匹配数量，不硬塞无关工具。
+为避免 AI 智能体在面对理论卡片时因缺乏可落地算子而退化为调参（如学习率、Loss 系数回退），理论工具集为核心卡片提供了原生、可验证的代码算子脚手架（[scripts/rds_operators.py](../scripts/rds_operators.py)）：
+
+```text
+python -B scripts/rds_theory_tools.py --list-operators
+python -B scripts/rds_theory_tools.py --test-operator state_space_refinement
+python -B scripts/rds_theory_tools.py --scaffold state_space_refinement --out operator.py
+```
+
+- `--list-operators`：列出当前所有已实现可运行算子的理论卡、主信号与其数学保证（例如状态空间 ZOH 离散化的 $\mathcal{O}(\Delta t)$ 步长不变性、无穷范数收缩与不动点分析、预检接口断言等）；
+- `--test-operator <card-id>`：直接在当前环境执行算子内置验证，检验柯西收敛序列或范数界，输出标准 JSON 报告；
+- `--scaffold <card-id> [--out <path>]`：导出独立、自包含且带自测的 Python 模板代码，可直接写入目标文件供模型集成。
+
+摘要保留 `id/title/reason/matched_tags/required_inputs/locator/runnable_operator` 和目录 SHA；`selection=TAG_MATCH_ONLY`、`prerequisites=NOT_ASSESSED`。标签命中只提供工具线索，不验证前提、排名科学价值或授权执行。`goal.reformulation.signals` 可以附同一短名单，历史 `as_of` 必须允许该目录日期。Skill 只给入口，不加载整个库；没有匹配时保留未匹配数量，不硬塞无关工具。
 
 ## 最小契约
 

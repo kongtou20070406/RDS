@@ -138,6 +138,61 @@ class TheoryToolTests(unittest.TestCase):
                 result = subprocess.run(command + args, cwd=folder, capture_output=True, timeout=10)
                 self.assertEqual(result.returncode, 2)
 
+    def test_runnable_operator_scaffolding_and_testing(self):
+        # List operators
+        ops_list = tools.list_operators()
+        self.assertGreaterEqual(len(ops_list), 4)
+        available_ids = {op["card_id"] for op in ops_list}
+        self.assertIn("state_space_refinement", available_ids)
+
+        # Scaffold in-memory and write to file
+        scaffold_res = tools.scaffold_operator("state_space_refinement")
+        self.assertEqual(scaffold_res["status"], "OK")
+        self.assertIn("ContinuousStateSpace", scaffold_res["scaffold"])
+
+        with tempfile.TemporaryDirectory() as folder:
+            out_file = Path(folder) / "model_op.py"
+            written_res = tools.scaffold_operator("state_space_refinement", str(out_file))
+            self.assertEqual(written_res["status"], "WRITTEN")
+            self.assertTrue(out_file.exists())
+            self.assertIn("ContinuousStateSpace", out_file.read_text(encoding="utf-8"))
+
+        # Test operator
+        test_res = tools.test_operator("state_space_refinement")
+        self.assertEqual(test_res["test_result"]["status"], "PASS")
+
+        # Unknown card operator
+        with self.assertRaises(ValueError):
+            tools.scaffold_operator("invalid_id")
+        with self.assertRaises(ValueError):
+            tools.test_operator("invalid_id")
+
+    def test_cli_runnable_operator_modes(self):
+        command = [sys.executable, "-B", str(ROOT / "scripts/rds_theory_tools.py")]
+        with tempfile.TemporaryDirectory() as folder:
+            # --list-operators
+            res = subprocess.run(command + ["--list-operators"], cwd=folder, capture_output=True, encoding="utf-8", timeout=10)
+            self.assertEqual(res.returncode, 0, res.stderr)
+            parsed = json.loads(res.stdout)
+            self.assertEqual(parsed["status"], "OK")
+            self.assertTrue(any(item["card_id"] == "state_space_refinement" for item in parsed["operators"]))
+
+            # --test-operator
+            res_test = subprocess.run(command + ["--test-operator", "state_space_refinement"], cwd=folder, capture_output=True, encoding="utf-8", timeout=10)
+            self.assertEqual(res_test.returncode, 0, res_test.stderr)
+            self.assertEqual(json.loads(res_test.stdout)["test_result"]["status"], "PASS")
+
+            # --scaffold --out
+            target = Path(folder) / "generated.py"
+            res_scaff = subprocess.run(command + ["--scaffold", "contraction_target_bias", "--out", str(target)], cwd=folder, capture_output=True, encoding="utf-8", timeout=10)
+            self.assertEqual(res_scaff.returncode, 0, res_scaff.stderr)
+            self.assertEqual(json.loads(res_scaff.stdout)["status"], "WRITTEN")
+            self.assertTrue(target.exists())
+
+            # Invalid operator ID
+            bad = subprocess.run(command + ["--test-operator", "nonexistent"], cwd=folder, capture_output=True, timeout=10)
+            self.assertEqual(bad.returncode, 2)
+
 
 if __name__ == "__main__":
     unittest.main()
