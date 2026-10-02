@@ -2,6 +2,8 @@
 
 ## 5.8.0 — Unreleased
 
+- Reduce repeated dependency work within one Advisor operation and replace repeated closure/relevance scans with ordered event propagation and reverse adjacency. Preserve first derivation witnesses, complete blocker/truncation results, candidate re-review after history filtering and fresh checks at later operations. Prefer the existing brief output in the Skill, retaining full records on disk instead of adding another output mode.
+
 - Keep per-file source/dataset hash inventories as receipt metadata rather than scalar code/data identities. Preserve explicit aggregate identities, compatible scalar aliases and genuine identity conflicts during artifact import and control comparison.
 - Add runnable theory examples with finite numerical diagnostics, exact rational interval enclosures and explicit input/shape checks. Export the same implementation with positive/negative self-tests, create scaffold files exclusively, and preserve PASS/FAIL/UNKNOWN at the CLI boundary.
 

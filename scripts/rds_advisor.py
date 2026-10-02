@@ -519,9 +519,17 @@ class RDSAdvisor:
             if isinstance(state["advisor_context"], dict):
                 options.update({key: state["advisor_context"][key] for key in ("max_depth", "max_candidates")
                                 if key in state["advisor_context"]})
+            dependency = None
+            if isinstance(context, dict) and "dependency_map" in context:
+                # History filters candidates, then the final review evaluates them.
+                options["_defer_selection_review"] = True
+                if options.get("templates", context.get("templates")) is not None:
+                    from rds_advisor_search import _operation_dependency
+                    dependency = _operation_dependency(context)
+                    options["_dependency"] = dependency
             search = search_directions(judgment_graph, state["advisor_context"], **options)
             loop_review = self._review_loop_history(state, context, search)
-            search["selection_review"] = review_selection(search, context)
+            search["selection_review"] = review_selection(search, context, _dependency=dependency)
             recommendations.append(_advice("STRATEGIC_RESEARCH_ADVICE", type="EXECUTABLE_DIRECTION_SEARCH", urgency="REVIEW",
                 reason="按明确的下一决策、带来源事实和图中结构化前置条件组合有界候选。",
                 search=search, observations=search["candidates"], limitations=search["limitations"],
