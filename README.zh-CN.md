@@ -141,6 +141,11 @@ python -B scripts/rds_cli.py --root ./my-project project costs
 python -B scripts/rds_cli.py --root ./my-project project status
 ```
 
+内核会从账本记录状态推导活动的下一步。任意时刻运行
+`python -B scripts/rds_cli.py --root ./my-project project next`，
+即可打印当前应做的一步（注册、执行、恢复、对比或记录决定）及其可运行命令；
+智能体重复这一步即可驱动整个循环，无需记住上面的命令序列。
+
 ---
 
 ## Lean4 风格的声明式形式化验证

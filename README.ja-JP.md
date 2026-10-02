@@ -134,6 +134,12 @@ python -B scripts/rds_cli.py --root ./my-project project costs
 python -B scripts/rds_cli.py --root ./my-project project status
 ```
 
+カーネルは記録された台帳状態からキャンペーンの次の一手を導出します。いつでも
+`python -B scripts/rds_cli.py --root ./my-project project next` を実行すると、
+今すべき一つのアクション（登録・実行・復旧・比較・決定の記録）とその実行可能な
+コマンドが出力されます。エージェントはこの手順を繰り返すだけでループ全体を
+推進でき、上のコマンド列を暗記する必要はありません。
+
 ---
 
 ## Lean4 スタイルの宣言型形式検証
