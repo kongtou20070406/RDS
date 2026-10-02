@@ -142,6 +142,12 @@ python -B scripts/rds_cli.py --root ./my-project project costs
 python -B scripts/rds_cli.py --root ./my-project project status
 ```
 
+The kernel derives the campaign's next step from recorded ledger state. Run
+`python -B scripts/rds_cli.py --root ./my-project project next` at any point to
+print the one action to take now (register, execute, recover, compare or record
+the decision) with its runnable command; agents can drive the whole loop by
+repeating that step without memorizing the sequence above.
+
 ---
 
 ## Lean4-style Declarative Formal Verification

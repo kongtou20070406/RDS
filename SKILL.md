@@ -8,67 +8,61 @@ metadata:
 
 # Research Direction Selector
 
-Help the researcher make the next useful decision and advance authorized work. Pure theory, pure experiments and mixed work share a ledger and budget; each uses its own acceptance conditions and executable evidence.
+Pick the goal type, run its one command, and drive the work from the kernel's own next step. All commands run from the RDS checkout as `python -B scripts/rds_cli.py …`; `--root <dir>` selects the project directory. This file is the entry point, not the rulebook: acceptance philosophy lives in the linked docs and is loaded only when the current decision needs it.
 
-RDS runs without MRS. For sustained mathematical work, bind the original objective and retain exact assets and dependencies using the [native research records](docs/native-research.md). Use installed MRS only for a separately authorized record workflow; no automatic discovery, archive or second project is needed. Tool candidates can be extracted, checked and registered locally through the same native ledger.
+## Decision tree
 
-## Small decision loop
+| Goal | Run | Detail on demand |
+| --- | --- | --- |
+| Start a locked experiment campaign | `project init --contract <contract.json>` — template below | [Project tools](docs/development-loop.md) |
+| Advance a running campaign | `project next` — prints the derived step and its runnable command | [Development loop](docs/development-loop.md) |
+| Decide a research direction | `advise --context <context.json> --graph <graph.json> --brief`; lock the route with `--choose <candidate-id> --record <checkpoint-id>` | [Research discipline](references/research-discipline.md) |
+| Audit evidence into the ledger | `artifacts import --manifest <manifest.json>` | [Agent entry](docs/agent-entry.md) |
+| Check a mathematical claim | `formal verify --spec <spec.json> --tactics rational` | [Formal framework](references/formal_framework.md) |
+| Reuse or register a local tool | `rsi extract --source <file> --entry <function> --name <id>`, then `rsi validate --name <id> --cases <cases.json>` → `rsi register --name <id>` | [Native research](docs/native-research.md) |
+| Wrap one frozen tool job | `exec --name <id> --timeout 30 -- <command…>` — receipt-bound execution without contract JSON | [Agent entry](docs/agent-entry.md#wrap-a-command) |
+| Record a decision or rejection | `checkpoint save --id <id> --decision <decision.json>` (kind auto-selects from the root); `reject --reason '<text>' --evidence <file>` reuses the current choice | [Local decision workflow](docs/lightweight-workflow.md) |
 
-- Infer goal, acceptance conditions, evidence, budget and next decision from the request and project. For theory, bind the statement, domain, quantifiers and premises; for experiments, bind the metric and serious rival explanations. Fill low-risk detail internally; require no form. Missing evaluation calls for a minimal protocol before material commitments, never an invented goal, frozen metric or threshold.
-- Record `research_mode` as `theory`, `empirical` or `mixed` in the existing decision context; load and apply only the relevant acceptance checks.
-- Unless following a clear authorized instruction, compare viable routes internally: proof, counterexample or premise closure for theory; task gain, rival mechanism or consequential diagnostic for experiments. Consume Advisor's `selection_review`: one supplied route is a procedure review, not a scientific comparison; serious rivals need different same-scope predictions. Repeated task failures despite passing proxies call for the missing application/transfer bridge, not another variant with unchanged predictions. Use relevant alternatives without forcing a theory task into an experiment or exposing a menu each turn.
-- Consume Advisor's `selection_review.next_move` at a real blocker or when the user requests a broader route. For reformulation, name a changed assumption, representation or computational method, its different prediction or proof obligation, and a deciding check against the smallest repair. Look up a few relevant [theory tools](docs/theory-reformulation.md), preserving the original goal and authorization. Load details on demand; relation labels are optional. A plateau is not a capacity bound, a changed name is not a new mechanism, and an untested idea need not already have a proof. Revise scoped assumptions as evidence changes; ask before material goal, method or resource changes.
-- When dependencies affect selection, map the original acceptance to essential AND premises and OR alternatives with sources and open obligations; do not atomize every algebraic step. Submit the current map as `dependency_map` and consume Advisor's actual blocker analysis. In every mode, bind `action.target` exactly to `goal_contribution.path[0]`; a text path alone is a declaration. A connected graph, more nodes or closed side tasks do not establish the original goal. See [goal-linked dependencies](docs/agent-entry.md#goal-linked-dependencies) for node/rule identity rules.
-- For a new goal-bound workflow, enable `require_goal_link` when only current goal obligations should admit jobs. The prospective entry rechecks the current native objective binding and declared map before launch or budget charge; stale advice cannot replace that binding. Retain the requirement at continuation. Reuse valid certificates instead of repeatedly auditing closed nodes. Explain partial progress against remaining original obligations, not file, test or receipt counts.
-- Recommend one default and at most one serious alternative, with a deciding observation, fair comparison and stop/revision condition. Proceed within existing authorization; unanswered advice is never acceptance. Ask only for an uninferable material goal, method or resource choice.
-- Optimize useful research progress and time to a decision within authorized limits. Cost is a constraint and a trade-off, not a savings target. Inspect available and occupied capacity, the usable time window, marginal charges, dependencies and shared bottlenecks; one recommended plan may contain several independent experiments. When worthwhile ready work fits idle resources, propose a compatible parallel batch instead of defaulting to serial checks. Explain avoidable idle capacity and retain legitimate idle reasons; do not run redundant work merely to raise utilization. Hardware ownership does not make energy, memory or other resource costs zero. Match hardware, replication and readiness checks to the authorized workload rather than assuming GPU execution, multi-seed campaigns or broad environment scans.
-- In stalled discussion, advance the smallest useful decision or reversible check. Do not force an unknown objective or spend on an unaccepted material proposal. Follow clear instructions even when preferring another route.
-- A clear human route narrows direction selection; it does not disable premise audits, Frontier gaps or the next useful test within that route. Use these when their output can change the next decision, rather than adding calls only for visibility.
-- Keep method limits tied to their actual purpose: candidate search, exact verification and proof are distinct. If materially different interpretations remain, state them in one short question and ask the user before dependent work; continue unaffected work meanwhile. Preserve the original quote/source and actual clarification in the existing decision context. Do not broaden a ban, infer new permission from external rules, or change the proof standard, deadline or resources. See [method limits](docs/agent-entry.md#clarify-method-limits).
-- When rigorous computation is authorized, actively consider and execute useful bounded certificate checks instead of expanding repetitive symbolic cases in context. Avoid rigid manual-derivation prohibitions; base tool transitions on real computational burden. Make domain exhaustiveness, sound pruning and independent replay explicit obligations; a missing reduction/checker remains a concrete blocker to resolve. Use `OBLIGATION_CHECK` for a single claim without inventing competing explanations. Invalid certificates or timeouts leave the claim unresolved; a checked counterexample is a separate outcome. See [theory and experiments](docs/agent-entry.md#theory-and-experiments).
-- At a consequential blocker or before rebuilding a tool, use [capability discovery](docs/native-research.md#discover-and-apply-a-capability) to name the missing operation and find a compatible local tool or method. Separate missing inputs/backends from missing ability. A demo PASS is local qualification: apply the tool to the goal-bound input and consume the result before claiming useful capability.
-- Before backend-dependent work, check only the selected local capability (`scripts/rds_capabilities.py` or the applicable formal entry) and estimate time, memory and expression growth; use an available fallback within the same authorization. Name the actual backend and evidence strength. Reuse frozen artifacts, apply proportionate checks and stop once the requested result is delivered. No external computation Skill is required.
-- Keep rejected proposals' scope and falsifying evidence. Reopen on changed evidence, scope or intervention, naming the change; do not repeat unchanged advocacy.
+**Driving pattern:** after any campaign-changing command, run `project status --brief` or `project next` and execute the printed `next_move` — register, execute, recover, compare, record — instead of memorizing a command sequence. The kernel derives the step from recorded ledger state only.
 
-## Evidence that changes decisions
+**Non-negotiables** (details in the linked docs): infer goal, acceptance conditions, evidence and budget from the request and project — never invent a metric, threshold or goal, and missing evaluation calls for a minimal protocol before material commitments. Missing evidence stays `UNKNOWN`; exit code 0 and self-signed success are execution records, not science. Recommend one default and at most one serious alternative, with a deciding observation, fair comparison and a stop/revision condition. Ask only for an uninferable material goal, method or resource choice.
 
-Separate task gain, mechanism and search-policy evidence. Published, proxy, oracle, toy and reused-development results motivate tests, not local confirmation. Precommit comparison and untouched confirmation; track exposure. Policy claims need whole trajectories at equal total budget. Reuse compatible controls; do not default to multi-seed campaigns.
+## Minimal project contract template
 
-Check what executed computation changes: a knob name or mathematical side condition does not establish a mechanism. Preserve raw observations and failures. Prefer `advise --brief`, `status --brief` and `project status --brief`; `exec`/`reject` already return digests. Keep the current decision, blockers and record locator in context; open only the evidence needed for the next decision, without automatically reading the full CAS record or repeating unchanged summaries. Large assets and raw logs stay on disk. Missing evidence stays unknown; hashes bind artifacts and exit code 0 records execution, not science or mathematical proof. Self-signed success creates no evidence or authority.
+Validated by `project init`: relative paths, hex SHA-256 of each file, all five binding roles required, `min_useful_delta` as an exact rational string. Optional fields (`objective_sha256`, `execution_policy`, `stop_policy`, `maintenance_allowance`) are documented in [stop policy](docs/stop-policy.md) and [native research](docs/native-research.md). Generate a real, immediately valid contract with `python -B examples/project-runner/prepare.py --root <new-empty-dir>`.
 
-In mixed work, check both the theorem's premises and their correspondence to executable code/data before using it to admit an experiment. Empirical contradictions trigger review of that correspondence and affected dependencies; they do not automatically refute a conditional theorem. Pure theoretical work needs no ML metric or statistical gate; pure experiments need no irrelevant formal proof.
+```json
+{
+  "schema": 1,
+  "description": "CPU demonstration, not scientific confirmation",
+  "bindings": [
+    {"role": "code",      "path": "experiment.py", "sha256": "<sha256>"},
+    {"role": "config",    "path": "config.json",   "sha256": "<sha256>"},
+    {"role": "data",      "path": "data.csv",      "sha256": "<sha256>"},
+    {"role": "evaluator", "path": "evaluate.py",   "sha256": "<sha256>"},
+    {"role": "protocol",  "path": "protocol.json", "sha256": "<sha256>"}
+  ],
+  "allowed_commands": [
+    ["python", "-B", "experiment.py", "--arm", "control",   "--output", "outputs/control.json"],
+    ["python", "-B", "experiment.py", "--arm", "treatment", "--output", "outputs/treatment.json"]
+  ],
+  "output_roots": ["outputs"],
+  "budget": {"wall_seconds": 20},
+  "primary_metric": {"name": "mse", "direction": "min", "min_useful_delta": "1/100"}
+}
+```
 
-At meaningful advances or blockers, report one short factual line such as `RDS｜选路✓→执行✓｜证明?｜<sha8>`, with the concrete advance/next step when useful. Mark `选路✓` only for a recorded scoped choice consumed before execution, `执行✓` for a successful bound receipt, and `证明✓` for the reported claim with its premises checked; execution, local tests or narrower lemmas do not prove the goal. Use `?` for unknown, `—` for inapplicable stages and an actual receipt/certificate/saved-record hash prefix; omit absent fields. No per-call report or extra call just for display.
+Then `project init --contract <root>/contract.json`, register each arm with `project create --manifest <root>/<arm>.json`, and follow `project next`.
 
-## Continuity and preferences
+## Load more only when the decision needs it
 
-Record structured route decisions with `checkpoint save --decision` in the existing project/reference SQLite ledger. For local anti-loop review, supply `--research-context` with the question ID, goal revision, scope and current facts. Advisor verifies the checkpoint hashes and contract binding before pruning unchanged rejected routes; changed evidence or conditions reopen review, and A→B→A warns without veto. See [local decision workflow](docs/lightweight-workflow.md).
+- Goal-linked dependencies, method limits, theory/experiment acceptance: [agent entry](docs/agent-entry.md)
+- Evidence classes, output contract, controls, precommitted comparison: [research discipline](references/research-discipline.md)
+- Capacity, idle resources, parallel batches: [resource-aware planning](docs/resource-planning.md)
+- Stalled formulation, plateau, theory-tool lookup: [theory reformulation](docs/theory-reformulation.md)
+- Anti-loop checkpoint review: [local decision workflow](docs/lightweight-workflow.md)
+- Formal scope, `UNKNOWN` semantics, Lean backends: [formal framework](references/formal_framework.md)
+- Native objectives, asset retention, RSI ledger: [native research](docs/native-research.md)
+- Optional history enhancement: [Obelisk](references/obelisk.md); preferences apply only with explicit opt-in: [optional preferences](references/optional-preferences.md)
 
-Checkpoints authenticate recorded choices, not their scientific validity or execution authority. Keep unanswered proposals pending and existing receipt/formal gates intact. Do not add chat mirrors, source indexes or parallel state machines. The standalone `--research-note` Markdown route is retired.
-
-[Obelisk](references/obelisk.md) is an optional history enhancement when exact past wording, parameters or numbers are needed. Its existing bridge wraps the public CLI, requiring no second service. `history preflight` checks enhanced-mode setup; missing/unusable CLI leaves local anti-loop review usable, but must never be reported as a completed Obelisk query. Version success does not establish index freshness, skill loading or project coverage.
-
-Apply and persist research preferences only with explicit opt-in. [Optional preferences](references/optional-preferences.md) are 空投's examples, not others' defaults or experiment authority.
-
-## Load detail only for the current task
-
-| Need | Read or use |
-|---|---|
-| Substantive comparison or evidence/human-direction conflict | Relevant [research discipline](references/research-discipline.md) sections: decision contract, direction program, evidence, output. Keep schemas internal. |
-| A general rule could change this decision | Relevant [judgment graph](references/judgment-graph.yaml) nodes: date, scope, applicability, counterexample. For RSI comparisons read [RSI evidence](references/rsi-evidence.md). These are scoped corrections, not universal laws; do not load all libraries. |
-| Execute the scalar reference protocol | [L3 contract](references/l3-state-machine.md), then the discipline's CLI section. Its restricted rational AST/MSE receipts do not validate external training. |
-| Execute/resume a project or develop RDS | [Development loop](docs/development-loop.md): authorized argv, bindings, raw artifacts, live checkpoints. Inspect existing runs before another attempt. |
-| Reduce protocol/output friction | [Agent entry](docs/agent-entry.md): `exec` wraps a frozen tool job, `advise --record` completes a scoped choice, `reject` reuses that choice, and `--brief` retains full records with a small digest. Aliases/unique prefixes preserve values and execution gates. |
-| Prevent promoting a known regression / declare a rejected parameter interval | [Regression guards](docs/regression-guards.md): explicit comparable metrics, frozen milestone replay and scoped parameter predicates; all original results survive. |
-| Check actual CLI use over time | [CLI usage log](docs/cli-usage.md): automatic local daily counts, command totals and tracking coverage; `usage --days 7` or an inclusive date range. |
-| Allocate available compute to useful work | [Resource-aware planning](docs/resource-planning.md): capacity, elapsed time, marginal cost and compatible batches. Advisory plans retain execution gates and do not reserve devices. |
-| Mathematical obligation / Lean certificate | [Formal framework](references/formal_framework.md) and discipline's formal section: actual checker and declared scope; `UNKNOWN` stays unknown. |
-| Graph gaps / Advisor advancement | [Frontier](docs/advisor-frontier.md) or [advancement protocol](docs/advisor-advancement.md). Proposed nodes/ASTs need independent evidence. |
-| Broaden a stalled formulation / select a theoretical tool | [Theory reformulation](docs/theory-reformulation.md): bounded tool lookup, compact mappings and deciding checks; labels are optional and alternatives are not containment. |
-| Improve RDS itself / accumulate tools | [RSI evolution](docs/rsi-evolution.md): distinguish rule, capability and policy adoption; preserve input exposure and frozen parents, and do not call a reused curriculum independent confirmation. |
-| Package research records for RDS improvement | [Record handoff](docs/research-record-handoff.md): copyable prompts for a scoped private evidence bundle; reuse original decisions and failures, disclose omissions, and return only the archive locator and a short digest. |
-| Bind a mathematical objective / retain assets / reuse a local function | [Native research](docs/native-research.md): immutable original bytes, declared dependency review and `rsi extract/validate/register/use`; hashes and finite cases do not prove mathematics. |
-
-Runner, Lean and RSI remain optional capabilities with their gates intact. Advisor and rule lint are heuristic; rule adoption needs bound evaluation. Software or historical-fixture success is not research-policy gain.
-
-Use `formal verify --tactics lean4` when native Lean checking is required; missing native dependencies must remain `UNKNOWN`. Use `--tactics rational` for the supported exact Python rational checker, with `CERTIFICATE_CHECKED` assurance. Default `rule` may choose either available backend. Report the actual backend and assurance, and keep mathematical proof separate from empirical application premises.
+Runner, Lean and RSI remain optional capabilities with their gates intact. Advisor and rule lint are heuristic; report the actual backend and assurance (`CERTIFICATE_CHECKED` for the rational checker, `LEAN_KERNEL_CHECKED` for native Lean) and keep unresolved results unknown.
