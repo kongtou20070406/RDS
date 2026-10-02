@@ -31,6 +31,7 @@ from copy import deepcopy
 import hashlib
 import heapq
 import json
+import sqlite3
 from pathlib import Path
 
 ASSURANCE = "INPUT_REPORTED_DEPENDENCY_ANALYSIS_NOT_PROOF"
@@ -207,7 +208,7 @@ def audit_receipts(spec):
                                run_status=body.get("run_status"))
                 else:
                     row.update(status="GROUNDED", run_id=body.get("run_id"))
-        except (ValueError, FileNotFoundError, OSError) as exc:
+        except (ValueError, FileNotFoundError, OSError, sqlite3.Error) as exc:
             row.update(status="LEDGER_UNAVAILABLE", reason=type(exc).__name__)
         audited.append(row)
     grounded = {row["receipt"]["sha256"] for row in audited if row["status"] == "GROUNDED"}
@@ -408,6 +409,197 @@ def analyze_hypergraph(spec, audit_receipts_enabled=False):
             "reported_hyperedges": deepcopy(spec["hyperedges"])}
 
 
+def trace_support_cone(spec, node_id, audit_receipts_enabled=False):
+    """Explain the selected declared justification, without requiring a support table."""
+    spec = deepcopy(spec)
+    result = analyze_hypergraph(spec, audit_receipts_enabled=audit_receipts_enabled)
+    return _selected_support_cone(spec, node_id, set(result['declared_supported_closure']),
+                                  result['declared_derivation_rules'])
+
+
+def _selected_support_cone(spec, node_id, closure, derivations):
+    nodes, edges, _, _ = _validate(spec)
+    _require(node_id in nodes, "unknown node to trace: " + str(node_id))
+    index = {edge["id"]: edge for edge in edges}
+    cone_nodes, cone_rules, pending = {node_id}, set(), [node_id]
+    visited = set()
+    while pending:
+        current = pending.pop()
+        if current in visited:
+            continue
+        visited.add(current)
+        rule = derivations.get(current)
+        if rule is not None:
+            cone_rules.add(rule)
+            cone_nodes.update(index[rule]["premises"])
+            pending.extend(index[rule]["premises"])
+    return {"node_id": node_id, "supported": node_id in closure,
+            "derivation_rule": derivations.get(node_id),
+            "support_cone_nodes": sorted(cone_nodes), "support_cone_rules": sorted(cone_rules),
+            "meaning": "Selected declared justification; independent alternatives may also exist"}
+
+
+def review_hypergraph(value, *, locator="input", retract_nodes=(), retract_rules=(),
+                      refute_nodes=(), refute_rules=(), change_source=None, trace=None, updates=(),
+                      update_locators=(), audit_receipts_enabled=False):
+    """Own input compilation, status changes and one current dependency analysis.
+
+    The returned dependency_map is the next input: callers submit changes and
+    reuse an immutable snapshot instead of maintaining derived support tables.
+    """
+    from rds_hypergraph_input import prepare_input
+    spec, input_review = prepare_input(value, locator)
+
+    def incomplete():
+        return {"status": "UNKNOWN", "assurance": ASSURANCE, "input_review": input_review,
+                "dependency_map": spec, "authorization": "UNCHANGED",
+                "next_step": {"action": "clarify_input", "fields": input_review["errors"][:3],
+                              "omitted_fields": max(0, len(input_review["errors"]) - 3)}}
+
+    if input_review["errors"]:
+        return incomplete()
+    try:
+        nodes, edges, _, _ = _validate(spec)
+    except ValueError as exc:
+        input_review["errors"].append({"path": "$", "reason": str(exc)})
+        return incomplete()
+    grounded = frozenset(audit_receipts(spec)['grounded_receipt_sha256s']) if audit_receipts_enabled else frozenset()
+    previous_closure, previous_derivations, _, _ = _supported_closure(nodes, edges, grounded)
+    original_spec = spec
+    candidate = deepcopy(spec)
+    applied = []
+    if not isinstance(updates, (list, tuple)) or len(updates) > 8:
+        input_review['errors'].append({'path': 'updates', 'reason': 'supply at most eight declaration fragments'})
+        return incomplete()
+    for i, update in enumerate(updates):
+        fragment, fragment_review = prepare_input(update, update_locators[i] if i < len(update_locators)
+                                                  else str(locator) + '#update/' + str(i))
+        for kind in ('repairs', 'warnings', 'errors'):
+            input_review[kind].extend({'path': 'update[' + str(i) + '].' + row['path'], 'reason': row['reason']}
+                                      for row in fragment_review[kind])
+        if fragment is None or fragment_review['errors']:
+            continue
+        if 'limits' in fragment and fragment['limits'] != candidate.get('limits', {}):
+            input_review['errors'].append({'path': 'updates.limits', 'reason': 'incremental declarations cannot change computation limits'})
+            continue
+        if fragment.get('schema', 1) != candidate.get('schema', 1):
+            input_review['errors'].append({'path': 'updates.schema', 'reason': 'incremental declarations must use the same schema'})
+            continue
+        for key in ('question_id', 'goal_revision', 'scope'):
+            if key in fragment:
+                if key in candidate and candidate[key] != fragment[key]:
+                    input_review['errors'].append({'path': 'updates.' + key,
+                                                  'reason': 'declaration conflicts with the saved scope; explicitly import the new map'})
+                else:
+                    candidate[key] = deepcopy(fragment[key])
+        generated = set(fragment_review['generated_node_ids'])
+        for kind, key in (('node', 'nodes'), ('rule', 'hyperedges')):
+            positions = {record['id']: j for j, record in enumerate(candidate[key])}
+            for record in fragment[key]:
+                name = record['id']
+                previous = candidate[key][positions[name]] if name in positions else None
+                if kind == 'node' and name in generated and previous is not None:
+                    continue  # A rule's reference does not overwrite an existing observation.
+                merged = {**deepcopy(previous or {}), **deepcopy(record)}
+                if previous == merged:
+                    continue
+                if previous is None:
+                    positions[name] = len(candidate[key])
+                    candidate[key].append(merged)
+                else:
+                    candidate[key][positions[name]] = merged
+                applied.append({'kind': kind, 'id': name, 'operation': 'declare',
+                                'previous_status': previous['status'] if previous else None,
+                                'previous_source': deepcopy(previous['source']) if previous else None,
+                                'status': merged['status'], 'source': deepcopy(merged['source'])})
+        candidate['goals'] = list(dict.fromkeys(candidate['goals'] + fragment['goals']))
+    if input_review['errors']:
+        return incomplete()
+    try:
+        nodes, edges, _, _ = _validate(candidate)
+    except ValueError as exc:
+        input_review['errors'].append({'path': 'updates', 'reason': str(exc)})
+        return incomplete()
+    spec = candidate
+    edge_index = {edge["id"]: edge for edge in edges}
+    changes = {}
+    for kind, values, status in (("node", retract_nodes, "UNKNOWN"),
+                                 ("rule", retract_rules, "PROPOSED"),
+                                 ("node", refute_nodes, "CONTRADICTED"),
+                                 ("rule", refute_rules, "CONTRADICTED")):
+        values = [values] if isinstance(values, str) else values
+        for ident in values:
+            ident = ident.strip() if isinstance(ident, str) else ident
+            index = nodes if kind == "node" else edge_index
+            if not isinstance(ident, str) or ident not in index:
+                input_review["errors"].append({"path": kind, "reason": "unknown change target: " + str(ident)})
+            elif (kind, ident) in changes and changes[kind, ident] != status:
+                input_review["errors"].append({"path": kind + ":" + ident,
+                                              "reason": "conflicting retraction and refutation"})
+            else:
+                changes[kind, ident] = status
+    if trace is not None and trace not in nodes:
+        input_review["errors"].append({"path": "trace", "reason": "unknown node: " + str(trace)})
+    if change_source is not None:
+        try:
+            _source(change_source)
+        except ValueError as exc:
+            input_review["errors"].append({"path": "change_source", "reason": str(exc)})
+    if input_review["errors"]:
+        spec = original_spec
+        return incomplete()
+    revised = deepcopy(spec)
+    for kind, records in (("node", revised["nodes"]), ("rule", revised["hyperedges"])):
+        for record in records:
+            key = (kind, record["id"])
+            if key in changes:
+                origin = deepcopy(change_source) if change_source is not None \
+                    else str(locator) + "#change/" + kind + "/" + record["id"]
+                applied.append({"kind": kind, "id": record["id"], "previous_status": record["status"],
+                                "previous_source": deepcopy(record["source"]),
+                                "status": changes[key], "source": origin})
+                # Withdraw support without destroying the original evidence binding.
+                # The change's source is recorded in the persisted revision.
+                record.update(status=changes[key])
+    result = analyze_hypergraph(revised, audit_receipts_enabled=audit_receipts_enabled)
+    result.update(status="INCOMPLETE" if result["truncated"] else "ANALYZED",
+                  dependency_map=revised, input_review=input_review, authorization="UNCHANGED")
+    if applied:
+        closure = set(result["declared_supported_closure"])
+        result["revision"] = {"changes": applied, "lost_support": sorted(previous_closure - closure),
+                              "gained_support": sorted(closure - previous_closure),
+                              "alternative_derivations": {
+                                  name: {"previous_rule": previous_derivations[name], "active_rule": rule}
+                                  for name, rule in result["declared_derivation_rules"].items()
+                                  if name in previous_derivations and previous_derivations[name] != rule},
+                              "meaning": "Declared dependency impact; changes do not verify scientific refutation"}
+    if trace is not None:
+        result["support_cone"] = _selected_support_cone(revised, trace, set(result['declared_supported_closure']),
+                                                        result['declared_derivation_rules'])
+    if result["truncated"]:
+        step = {"action": "inspect_computation_limit", "reason": result["truncation_reason"]}
+    elif result["active_contradicted_conclusion_rules"]:
+        step = {"action": "review_conflicting_support", "rules": result["active_contradicted_conclusion_rules"][:3]}
+    else:
+        goal = next((name for name, row in result["goals"].items()
+                     if row["status"] != "DECLARED_SUPPORTED"), None)
+        if goal is None:
+            step = {"action": "check_goal_evidence" if result["goals"] else "declare_goal"}
+        else:
+            row = result["goals"][goal]
+            step = {"action": "resolve_missing_evidence", "goal": goal, "status": row["status"],
+                    "tokens": row["minimal_missing_evidence_sets"][0][:3]
+                    if row["minimal_missing_evidence_sets"] else []}
+    result["next_step"] = step
+    return result
+
+
+def cascade_refute(spec, contradicted_node_ids=(), contradicted_rule_ids=()):
+    """Declare contradiction and recompute ordinary fields from the revised map."""
+    return review_hypergraph(spec, refute_nodes=contradicted_node_ids,
+                            refute_rules=contradicted_rule_ids)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", required=True)
@@ -415,20 +607,39 @@ def main():
     parser.add_argument("--audit-files", action="store_true")
     parser.add_argument("--audit-receipts", action="store_true",
                         help="verify receipt-bound evidence against project ledgers")
+    parser.add_argument("--update", "-u", action="append", default=[])
+    for flag in ("retract-node", "retract-rule", "refute-node", "refute-rule"):
+        parser.add_argument("--" + flag, action="append", default=[])
+    parser.add_argument("--change-source")
+    parser.add_argument("--trace-cone")
     args = parser.parse_args()
     path = Path(args.input)
     _require(path.stat().st_size <= 8 * 1024 * 1024, "input file exceeds 8 MiB")
-    spec = json.loads(path.read_text(encoding="utf-8"))
-    result = analyze_hypergraph(spec, audit_receipts_enabled=args.audit_receipts)
-    if args.audit_files:
-        result["source_file_audit"] = audit_sources(spec, path.parent)
+    from rds_hypergraph_input import load_input
+    spec, repairs = load_input(path.read_text(encoding="utf-8-sig"))
+    _require(len(args.update) <= 8, "at most eight update files")
+    updates = []
+    for update_path in args.update:
+        update_path = Path(update_path)
+        _require(update_path.stat().st_size <= 8 * 1024 * 1024, "update file exceeds 8 MiB")
+        update, fixed = load_input(update_path.read_text(encoding="utf-8-sig"))
+        updates.append(update)
+        repairs.extend(fixed)
+    result = review_hypergraph(spec, locator=str(path), retract_nodes=args.retract_node,
+                              retract_rules=args.retract_rule, refute_nodes=args.refute_node,
+                              refute_rules=args.refute_rule, change_source=args.change_source,
+                              trace=args.trace_cone, updates=updates,
+                              audit_receipts_enabled=args.audit_receipts)
+    result["input_review"]["format_repairs"] = repairs
+    if args.audit_files and result["status"] != "UNKNOWN":
+        result["source_file_audit"] = audit_sources(result["dependency_map"], path.parent)
     text = json.dumps(result, ensure_ascii=False, indent=2)
     if args.output:
         with Path(args.output).open("x", encoding="utf-8") as stream:
             stream.write(text + "\n")
     else:
         print(text)
-    return 2 if result["truncated"] else 0
+    return 2 if result.get("truncated") or result["input_review"]["errors"] else 0
 
 
 if __name__ == "__main__":
