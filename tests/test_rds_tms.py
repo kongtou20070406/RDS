@@ -142,7 +142,7 @@ class TMSBehaviorTests(unittest.TestCase):
 
     def test_repairs_do_not_change_receipt_bindings_or_admission_authority(self):
         value = small_input()
-        binding = {'receipt_sha256': 'a' * 64, 'run_id': 'not-a-verified-receipt'}
+        binding = {'receipt': {'sha256': 'a' * 64, 'project_root': 'not-a-verified-project'}}
         value['claims']['a']['evidence'] = binding
         result = _dependency_review({'dependency_map': value})
         node = next(row for row in result['reported_nodes'] if row['id'] == 'a')

@@ -51,13 +51,13 @@ class TMSLoopTests(unittest.TestCase):
 
     def test_incremental_rules_preserve_existing_observations_and_metadata(self):
         value = declaration()
-        value['claims']['a']['evidence'] = {'receipt_id': 'reported only'}
+        value['claims']['a']['origin_metadata'] = {'receipt_id': 'reported only'}
         first = review_hypergraph(value)
         update = {'rules': [{'from': 'a', 'to': 'h', 'status': 'supported', 'source': 'second implication'}], 'goal': 'h'}
         result = review_hypergraph(first, updates=[update])
         node = next(n for n in result['dependency_map']['nodes'] if n['id'] == 'a')
         self.assertEqual(node['status'], 'SUPPORTED')
-        self.assertEqual(node['evidence'], value['claims']['a']['evidence'])
+        self.assertEqual(node['origin_metadata'], value['claims']['a']['origin_metadata'])
         self.assertEqual(result['declared_supported_closure'], ['a', 'g', 'h'])
         rejected = review_hypergraph(first, updates=[update], refute_nodes=['missing'])
         self.assertEqual(rejected['dependency_map'], first['dependency_map'])
@@ -101,6 +101,58 @@ class TMSLoopTests(unittest.TestCase):
             restored = maintain(root, initial=old)
             self.assertEqual(restored['goals']['g']['status'], 'DECLARED_SUPPORTED')
             self.assertEqual(current(root)['parent'], saved['sha256'])
+
+    def test_file_hash_source_without_locator_is_repaired_without_losing_binding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / 'evidence.txt'
+            source.write_bytes(b'synthetic')
+            value = declaration()
+            binding = {'file': 'evidence.txt', 'sha256': hashlib.sha256(source.read_bytes()).hexdigest()}
+            value['claims']['a']['source'] = binding
+            first = maintain(root, updates=[value], audit_files=True)
+            self.assertTrue(first['source_file_audit']['all_requested_files_match'])
+            self.assertEqual(first['dependency_map']['nodes'][0]['source'], {**binding, 'locator': 'evidence.txt'})
+            second = maintain(root, retract_nodes=['a'], audit_files=True)
+            self.assertEqual(second['dependency_map']['nodes'][0]['source'], first['dependency_map']['nodes'][0]['source'])
+            self.assertTrue(second['source_file_audit']['all_requested_files_match'])
+            broken = maintain(root, updates=[{'claims': {'a': {'status': 'supported', 'source': {'file': 'evidence.txt', 'sha256': 'invalid'}}}}])
+            self.assertEqual(broken['status'], 'UNKNOWN')
+            self.assertEqual(current(root)['sha256'], second['snapshot_sha256'])
+
+    def test_repeated_same_refutation_reuses_snapshot_but_new_source_is_recorded(self):
+        with tempfile.TemporaryDirectory() as root:
+            maintain(root, updates=[declaration()])
+            first = maintain(root, refute_nodes=['a'], change_source='one observation')
+            second = maintain(root, refute_nodes=['a'], change_source='one observation')
+            self.assertEqual(second['snapshot_sha256'], first['snapshot_sha256'])
+            third = maintain(root, refute_nodes=['a'], change_source='another observation')
+            self.assertNotEqual(third['snapshot_sha256'], second['snapshot_sha256'])
+            self.assertEqual(current(root)['revision']['changes'][0]['source'], 'another observation')
+
+    def test_receipt_audit_delta_and_support_cone_share_current_grounded_semantics(self):
+        from test_hypergraph_evidence import ledger as receipt_ledger, spec_with, RECEIPT_SHA
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            owner = receipt_ledger(root / 'receipt-owner')
+            spec = spec_with(node_evidence={'receipt': {'project_root': str(owner), 'sha256': RECEIPT_SHA}})
+            first = maintain(root, initial=spec, audit_receipts_enabled=True, trace='D')
+            self.assertTrue(first['support_cone']['supported'])
+            second = maintain(root, refute_nodes=['A'], audit_receipts_enabled=True, trace='D')
+            self.assertEqual(second['declared_supported_closure'], ['B', 'C', 'D'])
+            self.assertEqual(second['revision']['lost_support'], ['A'])
+            self.assertEqual(second['support_cone']['support_cone_nodes'], ['B', 'C', 'D'])
+            self.assertEqual(maintain(root)['declared_supported_closure'], [])
+            self.assertEqual(maintain(root, audit_receipts_enabled=True)['declared_supported_closure'], ['B', 'C', 'D'])
+
+    def test_missing_receipts_table_is_unavailable_evidence_not_a_tool_crash(self):
+        with tempfile.TemporaryDirectory() as root:
+            maintain(root, updates=[declaration()])
+            value = {'claims': {'a': {'status': 'supported', 'source': 'unresolved receipt',
+                     'evidence': {'receipt': {'project_root': root, 'sha256': 'a' * 64}}}}}
+            result = maintain(root, updates=[value], audit_receipts_enabled=True)
+            self.assertEqual(result['declared_supported_closure'], [])
+            self.assertEqual(result['receipt_audit']['audits'][0]['status'], 'LEDGER_UNAVAILABLE')
 
     def test_invalid_declarations_do_not_move_current_snapshot(self):
         with tempfile.TemporaryDirectory() as root:

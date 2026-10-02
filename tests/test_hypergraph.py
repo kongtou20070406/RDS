@@ -23,9 +23,11 @@ def graph(statuses, rules, goals, **limits):
             "goals": goals, "limits": limits}
 
 
-def ordered_reference(nodes, edges):
+def ordered_reference(nodes, edges, grounded_receipts=frozenset()):
     """Independent pre-optimization traversal, including original witness order."""
-    closure = {ident for ident, node in nodes.items() if node['status'] == 'SUPPORTED'}
+    closure = {ident for ident, node in nodes.items() if node['status'] == 'SUPPORTED'
+               and (node.get('evidence') is None
+                    or node['evidence']['receipt']['sha256'] in grounded_receipts)}
     derivations, conflicts = {}, set()
     changed = True
     while changed:
@@ -40,7 +42,10 @@ def ordered_reference(nodes, edges):
                 closure.add(head)
                 derivations[head] = edge['id']
                 changed = True
-    return closure, derivations, conflicts
+    receipt_block = {ident: 'receipt not grounded' for ident, node in nodes.items()
+                     if node['status'] == 'SUPPORTED' and node.get('evidence') is not None
+                     and node['evidence']['receipt']['sha256'] not in grounded_receipts}
+    return closure, derivations, conflicts, receipt_block
 
 
 def relevance_reference(edges, goals):

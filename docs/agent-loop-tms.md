@@ -35,7 +35,7 @@ The scripted application trace starts with 50 claims and one AND rule, then with
 | Continuation traffic | Whole-map/full-result comparator | Delta/brief |
 | --- | ---: | ---: |
 | Input UTF-8 bytes | 13,433 | 127 |
-| Output UTF-8 bytes | 30,974 | 1,445 |
+| Output UTF-8 bytes | 31,076 | 1,445 |
 
 Observed locally on Windows, Python 3.13.5. Output byte counts vary with temporary path length. Initial declarations/setup are excluded, and the whole-map path is a serialization comparator, not a measured competing LLM implementation. These numbers do **not** establish billed-token savings, end-to-end latency, decision quality or scientific gain. A live-model comparison would need the same tasks, model/harness versions, initial inputs, total budgets and decision acceptance.
 

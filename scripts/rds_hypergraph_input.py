@@ -156,11 +156,17 @@ def prepare_input(value, locator="input"):
             return value
         if isinstance(value, dict) and isinstance(value.get("locator"), str) and value["locator"].strip():
             return value
+        if isinstance(value, dict) and ('file' in value or 'sha256' in value):
+            value = deepcopy(value)
+            value['locator'] = value['file'] if isinstance(value.get('file'), str) and value['file'].strip() \
+                else str(locator) + '#' + path + '.source'
+            note('repairs', path + '.source.locator', 'generated locator for supplied file/hash binding; original fields retained')
+            return value  # Invalid file/hash pairs remain errors in strict validation.
         note("warnings", path + ".source", "source not supplied; locator records this input declaration only")
         if row["status"] == "SUPPORTED":
             row["status"] = "PROPOSED" if path.startswith("hyperedges") else "UNKNOWN"
             note("repairs", path + ".status", "withheld support until a source is supplied")
-        return {"locator": str(locator) + "#" + path}
+        return {**(deepcopy(value) if isinstance(value, dict) else {}), "locator": str(locator) + "#" + path}
 
     nodes, index = [], {}
     node_rows = rows(field(spec, ("nodes", "claims"), [], "nodes"), "nodes", 4096)

@@ -76,8 +76,12 @@ def save(root, spec, *, expected, revision=None, source_base=None):
         if previous:
             old = json.loads(previous['body'])
             require(digest(old) == previous['sha256'], 'Dependency snapshot integrity failure')
-            if not revision and old['map'] == ref and old['source_base_dir'] == source_base:
-                return previous['sha256']
+            if old['map'] == ref and old['source_base_dir'] == source_base:
+                def declarations(rev):
+                    return [{k: change.get(k) for k in ('kind', 'id', 'operation', 'status', 'source')}
+                            for change in (rev or {}).get('changes', [])]
+                if not revision or declarations(revision) == declarations(old.get('revision')):
+                    return previous['sha256']
         sha = digest(value)
         db.execute('INSERT INTO dependency_snapshots VALUES (?,?)', (sha, body))
     return sha

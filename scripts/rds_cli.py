@@ -1314,6 +1314,8 @@ def parser():
         hypergraph.add_argument('--' + flag, action='append', default=[])
     hypergraph.add_argument('--change-source', help='Locator for the declared change; creates no scientific verdict')
     hypergraph.add_argument('--trace-cone', help='Explain the selected support for one claim')
+    hypergraph.add_argument('--audit-receipts', action='store_true',
+                            help='verify receipt-bound evidence against project ledgers')
     hypergraph.add_argument('--json', action='store_true')
     usage = commands.add_parser("usage", help="Show locally recorded daily CLI invocation counts")
     window = usage.add_mutually_exclusive_group()
@@ -1394,6 +1396,16 @@ def parser():
     pr_control = pr_actions.add_parser("control-check")
     pr_control.add_argument("--candidate", required=True)
     pr_control.add_argument("--current", required=True)
+
+    hook = commands.add_parser("host-hook", help="Bind host dispatch to ledger admission identities; coverage is not an OS sandbox")
+    hook_actions = hook.add_subparsers(dest="action", required=True)
+    hook_actions.add_parser("install").add_argument("--permissive", action="store_true",
+                                                    help="Record advisory (non-strict) coverage")
+    hook_actions.add_parser("coverage")
+    hook_validate = hook_actions.add_parser("validate")
+    hook_validate.add_argument("--request", required=True)
+    for child in hook_actions.choices.values():
+        child.add_argument("--json", action="store_true")
 
     checkpoints = commands.add_parser("checkpoint", help="Record decisions and recover against live project state")
     cp_actions = checkpoints.add_subparsers(dest="action", required=True)
@@ -1600,6 +1612,7 @@ def _main():
                               locator=str(Path(args.input).resolve()) if args.input else 'command-line declaration',
                               source_base=Path(args.input).resolve().parent if args.input else None,
                               audit_files=args.audit_files, format_repairs=repairs,
+                              audit_receipts_enabled=args.audit_receipts,
                               retract_nodes=args.retract_node, retract_rules=args.retract_rule,
                               refute_nodes=args.refute_node, refute_rules=args.refute_rule,
                               change_source=args.change_source, trace=args.trace_cone,
@@ -1633,6 +1646,14 @@ def _main():
             result = cmd_advise(args, rds)
         elif args.command == "project":
             result = cmd_project(args)
+        elif args.command == "host-hook":
+            from rds_host_hook import install, coverage, validate_request
+            if args.action == "install":
+                result = install(args.root, strict=not args.permissive)
+            elif args.action == "coverage":
+                result = coverage(args.root)
+            else:
+                result = validate_request(args.root, load_spec(args.request))
         elif args.command == "checkpoint":
             result = cmd_checkpoint(args, rds)
         elif args.command == "artifacts":
@@ -1670,6 +1691,8 @@ def _main():
             return {'PASS': 0, 'FAIL': 1, 'UNKNOWN': 2}.get(result.get('regression_review', result).get('status'), 2)
         if args.command == 'hypergraph' and (result.get('truncated') or result.get('input_review', {}).get('errors')
                                               or result.get('status') == 'CONFLICT'):
+            return 2
+        if args.command == 'host-hook' and result.get('status') == 'HOST_GUARD_MISSING':
             return 2
         if args.command == 'rsi' and args.action == 'validate':
             return {'LOCAL_CASES_PASSED': 0, 'FAILED': 1, 'UNKNOWN': 2}[result['status']]

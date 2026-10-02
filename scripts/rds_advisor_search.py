@@ -245,7 +245,7 @@ def _dependency_review(context, *, audit_receipts=False, audit_files=False):
         # Existing internal maps stay strict. The compact declaration adapter
         # and program-owned snapshots let agents avoid writing these rows.
         if isinstance(spec, dict) and all(key in spec for key in ('nodes', 'hyperedges', 'goals')):
-            _validate(spec)
+            _validate(deepcopy(spec))
         if not isinstance(spec, dict) or not any(key in spec for key in
                 ('nodes', 'claims', 'hyperedges', 'rules', 'goals', 'goal', 'dependency_map')):
             raise ValueError('No dependency declarations supplied')

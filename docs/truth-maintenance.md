@@ -24,6 +24,7 @@ Unambiguous formatting repairs are automatic and retained in `input_review`:
 - `claims`/`nodes`, `rules`/`hyperedges`, `goal`/`goals`, `state`/`status`, and rule `from`/`premises`/`if`, `to`/`conclusion`/`then` are accepted.
 - Node records can be keyed by ID; a single premise or goal can be a string. Identifier whitespace and status case are normalized, and repeated AND premises are deduplicated.
 - Missing node status defaults to `UNKNOWN`; missing rule status defaults to `PROPOSED`. Referenced nodes and rule IDs are generated. Missing sources get input-declaration locators, and a source-free `SUPPORTED` assertion is withheld as `UNKNOWN` or `PROPOSED`.
+- A supplied file/hash source gets a locator while retaining its original fields. Invalid hash pairs remain explicit input errors. Identical repeated changes reuse the snapshot; a new change source is retained in history.
 
 Conflicting aliases, duplicate IDs, missing rule endpoints and unknown change targets are reported together. No change is applied while these ambiguities remain. Exit 2 means input clarification or a computation limit; an open scientific obligation is still usable and does not cause a formatting rejection. Duplicate JSON keys and non-finite numbers remain invalid. Imported code is data and is never executed.
 
