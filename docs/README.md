@@ -21,6 +21,7 @@ This guide targets v5.6.0-rc.1, including the mathematical implementation introd
 | Real records, locked project runs, rule replay and RDS self-development | [Tool and development loop](development-loop.md) | [工具与开发反馈循环](development-loop.md) |
 | Useful parallel batches, idle capacity and budget semantics | [Resource-aware planning](resource-planning.md) | [资源利用与并行规划](resource-planning.md) |
 | Campaign deadline, progress watchdog and maintenance runs | [Stop policy](stop-policy.md) | [停止策略](stop-policy.md) |
+| Host command hook, admission identity and bypass coverage | [Host hook](host-hook.md) | [宿主命令钩子](host-hook.md) |
 | DL verifiers, Mathlib and Lean 4 integration options | [Ecosystem survey](lean4-ecosystem-survey.md) | [Lean 生态与接入综述](lean4-ecosystem-survey.md) |
 | Same-model skill comparison and benchmark selection | [Benchmark plan](benchmark-plan.md) | [基准选型与对比方案](benchmark-plan.md) |
 
