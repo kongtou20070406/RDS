@@ -106,7 +106,7 @@ class PrintedProjectCommandTests(unittest.TestCase):
         # POSIX and PowerShell each receive a literal argument, never an evaluated string.
         import shlex
         quote = (lambda text: "'" + str(text).replace("'", "''").replace('‘', '‘‘').replace('’', '’’') + "'") \
-            if os.name == 'nt' else shlex.quote
+            if os.name == 'nt' else lambda text: shlex.quote(str(text))
         rendered = quote(placeholder)
         if rendered in command:
             return command.replace(rendered, quote(value))
