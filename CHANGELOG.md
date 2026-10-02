@@ -2,6 +2,8 @@
 
 ## 5.8.0 — Unreleased
 
+- Add runnable theory examples with finite numerical diagnostics, exact rational interval enclosures and explicit input/shape checks. Export the same implementation with positive/negative self-tests, create scaffold files exclusively, and preserve PASS/FAIL/UNKNOWN at the CLI boundary.
+
 - Bind native objectives before Advisor selection; review action-to-goal declarations and optionally consume the existing AND/OR dependency map. Retain missing evidence sets and proposed-rule obligations, and surface missing links without promoting graph closure to scientific acceptance.
 - Add an opt-in prospective goal-link guard that recomputes a connected path and current ready obligation before recording, launch or parent charge. Bind every mode's actual action target to the first path obligation, prefer actual node IDs over rule aliases, and recheck the current native objective binding without allowing stale advice to replace it. Preserve dependency maps and existing mode/method/objective fields through artifact import; closed side tasks and forged readiness do not bypass the configured structural check.
 
