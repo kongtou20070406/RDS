@@ -145,6 +145,8 @@ python -B scripts/rds_cli.py --root <project> project recover --id <run-id>
 python -B scripts/rds_cli.py --root <project> project status
 ```
 
+Commands emitted by `project next` and `project status --brief` are rendered for PowerShell on Windows and POSIX shells elsewhere. Run them from the repository checkout with `python` on PATH. For a template step, replace the quoted `<...>` slots with your actual manifest, decision ID or decision JSON file, keeping each replacement as one literal shell argument. Roots containing spaces or shell punctuation are already quoted; accepted run IDs beginning with `-` use `--id=`.
+
 The version-1 contract locks `bindings` with code/config/data/evaluator/protocol roles, exact `allowed_commands`, `output_roots` and a resource budget. A root-level file output that cannot sit strictly below a directory root is authorized by an optional `output_files` list of exact project-relative paths; the quick entry fills it for single-component outputs. The run manifest binds its protocol, argv, expected output paths, timeout and resource reservations. Execution uses the project directory and `shell=False`. Before and after execution, input and executable identities are checked; missing outputs, nonzero exit, timeout or changed bindings prevent successful completion.
 
 Before project initialization, an explicitly configured [execution policy](execution-policy.md) can freeze an attempt limit for bound requests. Project and quick entry then refuse duplicate spending or observe the existing attempt; the guide explains identity, recovery and coverage boundaries. This optional policy is separate from scientific acceptance.
