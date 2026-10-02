@@ -166,8 +166,12 @@ class ProjectStore:
         require(path.is_relative_to(self.root) and path != self.root, "Path escapes project root")
         require(not path.is_relative_to(self.state_dir.resolve()), "Project files cannot address operational state")
         if output:
+            # `output_roots` authorizes directories (strict containment); `output_files`
+            # authorizes exact root-level files that cannot sit strictly below a root.
             roots = [(self.root / item).resolve() for item in contract["output_roots"]]
-            require(any(path.is_relative_to(item) and path != item for item in roots), "Output is outside authorized roots")
+            files = [(self.root / item).resolve() for item in contract.get("output_files", [])]
+            require(path in files or any(path.is_relative_to(item) and path != item for item in roots),
+                    "Output is outside authorized roots; declare a directory root or a single-component output file")
             require(path not in {(self.root / b["path"]).resolve() for b in contract["bindings"]}, "Output overwrites bound input")
         return path
 
@@ -259,7 +263,7 @@ class ProjectStore:
     def initialize(self, contract):
         require(isinstance(contract, dict) and type(contract.get("schema")) is int
                 and contract["schema"] == 1, "Project contract schema must be 1")
-        require(set(contract) <= {"schema", "bindings", "allowed_commands", "output_roots", "budget", "description", "objective_sha256"}, "Unknown contract fields")
+        require(set(contract) <= {"schema", "bindings", "allowed_commands", "output_roots", "output_files", "budget", "description", "objective_sha256"}, "Unknown contract fields")
         if 'objective_sha256' in contract:
             from rds_math import objective
             goal = objective(self.root)
@@ -287,6 +291,11 @@ class ProjectStore:
         require(isinstance(roots, list) and roots, "Output roots required")
         for item in roots:
             self._path(item)
+        files = contract.get("output_files")
+        if files is not None:
+            require(isinstance(files, list) and all(isinstance(i, str) and i for i in files), "Output files must be a list of project-relative paths")
+            for item in files:
+                self._path(item)
         budget = contract.get("budget")
         require(isinstance(budget, dict) and "wall_seconds" in budget, "Budget vector requires wall_seconds")
         for unit, cap in budget.items():

@@ -2,6 +2,8 @@
 
 ## 5.8.0 — Unreleased
 
+- Authorize a root-level file output at the quick `exec` entry by declaring the exact file, instead of inferring the filename as a directory root and rejecting it before dispatch. Directory roots keep strict containment; traversal, input overwrite and the shared path guards are unchanged.
+
 - Expose a bounded local tool shortlist in `rsi list`, with exact-name lookup, callable entries and historical registration explicitly separated from fresh reuse checks. Route the Skill from a concrete capability gap to scoped practice, actual application and retained local reuse without loading the full catalogue.
 
 - Add on-demand bilingual research-record handoff prompts for private RSI review. Preserve decision-time evidence, raw failures, missing dependencies and scoped original goals without a new packaging CLI, state store or automatic adoption.

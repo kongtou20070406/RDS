@@ -432,9 +432,15 @@ def execute(args, review=None):
     # Absolute source-file arguments must refer to their frozen copies.
     frozen_argv = [argv[0]] + [str(Path(v).resolve().relative_to(root)) if Path(v).is_absolute() and Path(v).resolve() in files else v for v in argv[1:]]
     store = ProjectStore(workspace)
-    output_roots = sorted({Path(p).parts[0] for p in args.output}) or ['outputs']
+    # Multi-component paths authorize a directory root (strict containment). A
+    # single-component path is a root-level file: it cannot sit strictly below any
+    # root, so authorize that exact file instead of conflating it with a directory.
+    output_roots = sorted({Path(p).parts[0] for p in args.output if len(Path(p).parts) > 1}) or ['outputs']
+    output_files = sorted({Path(p).as_posix() for p in args.output if len(Path(p).parts) == 1})
     contract = {'schema': 1, 'bindings': bindings, 'allowed_commands': [frozen_argv],
                 'output_roots': output_roots, 'budget': {'wall_seconds': timeout}, 'description': 'Explicitly invoked frozen tool command; not an OS sandbox or science verdict'}
+    if output_files:
+        contract['output_files'] = output_files
     if goal_raw is not None:
         contract['objective_sha256'] = request['objective_sha256']
     store.initialize(contract)

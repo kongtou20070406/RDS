@@ -145,7 +145,7 @@ python -B scripts/rds_cli.py --root <project> project recover --id <run-id>
 python -B scripts/rds_cli.py --root <project> project status
 ```
 
-The version-1 contract locks `bindings` with code/config/data/evaluator/protocol roles, exact `allowed_commands`, `output_roots` and a resource budget. The run manifest binds its protocol, argv, expected output paths, timeout and resource reservations. Execution uses the project directory and `shell=False`. Before and after execution, input and executable identities are checked; missing outputs, nonzero exit, timeout or changed bindings prevent successful completion.
+The version-1 contract locks `bindings` with code/config/data/evaluator/protocol roles, exact `allowed_commands`, `output_roots` and a resource budget. A root-level file output that cannot sit strictly below a directory root is authorized by an optional `output_files` list of exact project-relative paths; the quick entry fills it for single-component outputs. The run manifest binds its protocol, argv, expected output paths, timeout and resource reservations. Execution uses the project directory and `shell=False`. Before and after execution, input and executable identities are checked; missing outputs, nonzero exit, timeout or changed bindings prevent successful completion.
 
 The command is trusted project code, not an OS security sandbox. Receipts keep process/run status, `task_gain` and `mechanism` separate; the latter two remain unknown until separately assessed. The adapter currently has CPU acceptance evidence. An existing GPU training project still needs its own locked command, instrumentation and scientific evaluator.
 
