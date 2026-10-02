@@ -8,6 +8,7 @@ This guide targets v5.6.0-rc.1, including the mathematical implementation introd
 
 | Guide | English | 简体中文 |
 | --- | --- | --- |
+| Proposed 5.8 goals, architecture, status and collaboration packages | [5.8 vision](5.8-vision.md) | [5.8 完整目标与协作计划](5.8-vision.zh-CN.md) |
 | Published autonomy taxonomy and current implementation scope | [Research autonomy](research-autonomy.md) | [原框架与当前能力](research-autonomy.md) |
 | Research responsibilities and experiment flow | [Research workflow](research-workflow.md) | [科研工作流](research-workflow.zh-CN.md) |
 | Declarations, certificates and verification scope | [Formal verification](formal-verification.md) | [形式化验证](formal-verification.zh-CN.md) |
