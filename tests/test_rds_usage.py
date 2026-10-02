@@ -14,6 +14,8 @@ import time
 import unittest
 from unittest.mock import patch
 
+from usage_cli_fixture import dual_sqlite_wait, ledger_snapshot, run_cli, wait_marker
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import rds_usage as usage
@@ -33,8 +35,60 @@ class UsageTests(unittest.TestCase):
         self.addCleanup(state.stop)
 
     def cli(self, *args):
-        return subprocess.run([sys.executable, "-B", str(ROOT / "scripts/rds_cli.py"), *args],
-                              cwd=self.folder, capture_output=True, text=True, encoding="utf-8", timeout=15)
+        return run_cli([sys.executable, "-B", str(ROOT / "scripts/rds_cli.py"), *args],
+                       self.folder, self.path)
+
+    def test_cli_fixture_preserves_both_real_logging_waits(self):
+        warmup = self.cli("--version")
+        self.assertEqual(warmup.returncode, 0)
+        began = time.monotonic()
+        with dual_sqlite_wait(self.folder, self.path) as probe:
+            with patch.dict(os.environ, probe["environment"]):
+                result = self.cli("--version")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, warmup.stdout)
+        self.assertEqual(len(probe["intervals"]), 2)
+        self.assertTrue(all(value >= 8.2 for value in probe["intervals"]), probe)
+        self.assertGreater(time.monotonic() - began, 15)
+        report = usage.summarize(days=1)
+        self.assertEqual(report["total_calls"], 2)
+        self.assertEqual(report["modes"], {"version": 2})
+        self.assertEqual(report["daily"][0]["successful"], 2)
+        self.assertEqual(report["daily"][0]["unfinished"], 0)
+        self.assertTrue(all(row["exit_code"] == 0 for row in ledger_snapshot(self.path)["calls"]))
+
+    def test_cli_fixture_watchdog_keeps_original_error_outputs_and_ledger(self):
+        usage.run_logged(lambda: 0, ["status"], "test")
+        before = ledger_snapshot(self.path)
+        ready = self.folder / "hung-child-ready"
+        script = ("import pathlib,sys,time; "
+                  "print('synthetic stdout',flush=True); "
+                  "print('synthetic stderr',file=sys.stderr,flush=True); "
+                  "pathlib.Path(sys.argv[1]).write_text('ready'); "
+                  "time.sleep(120)")
+        command = [sys.executable, "-B", "-c", script, str(ready)]
+        with self.assertRaises(subprocess.TimeoutExpired) as caught:
+            run_cli(command, self.folder, self.path, watchdog=.2,
+                    ready=lambda child: wait_marker(ready, child=child))
+        error = caught.exception
+        self.assertEqual(error.cmd, command)
+        self.assertEqual(error.timeout, .2)
+        self.assertIn("synthetic stdout", error.stdout)
+        self.assertIn("synthetic stderr", error.stderr)
+        diagnostics = json.loads(error.__notes__[0])
+        self.assertTrue(diagnostics["fixture_watchdog"])
+        self.assertNotEqual(diagnostics["returncode"], 0)
+        self.assertEqual(diagnostics["ledger"], before)
+        self.assertEqual(ledger_snapshot(self.path), before)
+        from rds_project import _alive
+        self.assertFalse(_alive(diagnostics["pid"]))
+
+    def test_cli_fixture_does_not_convert_nonzero_to_success(self):
+        command = [sys.executable, "-B", "-c",
+                   "import sys; print('synthetic failure',file=sys.stderr); sys.exit(7)"]
+        result = run_cli(command, self.folder, self.path)
+        self.assertEqual(result.returncode, 7)
+        self.assertIn("synthetic failure", result.stderr)
 
     def test_midnight_daily_counts_and_untracked_history(self):
         for moment, command, exit_code in ((datetime(2026, 9, 30, 23, 59), "formal", 0),
