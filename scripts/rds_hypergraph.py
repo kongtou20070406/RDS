@@ -320,7 +320,8 @@ def trace_support_cone(spec, node_id):
 
 
 def review_hypergraph(value, *, locator="input", retract_nodes=(), retract_rules=(),
-                      refute_nodes=(), refute_rules=(), change_source=None, trace=None, updates=()):
+                      refute_nodes=(), refute_rules=(), change_source=None, trace=None, updates=(),
+                      update_locators=()):
     """Own input compilation, status changes and one current dependency analysis.
 
     The returned dependency_map is the next input: callers submit changes and
@@ -332,7 +333,8 @@ def review_hypergraph(value, *, locator="input", retract_nodes=(), retract_rules
     def incomplete():
         return {"status": "UNKNOWN", "assurance": ASSURANCE, "input_review": input_review,
                 "dependency_map": spec, "authorization": "UNCHANGED",
-                "next_step": {"action": "clarify_input", "fields": input_review["errors"]}}
+                "next_step": {"action": "clarify_input", "fields": input_review["errors"][:3],
+                              "omitted_fields": max(0, len(input_review["errors"]) - 3)}}
 
     if input_review["errors"]:
         return incomplete()
@@ -349,7 +351,8 @@ def review_hypergraph(value, *, locator="input", retract_nodes=(), retract_rules
         input_review['errors'].append({'path': 'updates', 'reason': 'supply at most eight declaration fragments'})
         return incomplete()
     for i, update in enumerate(updates):
-        fragment, fragment_review = prepare_input(update, str(locator) + '#update/' + str(i))
+        fragment, fragment_review = prepare_input(update, update_locators[i] if i < len(update_locators)
+                                                  else str(locator) + '#update/' + str(i))
         for kind in ('repairs', 'warnings', 'errors'):
             input_review[kind].extend({'path': 'update[' + str(i) + '].' + row['path'], 'reason': row['reason']}
                                       for row in fragment_review[kind])
@@ -379,6 +382,7 @@ def review_hypergraph(value, *, locator="input", retract_nodes=(), retract_rules
                     candidate[key][positions[name]] = merged
                 applied.append({'kind': kind, 'id': name, 'operation': 'declare',
                                 'previous_status': previous['status'] if previous else None,
+                                'previous_source': deepcopy(previous['source']) if previous else None,
                                 'status': merged['status'], 'source': deepcopy(merged['source'])})
         candidate['goals'] = list(dict.fromkeys(candidate['goals'] + fragment['goals']))
     if input_review['errors']:
@@ -424,8 +428,11 @@ def review_hypergraph(value, *, locator="input", retract_nodes=(), retract_rules
                 origin = deepcopy(change_source) if change_source is not None \
                     else str(locator) + "#change/" + kind + "/" + record["id"]
                 applied.append({"kind": kind, "id": record["id"], "previous_status": record["status"],
+                                "previous_source": deepcopy(record["source"]),
                                 "status": changes[key], "source": origin})
-                record.update(status=changes[key], source=origin)
+                # Withdraw support without destroying the original evidence binding.
+                # The change's source is recorded in the persisted revision.
+                record.update(status=changes[key])
     result = analyze_hypergraph(revised)
     result.update(status="INCOMPLETE" if result["truncated"] else "ANALYZED",
                   dependency_map=revised, input_review=input_review, authorization="UNCHANGED")
@@ -458,8 +465,8 @@ def review_hypergraph(value, *, locator="input", retract_nodes=(), retract_rules
     return result
 
 
-def cascade_revoke(spec, contradicted_node_ids=(), contradicted_rule_ids=()):
-    """Recompute ordinary fields from the revised map; there is one current closure."""
+def cascade_refute(spec, contradicted_node_ids=(), contradicted_rule_ids=()):
+    """Declare contradiction and recompute ordinary fields from the revised map."""
     return review_hypergraph(spec, refute_nodes=contradicted_node_ids,
                             refute_rules=contradicted_rule_ids)
 

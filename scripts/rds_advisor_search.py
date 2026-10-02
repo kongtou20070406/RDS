@@ -269,7 +269,9 @@ def _dependency_review(context, *, audit_receipts=False, audit_files=False):
                                        "reason": "the installed analyzer cannot audit receipts; "
                                                  "declared bindings stay fail-closed"}
         if input_review['repairs'] or input_review['warnings']:
-            result.update(input_review=input_review, dependency_map=spec)
+            normalized = json.dumps(spec, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+            result.update(input_review=input_review, dependency_map=spec,
+                          dependency_map_sha256=hashlib.sha256(normalized).hexdigest())
         return {**result, "input_sha256": hashlib.sha256(raw).hexdigest(),
                 "status": "INCOMPLETE" if result["truncated"] else "ANALYZED",
                 "authorization": "UNCHANGED"}

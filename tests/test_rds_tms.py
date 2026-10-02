@@ -11,7 +11,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from rds_advisor_search import _dependency_review
-from rds_hypergraph import analyze_hypergraph, cascade_revoke, review_hypergraph
+from rds_hypergraph import analyze_hypergraph, cascade_refute, review_hypergraph
 from rds_hypergraph_input import load_input
 
 
@@ -114,7 +114,7 @@ class TMSBehaviorTests(unittest.TestCase):
         value['claims']['b'] = {'status': 'SUPPORTED', 'source': 'independent-observation'}
         value['rules'].append({'from': 'b', 'to': 'g', 'status': 'SUPPORTED', 'source': 'independent-rule'})
         first = review_hypergraph(value)
-        result = cascade_revoke(first, contradicted_node_ids=['a'])
+        result = cascade_refute(first, contradicted_node_ids=['a'])
         self.assertEqual(result['declared_supported_closure'], ['b', 'g'])
         self.assertEqual(result['goals']['g']['status'], 'DECLARED_SUPPORTED')
         self.assertEqual(result['revision']['lost_support'], ['a'])

@@ -79,8 +79,9 @@ def prepare_input(value, locator="input"):
         note("errors", "$", "supply an object containing claims/nodes, rules and goal(s)")
         return None, review
     spec = deepcopy(value)
-    if not any(k in spec for k in ("nodes", "claims", "hyperedges", "rules")) \
-            and isinstance(spec.get("dependency_map"), dict):
+    if isinstance(spec.get("dependency_map"), dict) and (
+            spec.get("assurance") == "INPUT_REPORTED_DEPENDENCY_ANALYSIS_NOT_PROOF"
+            or not any(k in spec for k in ("nodes", "claims", "hyperedges", "rules"))):
         spec = spec["dependency_map"]
         note("repairs", "$", "loaded the program-generated dependency_map snapshot")
     # Existing valid maps retain their exact metadata and reported identities.
