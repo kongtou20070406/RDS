@@ -1341,6 +1341,16 @@ def parser():
     pr_control.add_argument("--candidate", required=True)
     pr_control.add_argument("--current", required=True)
 
+    hook = commands.add_parser("host-hook", help="Bind host dispatch to ledger admission identities; coverage is not an OS sandbox")
+    hook_actions = hook.add_subparsers(dest="action", required=True)
+    hook_actions.add_parser("install").add_argument("--permissive", action="store_true",
+                                                    help="Record advisory (non-strict) coverage")
+    hook_actions.add_parser("coverage")
+    hook_validate = hook_actions.add_parser("validate")
+    hook_validate.add_argument("--request", required=True)
+    for child in hook_actions.choices.values():
+        child.add_argument("--json", action="store_true")
+
     checkpoints = commands.add_parser("checkpoint", help="Record decisions and recover against live project state")
     cp_actions = checkpoints.add_subparsers(dest="action", required=True)
     for action in ("save", "restore"):
@@ -1549,6 +1559,14 @@ def _main():
             result = cmd_advise(args, rds)
         elif args.command == "project":
             result = cmd_project(args)
+        elif args.command == "host-hook":
+            from rds_host_hook import install, coverage, validate_request
+            if args.action == "install":
+                result = install(args.root, strict=not args.permissive)
+            elif args.action == "coverage":
+                result = coverage(args.root)
+            else:
+                result = validate_request(args.root, load_spec(args.request))
         elif args.command == "checkpoint":
             result = cmd_checkpoint(args, rds)
         elif args.command == "artifacts":
@@ -1585,6 +1603,8 @@ def _main():
         if args.command == 'guard' or args.command == 'exec' and 'regression_review' in result:
             return {'PASS': 0, 'FAIL': 1, 'UNKNOWN': 2}.get(result.get('regression_review', result).get('status'), 2)
         if args.command == 'hypergraph' and result.get('truncated'):
+            return 2
+        if args.command == 'host-hook' and result.get('status') == 'HOST_GUARD_MISSING':
             return 2
         if args.command == 'rsi' and args.action == 'validate':
             return {'LOCAL_CASES_PASSED': 0, 'FAILED': 1, 'UNKNOWN': 2}[result['status']]
