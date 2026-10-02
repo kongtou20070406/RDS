@@ -89,6 +89,26 @@ def identity(value):
     return value
 
 
+def json_object(value, label):
+    require(isinstance(value, dict), label + " must be a JSON object")
+    return value
+
+
+def required_field(record, key, label):
+    require(key in record, "Missing " + label + " field: " + key)
+    return record[key]
+
+
+def path_field(value, label):
+    require(isinstance(value, str) and value, label + " must be a non-empty path string")
+    return value
+
+
+def known_plan(state, plan_id):
+    require(plan_id in state["plans"], "Unknown plan ID: " + plan_id)
+    return state["plans"][plan_id]
+
+
 def resource_vector(value, positive=False):
     require(isinstance(value, dict) and set(value) == RESOURCES,
             "Budget must explicitly contain runtime_ms and runs")
@@ -274,27 +294,33 @@ class RDSState:
 
 
 def cmd_init(args, rds):
-    contract = load_spec(args.contract)
+    contract = json_object(load_spec(args.contract), "Contract")
     reject_self_signatures(contract)
     for key in ("project_id", "claim", "primary_metric", "budget", "splits"):
         require(key in contract, "Missing contract field: " + key)
     identity(contract["project_id"])
-    metric = contract["primary_metric"]
-    require(metric["name"] == "mse" and metric["direction"] == "min",
+    metric = json_object(contract["primary_metric"], "Contract primary_metric")
+    require(metric.get("name") == "mse" and metric.get("direction") == "min",
             "The reference runner supports only paired MSE minimization")
-    require(rational(metric["min_useful_delta"]) > 0, "Precommit a positive minimum useful gain")
+    delta = required_field(metric, "min_useful_delta", "contract primary_metric")
+    require(rational(delta) > 0, "Precommit a positive minimum useful gain")
     require(contract.get("evaluation_scope") in {"finite_locked_dataset", "population"},
             "Declare evaluation_scope: finite_locked_dataset or population")
-    limits = resource_vector(contract["budget"]["limits"])
-    floor = resource_vector(contract["budget"]["confirmation_floor"])
+    budget = json_object(contract["budget"], "Contract budget")
+    limits = resource_vector(required_field(budget, "limits", "contract budget"))
+    floor = resource_vector(required_field(budget, "confirmation_floor", "contract budget"))
     require(all(floor[k] <= limits[k] for k in RESOURCES), "Confirmation reserve exceeds cap")
+    json_object(contract["splits"], "Contract splits")
     require(contract["splits"], "Register at least one data partition")
     registry = {}
     for sid, split in contract["splits"].items():
         identity(sid)
-        require(split["role"] in {"train", "development", "confirmation"}, "Unknown split role")
-        identity(split["cohort"])
-        path = Path(split["path"])
+        json_object(split, "Contract split " + sid)
+        role = required_field(split, "role", "contract split " + sid)
+        require(isinstance(role, str) and role in {"train", "development", "confirmation"}, "Unknown split role")
+        identity(required_field(split, "cohort", "contract split " + sid))
+        path = Path(path_field(required_field(split, "path", "contract split " + sid),
+                               "Contract split " + sid + " path"))
         path = (rds.root / path).resolve() if not path.is_absolute() else path.resolve()
         raw = read_bounded(path, 2_000_000)
         rows = read_rows(raw.decode("utf-8-sig"))
@@ -303,7 +329,8 @@ def cmd_init(args, rds):
         registry[sid] = {**split, "path": str(path), "sha256": digest(raw),
                          "sample_ids": [digest(r[0]) for r in rows]}
     contract["splits"] = registry
-    baseline = Path(contract["baseline_source"])
+    baseline = Path(path_field(required_field(contract, "baseline_source", "contract"),
+                               "Contract baseline_source"))
     baseline = (rds.root / baseline).resolve() if not baseline.is_absolute() else baseline.resolve()
     baseline_raw = read_bounded(baseline, 8192)
     baseline_ast = parse_source(baseline_raw.decode("utf-8-sig"))["control"]
@@ -330,9 +357,9 @@ def cmd_init(args, rds):
 
 
 def cmd_hypothesis(args, rds):
-    spec = load_spec(args.spec)
+    spec = json_object(load_spec(args.spec), "Hypothesis spec")
     reject_self_signatures(spec)
-    hid = identity(spec["id"])
+    hid = identity(required_field(spec, "id", "hypothesis"))
     require(spec.get("proposition") and spec.get("falsifier"), "Precommit proposition and falsifier")
     require(spec.get("type") in {"task_gain", "mechanism", "search_policy"}, "Unknown hypothesis type")
     formal_requirement(spec)
@@ -376,9 +403,10 @@ def validate_plan(plan, state, rds, admission=None):
     require(set(plan) == {"id", "hypothesis_id", "split_id", "purpose", "source", "resources"},
             "Plan fields: id, hypothesis_id, split_id, purpose, source, resources; no imported permits")
     identity(plan["id"])
-    require(plan["hypothesis_id"] in state["hypotheses"], "Unknown hypothesis")
-    require(plan["split_id"] in state["contract"]["splits"], "Unknown split")
-    require(plan["purpose"] in {"explore", "confirm"}, "Unknown purpose")
+    require(isinstance(plan["hypothesis_id"], str) and plan["hypothesis_id"] in state["hypotheses"],
+            "Unknown hypothesis")
+    require(isinstance(plan["split_id"], str) and plan["split_id"] in state["contract"]["splits"], "Unknown split")
+    require(isinstance(plan["purpose"], str) and plan["purpose"] in {"explore", "confirm"}, "Unknown purpose")
     resources = resource_vector(plan["resources"], positive=True)
     require(resources["runtime_ms"] <= 60000, "Reference runner has a 60-second maximum allocation")
     require(state["final_plan"] is None, "Selection is frozen by a final plan")
@@ -395,7 +423,7 @@ def validate_plan(plan, state, rds, admission=None):
         protected = budget["confirmation_floor"][key] if plan["purpose"] == "explore" else 0
         require(budget["spent"][key] + budget["reserved"][key] + resources[key] + protected
                 <= budget["limits"][key], "Budget unavailable or protected for confirmation: " + key)
-    path = Path(plan["source"])
+    path = Path(path_field(plan["source"], "Plan source"))
     path = (rds.root / path).resolve() if not path.is_absolute() else path.resolve()
     source = read_bounded(path, 8192)
     functions = parse_source(source.decode("utf-8-sig"))
@@ -421,11 +449,13 @@ def validate_plan(plan, state, rds, admission=None):
 
 
 def cmd_plan(args, rds, advisory=False):
-    plan = load_spec(args.plan if advisory else args.spec)
+    plan = json_object(load_spec(args.plan if advisory else args.spec), "Plan spec")
+    # Only a string ID can name a reserved plan; anything else falls through to validate_plan.
+    plan_id = plan.get("id") if isinstance(plan.get("id"), str) else None
     # Solver work is deliberately outside the reservation transaction. The
     # committing transaction rechecks every resource and source binding.
     with rds.snapshot() as (_, state):
-        existing = state["plans"].get(plan.get("id"))
+        existing = state["plans"].get(plan_id)
         if existing:
             require(digest(plan) == existing["binding"]["plan_sha256"], "Plan ID reused with changed contents")
             return {"plan_id": plan["id"], "run_status": existing["run_status"], "idempotent": True}
@@ -435,7 +465,7 @@ def cmd_plan(args, rds, advisory=False):
                 "probe": binding["admission_probe"],
                 "note": "Admission is rechecked atomically by plan create"}
     with rds.transaction() as (db, state):
-        existing = state["plans"].get(plan.get("id"))
+        existing = state["plans"].get(plan_id)
         if existing:
             require(digest(plan) == existing["binding"]["plan_sha256"], "Plan ID reused with changed contents")
             return {"plan_id": plan["id"], "run_status": existing["run_status"], "idempotent": True}
@@ -457,7 +487,7 @@ def cmd_plan(args, rds, advisory=False):
 
 def cmd_cancel(args, rds):
     with rds.transaction() as (db, state):
-        plan = state["plans"][args.id]
+        plan = known_plan(state, args.id)
         if plan["run_status"] == "CANCELLED":
             return {"run_status": "CANCELLED", "idempotent": True}
         require(plan["run_status"] == "RESERVED", "Only an unstarted reservation can be released")
@@ -490,7 +520,7 @@ def cmd_run(args, rds):
     # Slow proof replay runs outside either SQLite transaction. The charging
     # transaction rechecks liveness and the exact binding it was replayed for.
     with rds.snapshot() as (_, snapshot):
-        candidate = snapshot["plans"][args.id]
+        candidate = known_plan(snapshot, args.id)
         if candidate["run_status"] != "RESERVED":
             return {"run_id": candidate["run_id"], "run_status": candidate["run_status"], "idempotent": True}
         expected_binding = candidate["binding"]
@@ -592,7 +622,7 @@ def cmd_run(args, rds):
 
 def cmd_recover(args, rds):
     with rds.transaction() as (db, state):
-        plan = state["plans"][args.id]
+        plan = known_plan(state, args.id)
         require(plan["run_status"] == "RUNNING", "Only RUNNING plans require reconciliation")
         require(time.time_ns() > plan["lease_expires_ns"], "Execution lease has not expired")
         plan["run_status"] = "RECOVERY_REQUIRED"
