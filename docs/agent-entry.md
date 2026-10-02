@@ -73,6 +73,8 @@ Before a material computation, identify its mathematical structure, intended res
 
 ### Review the research choice
 
+A ready rival test is named as a check of an UNKNOWN goal predicate only when its action directly targets that predicate or its existing `goal_contribution` names a valid declared path ending there. An invalid or UNKNOWN mapped path is not bypassed by the action label. Guidance names only the linked predicates and leaves other UNKNOWN obligations open; a declared path is not proof that an observation will resolve the goal. Unrelated exploratory candidates stay available and do not become evidence for application progress (#99).
+
 Advisor returns `search.selection_review` alongside the existing readiness and cost ranking. It reports a single supplied graph direction, absent or overlapping rival predictions, unresolved prediction premises and search truncation. `READY` still means that the configured procedure's prerequisites are satisfied; it does not show that this is the best research direction. A single scoped proof obligation needs no invented rival experiment. Composed intervention plans remain a separate review scope.
 
 For empirical comparisons, use the existing action `discrimination` fields: explicit rival IDs, same-scope predicted outcome labels, their source and any application conditions. Only supported conditional coverage at comparable sourced costs can establish the existing Pareto relation. Naming two rivals or giving both the same pass/fail predictions supplies no causal discrimination. When local manipulation repeatedly passes but task quality fails, investigate the missing local-to-task or source-to-target bridge rather than treating the proxy as sufficient or claiming the whole hypothesis family disproved.

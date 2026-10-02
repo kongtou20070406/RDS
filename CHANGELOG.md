@@ -2,6 +2,7 @@
 
 ## 5.8.0 — Unreleased
 
+- Link Advisor's goal-evidence discriminator guidance only to ready rival checks that directly target an unresolved goal predicate or have a valid existing declared contribution path to it. Keep unrelated exploratory candidates available, name uncovered obligations, preserve invalid/missing-link fallback and describe declared links without claiming the rival outcome resolves the goal. (#99)
 - Render `project next` and the next step in `project status --brief` with literal root/ID arguments for PowerShell on Windows and POSIX shells elsewhere. Spaces, quotes and shell metacharacters no longer split or expand paths; `--id=` preserves accepted IDs beginning with a hyphen. Quote template slots consistently. Next-step selection, permissions, attempts, receipts and budgets are unchanged.
 - Authorize a root-level file output at the quick `exec` entry by declaring the exact file, instead of inferring the filename as a directory root and rejecting it before dispatch. Directory roots keep strict containment; traversal, input overwrite and the shared path guards are unchanged.
 - Ground receipt-bound evidence per project: `receipt_audit.grounded_receipts` now reports `(project_root, sha256)` pairs and every closure/repair check compares the pair, so a receipt grounded in one project's ledger can no longer support a same-sha256 binding declared under another project — that binding stays fail-closed in `receipt_blocked_node_ids` with its repair obligation.
