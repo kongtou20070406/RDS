@@ -244,9 +244,19 @@ class TheoryToolTests(unittest.TestCase):
                 report = json.loads(checked.stdout)
                 self.assertEqual(report["self_test_status"], "PASS")
                 self.assertEqual(report["positive"]["status"], "UNKNOWN" if card_id == "state_space_refinement" else "PASS")
+                if card_id == 'lean_axiom_review':
+                    self.assertEqual(report['positive']['assurance'], 'INPUT_REPORTED_AXIOM_AUDIT')
+                    self.assertFalse(report['positive']['lean_verified'])
+                    self.assertIsNone(report['positive']['is_constructive'])
                 namespace = {"__name__": "exported_operator"}
                 exec(compile(target.read_text(encoding="utf-8"), str(target), "exec"), namespace)
                 modules[card_id] = namespace
+
+            lean_audit = modules['lean_axiom_review']['LeanAxiomReviewOperator']
+            missing = lean_audit.audit_lean_axioms('missing.theorem', 'not Lean output',
+                                                  allowed_axioms=set(), is_stdout=True)
+            self.assertEqual(missing['status'], 'UNKNOWN')
+            self.assertIsNone(missing['axioms_detected'])
 
             state = modules["state_space_refinement"]["ContinuousStateSpaceOperator"](state_dim=1)
             with self.assertRaises(ValueError):

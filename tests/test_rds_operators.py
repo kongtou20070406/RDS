@@ -168,8 +168,10 @@ class OperatorUnitTests(unittest.TestCase):
             is_stdout=True
         )
         self.assertEqual(res_constructive["status"], "PASS")
-        self.assertEqual(res_constructive["assurance"], "AXIOM_DEPENDENCY_VERIFIED")
-        self.assertTrue(res_constructive["is_constructive"])
+        self.assertEqual(res_constructive["assurance"], "INPUT_REPORTED_AXIOM_AUDIT")
+        self.assertIsNone(res_constructive["is_constructive"])
+        self.assertTrue(res_constructive['reported_axiom_free'])
+        self.assertFalse(res_constructive['lean_verified'])
         self.assertEqual(res_constructive["axioms_detected"], [])
 
         # 2. Classical axioms allowed
@@ -201,6 +203,61 @@ class OperatorUnitTests(unittest.TestCase):
         )
         self.assertEqual(res_sorry["status"], "FAIL")
         self.assertEqual(res_sorry["assurance"], "SORRY_AXIOM_DETECTED")
+
+    def test_lean_audit_missing_wrong_malformed_or_conflicting_report_is_unknown(self):
+        reports = ['', 'not Lean output', "'T.other' does not depend on any axioms",
+                   "'T' depends on axioms: [", "'T' depends on axioms: [propext,,Quot.sound]",
+                   "'T' depends on axioms: [propext,]", "'T' depends on axioms: [garbage !]",
+                   "'T' depends on axioms: [propext, propext]", "'T' does not depend on any axioms trailing garbage",
+                   "'T' does not depend on any axioms\n'T' depends on axioms: [sorryAx]",
+                   "'T' does not depend on any axioms\n'T' malformed report",
+                   "-- 'T' does not depend on any axioms",
+                   "'T' does not depend on any axioms\n'T' does not depend on any axioms",
+                   "'T' depends on axioms: [«unsupported name»]"]
+        for text in reports:
+            with self.subTest(text=text):
+                report = ops.LeanAxiomReviewOperator.audit_lean_axioms('T', text, allowed_axioms=set(), is_stdout=True)
+                self.assertEqual(report['status'], 'UNKNOWN')
+                self.assertIsNone(report['axioms_detected'])
+                self.assertIsNone(report['is_constructive'])
+                self.assertFalse(report['lean_verified'])
+
+    def test_lean_audit_source_cannot_forge_report_and_sorry_ax_cannot_be_allowed(self):
+        source = "theorem T : True := by trivial\n/-\n'T' does not depend on any axioms\n-/"
+        report = ops.LeanAxiomReviewOperator.audit_lean_axioms('T', source)
+        self.assertEqual(report['status'], 'UNKNOWN')
+        gap = ops.LeanAxiomReviewOperator.audit_lean_axioms('T', "'T' depends on axioms: [sorryAx]",
+                                                            allowed_axioms={'sorryAx'}, is_stdout=True)
+        self.assertEqual(gap['status'], 'FAIL')
+        self.assertEqual(gap['disallowed_axioms'], ['sorryAx'])
+
+    def test_lean_audit_multiline_explicit_empty_and_exact_theorem(self):
+        for text, allowed, expected in [("'T' depends on axioms: []", set(), []),
+                                        ("'T' does not depend on any axioms\r\n", set(), []),
+                                        ("'T' depends on axioms: [propext,\n Quot.sound]", {'propext', 'Quot.sound'}, ['Quot.sound', 'propext']),
+                                        ("'other' depends on axioms: [sorryAx]\n'T' does not depend on any axioms", set(), [])]:
+            report = ops.LeanAxiomReviewOperator.audit_lean_axioms('T', text, allowed_axioms=allowed, is_stdout=True)
+            self.assertEqual(report['status'], 'PASS')
+            self.assertEqual(report['axioms_detected'], expected)
+            self.assertEqual(report['assurance'], 'INPUT_REPORTED_AXIOM_AUDIT')
+            self.assertIsNone(report['is_constructive'])
+            self.assertFalse(report['lean_verified'])
+
+    def test_lean_audit_invalid_inputs_are_bounded(self):
+        for name, text, allowed, flag in [('', 'x', set(), True), ('T', 'x' * 65537, set(), True),
+                                        ('T', '汉' * 21846, set(), True), ('T\nother', 'x', set(), True),
+                                         ('T', None, set(), True), ('T', 'x', 'propext', True),
+                                         ('T', 'x', {1}, True), ('T', 'x', set(), 'false')]:
+            with self.subTest(name=name, flag=flag), self.assertRaises(ValueError):
+                ops.LeanAxiomReviewOperator.audit_lean_axioms(name, text, allowed_axioms=allowed, is_stdout=flag)
+
+    def test_lean_audit_export_retains_unknown_and_unverified_evidence(self):
+        namespace = {'__name__': 'exported_operator'}
+        exec(compile(ops.get_operator_scaffold('lean_axiom_review'), '<exported-operator>', 'exec'), namespace)
+        report = namespace['LeanAxiomReviewOperator'].audit_lean_axioms('missing.theorem', 'not Lean output', is_stdout=True)
+        self.assertEqual(report['status'], 'UNKNOWN')
+        self.assertFalse(report['lean_verified'])
+        self.assertIsNone(report['is_constructive'])
 
     def test_bounded_finite_model_operator(self):
         elems = ["e", "a", "b", "c"]
