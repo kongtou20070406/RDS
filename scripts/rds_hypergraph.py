@@ -7,6 +7,24 @@ their evidence atoms are ``node:<id>``. Proposed rules add ``rule:<id>``.
 Only UNKNOWN leaves default to direct evidence atoms; derived nodes need
 explicit allow_direct_evidence=true for a separate direct-proof route.
 SUPPORTED closure never uses those hypothetical evidence atoms.
+
+Evidence bindings (V2 slice): a node or hyperedge may declare
+``evidence: {"receipt": {"project_root": ..., "sha256": ...}}`` naming one
+receipt in a project ledger. Receipt-bound records enter the SUPPORTED
+closure only when ``--audit-receipts`` (or ``audit_receipts_enabled=True``)
+grounds the binding against the named ledger - a receipt with that sha256
+whose ``run_status`` is ``SUCCEEDED``. Declaring a binding without running
+the audit is fail-closed: the record stays out of the closure and is listed
+in ``receipt_blocked_node_ids``. Matching bytes and succeeded
+runs are not statement verification: the assurance string is unchanged.
+
+Retraction (V2 slice): flipping any one derivation's status to CONTRADICTED
+or UNKNOWN is expressed by editing that record's status in the input map and
+re-running analysis; the closure recomputes from scratch, so a conclusion
+with a remaining healthy OR route (a different SUPPORTED hyperedge with
+grounded premises) keeps its support. Only conclusions whose every route
+lost support are retracted, and aggregate failure never names a guilty
+premise.
 """
 import argparse
 from copy import deepcopy
@@ -48,6 +66,23 @@ def _source(value):
                  "source sha256 must have 64 hexadecimal characters")
 
 
+def _evidence(value, kind, ident):
+    _require(value is None or isinstance(value, dict), f"{kind} {ident} evidence must be an object")
+    if value is None:
+        return None
+    _require(set(value) == {"receipt"}, f"{kind} {ident} evidence supports only receipt bindings")
+    receipt = value["receipt"]
+    _require(isinstance(receipt, dict) and set(receipt) == {"project_root", "sha256"},
+             f"{kind} {ident} receipt binding needs project_root and sha256")
+    _require(isinstance(receipt["project_root"], str) and receipt["project_root"].strip(),
+             f"{kind} {ident} receipt project_root must be a nonempty path")
+    digest = receipt["sha256"]
+    _require(isinstance(digest, str) and len(digest) == 64
+             and all(c in "0123456789abcdefABCDEF" for c in digest),
+             f"{kind} {ident} receipt sha256 must have 64 hexadecimal characters")
+    return {"receipt": {"project_root": receipt["project_root"], "sha256": digest.lower()}}
+
+
 def _validate(spec):
     _require(isinstance(spec, dict) and spec.get("schema", 1) == 1,
              "hypergraph schema must be 1")
@@ -78,6 +113,9 @@ def _validate(spec):
                  or type(node["allow_direct_evidence"]) is bool,
                  "allow_direct_evidence must be boolean")
         _source(node.get("source"))
+        if node.get("evidence") is not None:
+            node["evidence"] = deepcopy(node["evidence"])
+            node["evidence"] = _evidence(node["evidence"], "node", ident)
         index[ident] = node
     for edge in edges:
         _require(isinstance(edge, dict), "hyperedge must be an object")
@@ -91,6 +129,9 @@ def _validate(spec):
         _require(edge.get("status") in ("SUPPORTED", "PROPOSED", "CONTRADICTED"),
                  "invalid hyperedge status")
         _source(edge.get("source"))
+        if edge.get("evidence") is not None:
+            edge["evidence"] = deepcopy(edge["evidence"])
+            edge["evidence"] = _evidence(edge["evidence"], "hyperedge", ident)
     _require(all(isinstance(goal, str) and goal in index for goal in goals)
              and len(goals) == len(set(goals)), "unknown or duplicate goal")
     return index, edges, goals, limits
@@ -132,14 +173,68 @@ def audit_sources(spec, base_dir=None):
             "all_requested_files_match": all(row["status"] == "MATCH" for row in rows)}
 
 
-def _supported_closure(nodes, edges):
+def audit_receipts(spec):
+    """Verify receipt-bound evidence against frozen, append-only project ledgers.
+
+    A binding is GROUNDED only when the named ledger holds a receipt with the
+    declared sha256 whose run_status is SUCCEEDED. A succeeded run is not a
+    statement proof; the result only upgrades the receipt, never the claim.
+    """
+    nodes, edges, _, _ = _validate(spec)
+    bindings = {}
+    for kind, records in (("node", nodes.values()), ("rule", edges)):
+        for record in records:
+            evidence = record.get("evidence")
+            if evidence is None:
+                continue
+            binding = evidence["receipt"]
+            key = (binding["project_root"], binding["sha256"])
+            bindings.setdefault(key, []).append(f"{kind}:{record['id']}")
+    audited = []
+    for (root_text, digest_sha), users in sorted(bindings.items()):
+        row = {"receipt": {"project_root": root_text, "sha256": digest_sha}, "used_by": sorted(users)}
+        try:
+            from rds_project import ProjectStore
+            store = ProjectStore(root_text)
+            with store._db(True) as db:
+                hit = db.execute("SELECT body FROM receipts WHERE sha256=?", (digest_sha,)).fetchone()
+            if hit is None:
+                row.update(status="RECEIPT_NOT_FOUND")
+            else:
+                body = json.loads(hit["body"])
+                if body.get("sha256") != digest_sha or body.get("run_status") != "SUCCEEDED":
+                    row.update(status="RECEIPT_NOT_SUCCEEDED",
+                               run_status=body.get("run_status"))
+                else:
+                    row.update(status="GROUNDED", run_id=body.get("run_id"))
+        except (ValueError, FileNotFoundError, OSError) as exc:
+            row.update(status="LEDGER_UNAVAILABLE", reason=type(exc).__name__)
+        audited.append(row)
+    grounded = {row["receipt"]["sha256"] for row in audited if row["status"] == "GROUNDED"}
+    return {"assurance": "RECEIPT_EXECUTION_NOT_STATEMENT_VERIFICATION", "audits": audited,
+            "grounded_receipt_sha256s": sorted(grounded),
+            "all_receipts_grounded": bool(audited) and len(grounded) == len(audited)}
+
+
+def _supported_closure(nodes, edges, grounded_receipts=frozenset()):
     """Declared closure with the original scan-order first derivation witnesses."""
-    closure = {ident for ident, node in nodes.items() if node["status"] == "SUPPORTED"}
+    closure, receipt_block = set(), {}
+    for ident, node in nodes.items():
+        if node["status"] != "SUPPORTED":
+            continue
+        evidence = node.get("evidence")
+        if evidence is None or evidence["receipt"]["sha256"] in grounded_receipts:
+            closure.add(ident)
+        else:
+            receipt_block[ident] = "receipt not grounded"
     derivations, conflicts, pending = {}, set(), []
     # Forward-ordered graphs finish in one scan, then one bounded heap pass.
     for i, edge in enumerate(edges):
         head = edge["conclusion"]
         if edge["status"] != "SUPPORTED" or head in closure:
+            continue
+        evidence = edge.get("evidence")
+        if evidence is not None and evidence["receipt"]["sha256"] not in grounded_receipts:
             continue
         if not all(tail in closure for tail in edge["premises"]):
             pending.append(i)
@@ -176,7 +271,7 @@ def _supported_closure(nodes, edges):
                     if missing[j] == 0:
                         # Earlier rules wait for the next virtual ordered scan.
                         heapq.heappush(ready, (turn + (j <= i), j))
-    return closure, derivations, conflicts
+    return closure, derivations, conflicts, receipt_block
 
 
 def _goal_relevance(edges, goals):
@@ -197,15 +292,23 @@ def _goal_relevance(edges, goals):
     return relevant_nodes, relevant_edges
 
 
-def analyze_hypergraph(spec):
+def analyze_hypergraph(spec, audit_receipts_enabled=False):
     """Least declared closure and complete minimal missing-evidence sets, or UNKNOWN."""
     nodes, edges, goals, limits = _validate(spec)
-    closure, derivations, conflicts = _supported_closure(nodes, edges)
+    grounded, receipt_audit = frozenset(), None
+    if audit_receipts_enabled:
+        receipt_audit = audit_receipts(spec)
+        grounded = frozenset(receipt_audit["grounded_receipt_sha256s"])
+    closure, derivations, conflicts, receipt_block = _supported_closure(nodes, edges, grounded)
+    blocked_nodes = set(receipt_block)
+    blocked_rules = {edge["id"] for edge in edges if edge["status"] == "SUPPORTED"
+                     and edge.get("evidence") is not None
+                     and edge["evidence"]["receipt"]["sha256"] not in grounded}
     relevant_nodes, relevant_edges = _goal_relevance(edges, goals)
 
     incoming = {edge["conclusion"] for edge in edges}
     direct = {ident for ident, node in nodes.items()
-              if node["status"] == "UNKNOWN"
+              if (node["status"] == "UNKNOWN" or ident in blocked_nodes)
               and node.get("allow_direct_evidence", ident not in incoming)}
     families = {ident: {frozenset()} if ident in closure else
                 {frozenset({"node:" + ident})} if ident in direct else set()
@@ -240,7 +343,8 @@ def analyze_hypergraph(spec):
                 if edge["id"] not in relevant_edges or edge["status"] == "CONTRADICTED" \
                         or head in closure or nodes[head]["status"] == "CONTRADICTED":
                     continue
-                plans = {frozenset({"rule:" + edge["id"]})} if edge["status"] == "PROPOSED" \
+                status = "PROPOSED" if edge["id"] in blocked_rules else edge["status"]
+                plans = {frozenset({"rule:" + edge["id"]})} if status == "PROPOSED" \
                     else {frozenset()}
                 for tail in edge["premises"]:
                     joined = set()
@@ -266,6 +370,13 @@ def analyze_hypergraph(spec):
             ready.append({"token": "rule:" + edge["id"], "kind": "PROPOSED_RULE_PROOF",
                           "premises_declared_supported": list(edge["premises"]),
                           "conclusion": edge["conclusion"], "source": deepcopy(edge["source"])})
+    for edge in edges:
+        if edge["id"] in blocked_rules and edge["conclusion"] not in closure \
+                and nodes[edge["conclusion"]]["status"] != "CONTRADICTED" \
+                and set(edge["premises"]) <= closure:
+            ready.append({"token": "rule:" + edge["id"], "kind": "RECEIPT_REVALIDATION",
+                          "premises_declared_supported": list(edge["premises"]),
+                          "conclusion": edge["conclusion"], "source": deepcopy(edge["source"])})
     for ident in sorted(relevant_nodes - closure):
         if ident in direct:
             ready.append({"token": "node:" + ident,
@@ -286,6 +397,8 @@ def analyze_hypergraph(spec):
             "declared_supported_closure": sorted(closure),
             "declared_derivation_rules": derivations,
             "active_contradicted_conclusion_rules": sorted(conflicts),
+            "receipt_blocked_node_ids": sorted(receipt_block),
+            "receipt_audit": receipt_audit,
             "goals": results, "ready_obligations": ready,
             "truncated": truncated, "truncation_reason": reason,
             "combinations_examined": combinations, "limits": limits,
@@ -300,11 +413,13 @@ def main():
     parser.add_argument("--input", required=True)
     parser.add_argument("--output")
     parser.add_argument("--audit-files", action="store_true")
+    parser.add_argument("--audit-receipts", action="store_true",
+                        help="verify receipt-bound evidence against project ledgers")
     args = parser.parse_args()
     path = Path(args.input)
     _require(path.stat().st_size <= 8 * 1024 * 1024, "input file exceeds 8 MiB")
     spec = json.loads(path.read_text(encoding="utf-8"))
-    result = analyze_hypergraph(spec)
+    result = analyze_hypergraph(spec, audit_receipts_enabled=args.audit_receipts)
     if args.audit_files:
         result["source_file_audit"] = audit_sources(spec, path.parent)
     text = json.dumps(result, ensure_ascii=False, indent=2)

@@ -1302,6 +1302,8 @@ def parser():
     hypergraph.add_argument('--input', '-i', required=True)
     hypergraph.add_argument('--output', '-o')
     hypergraph.add_argument('--audit-files', action='store_true')
+    hypergraph.add_argument('--audit-receipts', action='store_true',
+                            help='verify receipt-bound evidence against project ledgers')
     hypergraph.add_argument('--json', action='store_true')
     usage = commands.add_parser("usage", help="Show locally recorded daily CLI invocation counts")
     window = usage.add_mutually_exclusive_group()
@@ -1577,7 +1579,7 @@ def _main():
         elif args.command == 'hypergraph':
             from rds_hypergraph import analyze_hypergraph, audit_sources
             spec = strict_json(read_bounded(args.input, 8 * 1024 * 1024).decode('utf-8-sig'))
-            result = analyze_hypergraph(spec)
+            result = analyze_hypergraph(spec, audit_receipts_enabled=args.audit_receipts)
             if args.audit_files:
                 result['source_file_audit'] = audit_sources(spec, Path(args.input).resolve().parent)
             if args.output:
