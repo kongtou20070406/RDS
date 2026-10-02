@@ -500,6 +500,156 @@ class QuickTests(unittest.TestCase):
         output = json.loads(self.advise('--brief').stdout)
         self.assertIn('REPEAT_REJECTED_ROUTE', output['flags'])
 
+    def test_rejections_recorded_for_the_same_goal_survive_renamed_questions(self):
+        from rds_checkpoints import save_checkpoint
+        self.initialize_ledger()
+        goal = [{'fact': 'long_gain', 'op': 'gte', 'value': 0.05}]
+        witness = self.root / 'witness.json'
+        witness.write_text('{"long_gain": -0.6}', encoding='utf-8')
+
+        def write(question, parameters, goal_conditions=goal, scope=None, kind='PAIRED_TEST', operation='train', revision='growth-v1'):
+            self.context = {'research_mode': 'theory' if kind == 'OBLIGATION_CHECK' else 'empirical',
+                            'decision': {'id': question, 'goal_revision': revision, 'goal_conditions': goal_conditions,
+                                         'scope': scope or {'domain': 'synthetic'}},
+                            'facts': {'long_gain': {'value': None, 'source': 'unmeasured-current-scope.json'}}}
+            if goal_conditions is None:
+                self.context['decision'].pop('goal_conditions')
+            action = {'id': 'recipe', 'kind': kind, 'description': 'Train a scoped recipe and measure the declared gain',
+                      'operation': operation, 'target': 'Measure long gain', 'parameters': parameters,
+                      'goal_contribution': {'target': 'long_gain', 'path': ['Measure long gain'], 'source': 'protocol.json'},
+                      'competing_explanations': ['recipe-capacity', 'training-premise'], 'required_observables': ['long_gain'],
+                      'outcomes': [{'observation': 'gain', 'next_decision': 'confirm'},
+                                   {'observation': 'no gain', 'next_decision': 'revise'}]}
+            if kind == 'OBLIGATION_CHECK':
+                action.pop('competing_explanations')
+                action.update(claim='A scoped implication', outcomes=[{'observation': label, 'next_decision': label}
+                              for label in ('verified', 'counterexample', 'unresolved')])
+            self.graph = {'nodes': [{'id': 'route', 'sources': ['fixture'], 'executable': {
+                'decisions': [question], 'preconditions': [], 'action': action}}], 'edges': []}
+            self.context_path.write_text(json.dumps(self.context), encoding='utf-8')
+            self.graph_path.write_text(json.dumps(self.graph), encoding='utf-8')
+
+        def full():
+            advice = json.loads(self.advise().stdout)
+            search = next(r['search'] for r in advice['recommendations'] if r.get('type') == 'EXECUTABLE_DIRECTION_SEARCH')
+            flags = {f['kind']: f for f in search.get('loop_review', {}).get('flags', [])}
+            return search, flags, search['selection_review'].get('next_move', {}).get('kind')
+
+        write('round-1', {'gain': 16})
+        first = json.loads(self.advise('--brief').stdout)
+        self.assertEqual(first['next_move'], 'RESOLVE_PREMISE')  # A first unmeasured attempt need not jump.
+        self.advise('--record', 'round-1-choice')
+        self.call('reject', '--reason', 'locked final gain failed', '--evidence', str(witness), root=self.ledger)
+
+        # A renamed question that only adds a knob: still allowed, but the recorded rejection reaches the next move.
+        write('round-2', {'gain': 16, 'tau': 0.5})
+        before = ProjectStore(self.ledger).snapshot()
+        search, flags, move = full()
+        self.assertEqual(ProjectStore(self.ledger).snapshot(), before)
+        self.assertEqual([c['status'] for c in search['candidates']], ['READY'])
+        self.assertEqual(flags['GOAL_ROUTES_REJECTED']['rejected_routes'], 1)
+        self.assertEqual(flags['GOAL_ROUTES_REJECTED']['question_ids'], ['round-1'])
+        self.assertEqual(flags['GOAL_ROUTES_REJECTED']['candidate_ids'], [search['candidates'][0]['id']])
+        self.assertEqual(move, 'REFORMULATE')
+        reason = search['selection_review']['next_move']['reason']
+        self.assertIn('changes only parameters', reason)
+        self.assertIn('not a capacity bound', reason)
+        self.assertEqual(search['selection_review']['next_move']['authorization'], 'UNCHANGED')
+        brief = json.loads(self.advise('--brief').stdout)
+        self.assertEqual(brief['next_move'], 'REFORMULATE')
+        self.assertIn('GOAL_ROUTES_REJECTED', brief['flags'])
+        self.assertEqual(json.loads(self.advise('--record', 'round-2-choice', '--brief').stdout)['checkpoint'], 'round-2-choice')
+
+        # Renaming the question does not reopen the unchanged rejected route.
+        write('round-3', {'gain': 16})
+        search, flags, move = full()
+        self.assertEqual(search['candidates'], [])
+        self.assertEqual(search['blocked_candidates'][0]['status'], 'BLOCKED_REJECTED_ROUTE')
+        self.assertEqual(flags['REPEAT_REJECTED_ROUTE']['recorded_question_id'], 'round-1')
+        self.assertNotIn('GOAL_ROUTES_REJECTED', flags)
+
+        # A changed scope reopens the same route for review; it is not called another variant.
+        write('round-3', {'gain': 16}, scope={'domain': 'synthetic', 'data': 'wider'})
+        search, flags, move = full()
+        self.assertEqual(search['candidates'][0]['loop_review']['kind'], 'REOPEN_REVIEW')
+        self.assertNotIn('GOAL_ROUTES_REJECTED', flags)
+        self.assertEqual(move, 'RESOLVE_PREMISE')
+
+        # A changed operation, other predicates, another revision or no predicates share no variant history.
+        for options in ({'operation': 'distill'}, {'goal_conditions': [{'fact': 'long_gain', 'op': 'gte', 'value': 0.1}]},
+                        {'revision': 'growth-v2'}, {'goal_conditions': None}):
+            with self.subTest(options=options):
+                write('round-4', {'gain': 16, 'tau': 0.9}, **options)
+                search, flags, move = full()
+                self.assertEqual([c['status'] for c in search['candidates']], ['READY'])
+                self.assertNotIn('GOAL_ROUTES_REJECTED', flags)
+                self.assertNotEqual(move, 'REFORMULATE')
+
+        # Predicate order does not change goal identity.
+        write('round-4', {'gain': 8}, goal_conditions=[{'value': 0.05, 'op': 'gte', 'fact': 'long_gain'}])
+        self.assertIn('GOAL_ROUTES_REJECTED', full()[1])
+
+        # A healthy scoped obligation check is not interrupted by the history prompt.
+        write('round-5', {'gain': 32}, kind='OBLIGATION_CHECK')
+        rejected_obligation = {'question_id': 'round-0', 'goal_revision': 'growth-v1', 'goal_conditions': goal,
+            'scope': {'domain': 'synthetic'}, 'candidate': {'id': 'route:recipe', 'status': 'READY',
+            'action': {**self.graph['nodes'][0]['executable']['action'], 'parameters': {'gain': 4}}},
+            'outcome': 'rejected', 'evidence': {}}
+        save_checkpoint(self.ledger, 'rejected-obligation', ProjectStore(self.ledger).snapshot(check_bindings=True),
+                        kind='project', decision=rejected_obligation)
+        search, flags, move = full()
+        self.assertIn('GOAL_ROUTES_REJECTED', flags)
+        self.assertEqual(move, 'RESOLVE_PREMISE')
+
+        # Another question's malformed record cannot block this question, and partial same-goal history is not applied.
+        write('round-6', {'gain': 16, 'tau': 0.7})
+        self.assertEqual(full()[2], 'REFORMULATE')
+        save_checkpoint(self.ledger, 'malformed-other', ProjectStore(self.ledger).snapshot(check_bindings=True),
+                        kind='project', decision={**rejected_obligation, 'question_id': 'other', 'outcome': 'unknown-label'})
+        search, flags, move = full()
+        self.assertNotIn('LOOP_HISTORY_REVIEW_ERROR', flags)
+        self.assertEqual(flags['GOAL_HISTORY_SKIPPED']['checkpoint_ids'], ['malformed-other'])
+        self.assertNotIn('GOAL_ROUTES_REJECTED', flags)
+        self.assertEqual(move, 'RESOLVE_PREMISE')
+        self.assertIn('GOAL_HISTORY_SKIPPED', json.loads(self.advise('--brief').stdout)['flags'])
+        self.assertEqual(json.loads(self.advise('--record', 'round-6-choice', '--brief').stdout)['checkpoint'], 'round-6-choice')
+
+    def test_latest_same_goal_choice_supersedes_a_recorded_rejection(self):
+        from test_rds_advisor import LedgerLoopTests
+        from rds_checkpoints import save_checkpoint
+        helper = LedgerLoopTests()
+        helper.setUp()
+        self.addCleanup(helper.doCleanups)
+        context = copy.deepcopy(helper.context)
+        context['decision']['goal_conditions'] = [{'fact': 'goal', 'value': True}]
+        context['facts']['goal'] = {'value': None, 'source': 'unmeasured.json'}
+        graph = copy.deepcopy(helper.graph)
+        graph['nodes'][0]['executable']['action']['parameters'] = {'p': 2}
+        variant = helper.search(context=context, graph=graph)['search']['candidates'][0]
+        rejected = copy.deepcopy(variant)
+        rejected['action']['parameters'] = {'p': 1}
+
+        def save(identity, outcome):
+            decision = context['decision']
+            save_checkpoint(helper.root, identity, helper.store.snapshot(), kind='project', decision={
+                'question_id': 'earlier-question', 'goal_revision': decision['goal_revision'],
+                'goal_conditions': decision['goal_conditions'], 'scope': decision['scope'], 'candidate': rejected,
+                'outcome': outcome, 'evidence': context['facts']})
+
+        save('earlier-rejection', 'rejected')
+        search = helper.search(context=context, graph=graph)['search']
+        self.assertEqual([c['status'] for c in search['candidates']], ['READY'])
+        self.assertIn('GOAL_ROUTES_REJECTED', {f['kind'] for f in search['loop_review']['flags']})
+        # History lifts the unknown-goal pause; this undeclared action then needs its goal link first.
+        self.assertEqual(search['selection_review']['next_move']['kind'], 'REVIEW_GOAL_LINK')
+        for outcome in ('plan_locked', 'accepted'):
+            with self.subTest(outcome=outcome):
+                save('later-' + outcome, outcome)
+                search = helper.search(context=context, graph=graph)['search']
+                self.assertEqual([c['status'] for c in search['candidates']], ['READY'])
+                self.assertNotIn('GOAL_ROUTES_REJECTED', {f['kind'] for f in search['loop_review']['flags']})
+                self.assertEqual(search['selection_review']['next_move']['kind'], 'RESOLVE_PREMISE')
+
     def test_prospective_job_cannot_reset_the_parent_budget(self):
         self.initialize_ledger()
         options = ['--context', str(self.context_path), '--graph', str(self.graph_path), '--ledger', str(self.ledger), '--timeout', '31']
