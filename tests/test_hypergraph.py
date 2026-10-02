@@ -2,12 +2,15 @@
 from copy import deepcopy
 import hashlib
 from pathlib import Path
+import random
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from rds_hypergraph import ASSURANCE, analyze_hypergraph, audit_sources
+import rds_hypergraph as hypergraph
 
 
 def graph(statuses, rules, goals, **limits):
@@ -20,7 +23,115 @@ def graph(statuses, rules, goals, **limits):
             "goals": goals, "limits": limits}
 
 
+def ordered_reference(nodes, edges):
+    """Independent pre-optimization traversal, including original witness order."""
+    closure = {ident for ident, node in nodes.items() if node['status'] == 'SUPPORTED'}
+    derivations, conflicts = {}, set()
+    changed = True
+    while changed:
+        changed = False
+        for edge in edges:
+            if edge['status'] != 'SUPPORTED' or not set(edge['premises']) <= closure:
+                continue
+            head = edge['conclusion']
+            if nodes[head]['status'] == 'CONTRADICTED':
+                conflicts.add(edge['id'])
+            elif head not in closure:
+                closure.add(head)
+                derivations[head] = edge['id']
+                changed = True
+    return closure, derivations, conflicts
+
+
+def relevance_reference(edges, goals):
+    """Original repeated reverse scans; proposed and contradicted heads included."""
+    relevant_nodes, relevant_edges = set(goals), set()
+    changed = True
+    while changed:
+        changed = False
+        for edge in edges:
+            if edge['status'] == 'CONTRADICTED' or edge['conclusion'] not in relevant_nodes:
+                continue
+            relevant_edges.add(edge['id'])
+            before = len(relevant_nodes)
+            relevant_nodes.update(edge['premises'])
+            changed |= len(relevant_nodes) != before
+    return relevant_nodes, relevant_edges
+
+
 class HypergraphTests(unittest.TestCase):
+    def test_ordered_first_witness_survives_delayed_early_rule(self):
+        spec = graph({'a': 'SUPPORTED', 'b': 'UNKNOWN', 'c': 'UNKNOWN'}, [
+            ('early', ['b'], 'c', 'SUPPORTED'),
+            ('b', ['a'], 'b', 'SUPPORTED'),
+            ('late', ['a'], 'c', 'SUPPORTED')], ['c'])
+        result = analyze_hypergraph(spec)
+        self.assertEqual(result['declared_derivation_rules'], {'b': 'b', 'c': 'late'})
+        self.assertNotIn('a', result['declared_derivation_rules'])
+
+    def test_event_round_order_and_delayed_contradicted_head(self):
+        spec = graph({'a': 'SUPPORTED', 'b': 'UNKNOWN', 'c': 'UNKNOWN',
+                      'd': 'UNKNOWN', 'bad': 'CONTRADICTED', 'blocked': 'UNKNOWN'}, [
+            ('early', ['d'], 'c', 'SUPPORTED'),
+            ('d', ['b'], 'd', 'SUPPORTED'),
+            ('late', ['b'], 'c', 'SUPPORTED'),
+            ('b', ['a'], 'b', 'SUPPORTED'),
+            ('conflict', ['c', 'd'], 'bad', 'SUPPORTED'),
+            ('blocked', ['bad'], 'blocked', 'SUPPORTED')], ['c', 'bad', 'blocked'])
+        result = analyze_hypergraph(spec)
+        self.assertEqual(list(result['declared_derivation_rules'].items()), [('b', 'b'), ('d', 'd'), ('c', 'late')])
+        self.assertEqual(result['active_contradicted_conclusion_rules'], ['conflict'])
+        self.assertEqual(result['declared_supported_closure'], ['a', 'b', 'c', 'd'])
+
+    def test_optimized_closure_and_whole_analyzer_match_1000_ordered_graphs(self):
+        rng = random.Random(20261002)
+        for case in range(1000):
+            names = [str(i) for i in range(rng.randrange(1, 19))]
+            statuses = {name: rng.choice(('SUPPORTED', 'UNKNOWN', 'CONTRADICTED')) for name in names}
+            rules = [(str(i), rng.sample(names, rng.randrange(min(len(names), 4) + 1)), rng.choice(names),
+                      rng.choice(('SUPPORTED', 'SUPPORTED', 'PROPOSED', 'CONTRADICTED')))
+                     for i in range(rng.randrange(36))]
+            spec = graph(statuses, rules, rng.sample(names, rng.randrange(1, min(len(names), 3) + 1)),
+                         max_blocker_sets=16, max_combinations=250)
+            for node in spec['nodes']:
+                if rng.randrange(3) == 0:
+                    node['allow_direct_evidence'] = bool(rng.randrange(2))
+            nodes = {node['id']: node for node in spec['nodes']}
+            with self.subTest(case=case):
+                expected = ordered_reference(nodes, spec['hyperedges'])
+                actual = hypergraph._supported_closure(nodes, spec['hyperedges'])
+                self.assertEqual(actual, expected)
+                self.assertEqual(list(actual[1].items()), list(expected[1].items()))
+                self.assertEqual(hypergraph._goal_relevance(spec['hyperedges'], spec['goals']),
+                                 relevance_reference(spec['hyperedges'], spec['goals']))
+                result = analyze_hypergraph(spec)
+                with patch.object(hypergraph, '_supported_closure', side_effect=ordered_reference), \
+                        patch.object(hypergraph, '_goal_relevance', side_effect=relevance_reference):
+                    original = analyze_hypergraph(spec)
+                self.assertEqual(result, original)
+
+    def test_relevance_keeps_proposed_rules_and_contradicted_heads(self):
+        spec = graph({'a': 'UNKNOWN', 'b': 'UNKNOWN', 'bad': 'CONTRADICTED', 'outside': 'UNKNOWN', 'orphan': 'UNKNOWN'}, [
+            ('proposal', ['a'], 'bad', 'PROPOSED'),
+            ('supported', ['b'], 'a', 'SUPPORTED'),
+            ('cycle', ['a'], 'b', 'PROPOSED'),
+            ('rejected', ['outside'], 'a', 'CONTRADICTED'),
+            ('only-rejected', ['outside'], 'orphan', 'CONTRADICTED')], ['bad', 'orphan'])
+        self.assertEqual(hypergraph._goal_relevance(spec['hyperedges'], spec['goals']),
+                         ({'a', 'b', 'bad', 'orphan'}, {'proposal', 'supported', 'cycle'}))
+        with patch.object(hypergraph, '_goal_relevance', side_effect=relevance_reference):
+            expected = analyze_hypergraph(spec)
+        self.assertEqual(analyze_hypergraph(spec), expected)
+        self.assertNotIn('a', analyze_hypergraph(spec)['direct_evidence_node_ids'])
+        self.assertNotIn('orphan', analyze_hypergraph(spec)['direct_evidence_node_ids'])
+
+    def test_empty_graph_preserves_empty_closure_and_relevance(self):
+        result = analyze_hypergraph(graph({}, [], []))
+        self.assertEqual(result['declared_supported_closure'], [])
+        self.assertEqual(result['declared_derivation_rules'], {})
+        self.assertEqual(result['active_contradicted_conclusion_rules'], [])
+        self.assertEqual(result['goals'], {})
+
     def test_and_requires_every_premise(self):
         spec = graph({"A": "SUPPORTED", "B": "UNKNOWN", "C": "UNKNOWN"},
                      [("ab", ["A", "B"], "C", "SUPPORTED")], ["C"])

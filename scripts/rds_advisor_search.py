@@ -204,6 +204,20 @@ def _dependency_review(context):
                 "assurance": "INPUT_REPORTED_DEPENDENCY_ANALYSIS_NOT_PROOF"}
 
 
+def _operation_dependency(context):
+    """Own one map snapshot and reuse its analysis only within this operation."""
+    snapshot = dict(context)
+    snapshot["dependency_map"] = deepcopy(context["dependency_map"])
+    cached = []
+
+    def review():
+        if not cached:
+            cached.append(_dependency_review(snapshot))
+        return deepcopy(cached[0])
+
+    return review
+
+
 def _mapped_path(spec, dependency, action):
     """Check a contributory path, keeping every AND premise as a separate obligation."""
     report = {"status": UNKNOWN, "assurance": "INPUT_REPORTED_GRAPH_PATH_NOT_PROOF"}
@@ -376,11 +390,11 @@ def _next_move(review, search):
                       "Unknown evidence or a scoped failure does not establish a capacity lower bound."}
 
 
-def review_selection(search, context):
+def review_selection(search, context, *, _dependency=None):
     """Expose what the supplied directions can decide; never invent utility."""
     ready = [c for c in search.get("candidates", []) if c.get("status") == "READY"]
     flags, candidates = [], []
-    dependency = _dependency_review(context)
+    dependency = _dependency() if _dependency is not None else _dependency_review(context)
     if search.get("truncation", {}).get("truncated"):
         flags.append({"kind": "SEARCH_TRUNCATED", "next": "Review the omitted search scope before claiming a best route."})
     obligations = all(c.get("action", {}).get("kind") == "OBLIGATION_CHECK" for c in ready)
@@ -454,7 +468,8 @@ def review_selection(search, context):
 
 
 def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nodes=128,
-                      templates=None, max_combinations=128, max_compose_depth=2):
+                      templates=None, max_combinations=128, max_compose_depth=2,
+                      _dependency=None, _defer_selection_review=False):
     """Compose source-labelled checks and tests for the supplied next decision.
 
     Nodes opt in via executable.decisions, preconditions, satisfied_when, action.
@@ -484,13 +499,17 @@ def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nod
                                "Dominance requires valid same-scope rival predictions; decision labels alone do not establish scientific value."]}
     def finish():
         chosen_templates = templates if templates is not None else context.get("templates")
+        dependency = _dependency
+        if dependency is None and chosen_templates is not None and "dependency_map" in context:
+            dependency = _operation_dependency(context)
         if chosen_templates is not None:
             from rds_experiments import compose_experiments
             result["experiment_composition"] = compose_experiments(
                 graph, context, chosen_templates, max_candidates=max_candidates, max_depth=max_compose_depth,
-                max_combinations=max_combinations,
+                max_combinations=max_combinations, _dependency=dependency,
                 search_limits={"max_candidates": max_candidates, "max_depth": max_depth, "max_nodes": max_nodes})
-        result["selection_review"] = review_selection(result, context)
+        if not _defer_selection_review:
+            result["selection_review"] = review_selection(result, context, _dependency=dependency)
         return result
     if len(raw_nodes) > max_nodes:
         result["truncation"].update(truncated=True)

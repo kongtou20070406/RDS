@@ -49,6 +49,15 @@ raw samples; `--repeats 5` is the default. Compare the same scalar source and
 environment before attributing a speedup. These timings do not measure GPU
 training, model quality or an autonomous research policy.
 
+Run `python -B benchmark/dependency_performance.py --baseline <full-commit-sha>`
+to compare full hypergraph analysis and Advisor selection against a **trusted local**
+before-revision. It loads that commit's four Python modules, checks complete output
+equality, alternates paired warmed samples, and reports raw milliseconds and source
+hashes; `--output timings.json` retains the samples. Ordered/reverse synthetic chains
+and the public goal map exercise different traversal costs. These measurements
+include validation and hashing, but exclude source loading, model inference and
+external computation; they are not universal speed or token-saving guarantees.
+
 `python -B benchmark/redteam/runner.py` exercises four synthetic protocol
 violations. The C7 scenario tests the mathematical boundary after removing the
 self-signed flag; the hypothesis-drift scenario first executes a scalar
