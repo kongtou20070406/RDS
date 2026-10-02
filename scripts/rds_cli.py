@@ -990,7 +990,8 @@ def cmd_advise(args, rds):
         require(isinstance(manual.get("costs", {}), dict), "Research context costs must be an object")
         for key in ("decision", "targets", "budget", "max_depth", "max_candidates", "target_types", "templates", "frontier", "frontier_proposals", "resources",
                     "dependency_map", "objective_binding", "method_constraints", "research_mode", "require_goal_link", "scope",
-                    "audit_receipts", "audit_files"):
+                    "audit_receipts", "audit_files",
+                    "obstructions"):
             if key in manual:
                 context[key] = manual[key]
         facts = dict(context.get("facts", {}))

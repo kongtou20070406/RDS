@@ -8,8 +8,27 @@ from itertools import combinations
 import hashlib
 import json
 import math
+import re
 
 TRUE, FALSE, UNKNOWN = "TRUE", "FALSE", "UNKNOWN"
+# A declared obstruction selects a bounded response; it is never a diagnosis or permission.
+OBSTRUCTION_RESPONSES = {
+    "MISSING_INPUT": ("EVIDENCE_REPAIR", "Obtain or measure the missing input{input} under the same scope and source "
+                      "binding; no capability gap or scientific failure is established."),
+    "EXECUTION_CAP": ("INCOMPLETE_COMPUTATION", "The computation stopped at a configured cap, timeout or truncation; it is "
+                      "incomplete, not a refutation or a capability deficit. Narrow the bounded scope or request an authorized cap change."),
+    "DEPENDENCY_UNAVAILABLE": ("DEPENDENCY_REPORT", "Report the unavailable dependency '{dependency}' as a concrete blocker or select a "
+                               "compatible available backend; nothing is installed and availability is not inferred."),
+    "ADAPTER_MISMATCH": ("ADAPTER_REPAIR", "Repair or validate the adapter/implementation on a known case; the scientific "
+                         "claim remains UNKNOWN, not refuted."),
+    "UNSUPPORTED_OPERATION": ("CAPABILITY_REQUIRED", "Propose the smallest reusable adaptation, composition or new operation that meets "
+                              "this input/operation/output contract, with a checker, and compare it with the smallest repair; "
+                              "the shortlist covers only the bounded catalogue."),
+}
+OBSTRUCTION_CAUSES = tuple(sorted(set(OBSTRUCTION_RESPONSES) | {"UNDETERMINED"}))
+OBSTRUCTION_FIELDS = ("cause", "dependency", "id", "obligation", "requirement", "scope", "signals", "source")
+UNDETERMINED_NEXT = ("The cause is not established; choose the smallest check that distinguishes missing input, adapter fault, "
+                     "execution cap and unsupported operation before treating it as a capability gap.")
 
 
 def _evidence_status(record):
@@ -338,13 +357,18 @@ def _mapped_path(spec, dependency, action):
             "reason": "The path is connected in the supplied map; AND premises, proposed rules and source validity still need evidence."}
 
 
-def _goal_contribution(action, context, dependency=None):
-    """Review a declared path to an existing goal, never its scientific validity."""
+def _goal_targets(context):
     decision = context.get("decision", {})
     goals = decision.get("goal_conditions", []) if isinstance(decision, dict) else []
     targets = {g["fact"] for g in goals if isinstance(g, dict) and isinstance(g.get("fact"), str)} if isinstance(goals, list) else set()
     if isinstance(context.get("objective_binding"), dict) and context["objective_binding"]:
         targets.add("completion_standard")
+    return targets
+
+
+def _goal_contribution(action, context, dependency=None):
+    """Review a declared path to an existing goal, never its scientific validity."""
+    targets = _goal_targets(context)
     if not targets and "goal_contribution" not in action:
         return None
     report = {"status": "UNDECLARED", "assurance": "DECLARED_LINK_NOT_SCIENTIFIC_PROOF",
@@ -374,6 +398,137 @@ def _goal_contribution(action, context, dependency=None):
         else:
             result["reason"] = result["graph_path"]["reason"]
     return result
+
+
+def _text(value, limit=512):
+    return isinstance(value, str) and bool(value.strip()) and len(value) <= limit
+
+
+def _obstruction_records(context):
+    """Validate declared obstructions with field-level repair messages; nothing is inferred."""
+    records = context["obstructions"]
+    if not isinstance(records, list) or not 1 <= len(records) <= 8:
+        raise ValueError("advisor_context.obstructions must be a list of 1 to 8 records")
+    seen = set()
+    for index, record in enumerate(records):
+        field = f"advisor_context.obstructions[{index}]"
+        if not isinstance(record, dict):
+            raise ValueError(f"{field} must be an object")
+        unknown = sorted(set(record) - set(OBSTRUCTION_FIELDS))
+        if unknown:
+            raise ValueError(f"{field} has unknown field(s): {', '.join(unknown)}; allowed: {', '.join(OBSTRUCTION_FIELDS)}")
+        if not _text(record.get("id"), 128):
+            raise ValueError(f"{field}.id must be nonempty text of at most 128 characters")
+        if record["id"] in seen:
+            raise ValueError(f"{field}.id duplicates an earlier obstruction id")
+        seen.add(record["id"])
+        if not _text(record.get("obligation")):
+            raise ValueError(f"{field}.obligation must name a goal predicate or completion_standard in at most 512 characters")
+        if record.get("cause") not in OBSTRUCTION_CAUSES:
+            raise ValueError(f"{field}.cause must be one of {', '.join(OBSTRUCTION_CAUSES)}")
+        if "requirement" in record:
+            requirement = record["requirement"]
+            if not isinstance(requirement, dict) or set(requirement) != {"input", "operation", "output"}:
+                raise ValueError(f"{field}.requirement must have exactly input, operation and output")
+            for key in ("input", "operation", "output"):
+                if not _text(requirement[key]):
+                    raise ValueError(f"{field}.requirement.{key} must be nonempty text of at most 512 characters")
+        if "dependency" in record:
+            if record["cause"] != "DEPENDENCY_UNAVAILABLE":
+                raise ValueError(f"{field}.dependency is only valid for DEPENDENCY_UNAVAILABLE")
+            if not _text(record["dependency"], 128):
+                raise ValueError(f"{field}.dependency must be nonempty text of at most 128 characters")
+        if "signals" in record:
+            if record["cause"] != "UNSUPPORTED_OPERATION":
+                raise ValueError(f"{field}.signals is only valid for UNSUPPORTED_OPERATION")
+            signals = record["signals"]
+            if not (isinstance(signals, list) and 1 <= len(signals) <= 8 and all(
+                    isinstance(s, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", s) for s in signals)):
+                raise ValueError(f"{field}.signals must be 1 to 8 lowercase theory-tool tags such as proof_bottleneck")
+        if "scope" in record and not isinstance(record["scope"], dict):
+            raise ValueError(f"{field}.scope must be an object compared with decision.scope")
+    return records
+
+
+def _catalogue_shortlist(signals):
+    """Read the bounded theory-tool catalogue by explicit tags only; never scan or run tools."""
+    report = {"coverage": "BOUNDED_CATALOGUE_NOT_EXHAUSTIVE", "prerequisites": "NOT_ASSESSED"}
+    if not signals:
+        return {**report, "status": "NOT_SEARCHED", "searched": [], "shortlist": [],
+                "reason": "No theory-tool signals were declared."}
+    try:
+        from rds_theory_tools import shortlist
+        found = shortlist(signals, limit=3)
+    except (ImportError, OSError, ValueError, KeyError, TypeError) as exc:
+        return {**report, "status": UNKNOWN, "searched": [], "shortlist": [], "reason": str(exc)[:200]}
+    return {**report, "status": "SEARCHED", "searched": ["references/theory-tools.json"],
+            "catalogue_sha256": found["catalogue_sha256"], "unmatched_signal_count": found["unmatched_signal_count"],
+            "shortlist": [{key: card[key] for key in ("id", "locator", "matched_tags", "runnable_operator")}
+                          for card in found["cards"]]}
+
+
+def _obstruction_response(record):
+    cause, requirement = record["cause"], record.get("requirement")
+    if not _source(record):
+        why = "No source locator was declared for this obstruction."
+    elif cause == "UNDETERMINED":
+        why = "The declared cause is undetermined."
+    elif cause == "UNSUPPORTED_OPERATION" and requirement is None:
+        why = "An unsupported operation needs requirement input/operation/output before it can become a capability requirement."
+    elif cause == "DEPENDENCY_UNAVAILABLE" and "dependency" not in record:
+        why = "An unavailable dependency needs its dependency name."
+    else:
+        why = None
+    if why is not None:
+        return {"response": "DISCRIMINATING_CHECK", "cause_status": UNKNOWN, "reason": why, "next": UNDETERMINED_NEXT}
+    response, text = OBSTRUCTION_RESPONSES[cause]
+    result = {"response": response, "cause_status": "INPUT_REPORTED"}
+    if cause == "MISSING_INPUT":
+        result["next"] = text.format(input=f" ({requirement['input']})" if requirement else "")
+    elif cause == "DEPENDENCY_UNAVAILABLE":
+        from rds_capabilities import CAPABILITIES
+        dependency = record["dependency"]
+        result.update(dependency=dependency, next=text.format(dependency=dependency), live_check=(
+            "python -B scripts/rds_cli.py exec --timeout 10 -- python -B scripts/rds_capabilities.py --capability " + dependency
+            if dependency in CAPABILITIES else None))
+    elif cause == "UNSUPPORTED_OPERATION":
+        result.update(next=text, required_capability={
+            "obligation": record["obligation"], **deepcopy(requirement), "obstruction_source": deepcopy(record["source"]),
+            "status": "REQUIRED_AVAILABILITY_UNKNOWN", "catalogue": _catalogue_shortlist(record.get("signals"))})
+    else:
+        result["next"] = text
+    if requirement is not None and cause != "UNSUPPORTED_OPERATION":
+        result["requirement"] = deepcopy(requirement)
+    return result
+
+
+def _obstruction_review(context, goal):
+    """Map declared obstructions on open goal obligations to bounded responses."""
+    records = _obstruction_records(context)
+    targets = _goal_targets(context)
+    truths = {}
+    for condition in (goal or {}).get("conditions", []):
+        truths.setdefault(condition["fact"], []).append(condition["truth"])
+    decision = context.get("decision")
+    scope = decision.get("scope") if isinstance(decision, dict) else None
+    entries = []
+    for record in records:
+        entry = {"id": record["id"], "obligation": record["obligation"], "cause": record["cause"]}
+        if "source" in record:
+            entry["source"] = deepcopy(record["source"])
+        entry.update(assurance="INPUT_REPORTED_OBSTRUCTION_NOT_DIAGNOSIS", authorization="UNCHANGED")
+        obligation = record["obligation"]
+        if obligation not in targets:
+            reason = "The obligation is not an existing goal predicate or bound completion_standard."
+        elif "scope" in record and record["scope"] != scope:
+            reason = "The declared scope differs from the current decision scope; this obstruction was not observed here."
+        elif truths.get(obligation) and all(truth == TRUE for truth in truths[obligation]):
+            reason = "The obligation's current goal predicates are satisfied; the obstruction no longer applies."
+        else:
+            entries.append({**entry, "status": "APPLICABLE", **_obstruction_response(record)})
+            continue
+        entries.append({**entry, "status": "NOT_APPLICABLE", "reason": reason})
+    return entries
 
 
 def _next_move(review, search):
@@ -546,8 +701,23 @@ def review_selection(search, context, *, _dependency=None, audit_receipts=False,
         review["goal"] = {"status": _all(reports), "conditions": reports, "assurance": "INPUT_REPORTED"}
         if review["goal"]["status"] != TRUE:
             flags.append({"kind": "GOAL_BRIDGE_OPEN", "next": "Keep task acceptance separate from local/procedure success; choose a check or intervention that can close this declared gap."})
+    if "obstructions" in context:
+        review["obstruction_review"] = _obstruction_review(context, review.get("goal"))
     next_move = _next_move(review, search)
     if next_move is not None:
+        # Obstructions inform the existing move; they never change its kind or precedence.
+        applicable = [(index, entry) for index, entry in enumerate(review.get("obstruction_review", []))
+                      if entry["status"] == "APPLICABLE"]
+        if applicable:
+            next_move["obstructions"] = [{"id": entry["id"], "response": entry["response"],
+                                          "ref": f"selection_review.obstruction_review[{index}]"}
+                                         for index, entry in applicable]
+            next_move["prompt"] += (
+                " Answer each declared obstruction on the open obligation with its stated response: evidence repair, "
+                "incomplete computation, dependency report, adapter repair, a discriminating check, or for a capability "
+                "requirement a reusable operation meeting its input/operation/output contract with a checker, compared "
+                "with the smallest repair. Declared obstructions are input-reported, not a diagnosis, and authorize "
+                "neither execution nor installation.")
         review["next_move"] = next_move
     return review
 

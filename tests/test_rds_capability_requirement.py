@@ -280,6 +280,9 @@ class CapabilityRequirementReviewTests(unittest.TestCase):
 
     def test_healthy_scoped_obligation_is_not_blocked_by_a_completion_obstruction(self):
         graph = route('completion_standard', kind='OBLIGATION_CHECK')
+        graph['nodes'][0]['executable']['action'].update(
+            claim='the encoded synthetic lemma holds in the declared scope',
+            outcomes=[{'observation': label, 'next_decision': label} for label in ('verified', 'counterexample', 'unresolved')])
         ctx = {'research_mode': 'theory', 'facts': {}, 'objective_binding': {'objective_sha256': 'a' * 64},
                'decision': {'id': 'next', 'scope': {'domain': 'synthetic'}},
                'obstructions': [obstruction('completion_standard', 'UNSUPPORTED_OPERATION', requirement=REQUIREMENT)]}
