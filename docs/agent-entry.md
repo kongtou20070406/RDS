@@ -90,7 +90,7 @@ When a goal obligation is blocked, the caller can declare the observed obstructi
 - A sourced `UNSUPPORTED_OPERATION` with a requirement gives `CAPABILITY_REQUIRED`, carrying a source-bound `required_capability`. Its catalogue shortlist holds at most 3 theory-tool cards matched by the declared tags, and is labelled `BOUNDED_CATALOGUE_NOT_EXHAUSTIVE`, with prerequisites `NOT_ASSESSED`.
 - An unsourced or undetermined cause, or an unsupported operation without a requirement, gives `DISCRIMINATING_CHECK` with the cause kept `UNKNOWN`.
 
-A capability gap is held back to `DISCRIMINATING_CHECK` while another cause is declared for the same open obligation. Guidance text is fixed; record text stays in its own fields and is never spliced into instructions.
+A capability gap is held back to `DISCRIMINATING_CHECK` while another cause is declared for the same open obligation and has not been ruled out (it is applicable or its applicability is unknown). The held-back record keeps its declared requirement. Guidance text is fixed; record text stays in its own fields and is never spliced into instructions.
 
 A record is `NOT_APPLICABLE` when:
 
@@ -100,7 +100,7 @@ A record is `NOT_APPLICABLE` when:
 
 Scope uses `decision.scope`, falling back to the context-level `scope`, and is compared as canonical JSON, as in the ledger. So changed evidence or scope reopens the route. A scoped record with no current scope stays `UNKNOWN`.
 
-Applicable records are referenced from the existing `next_move` without changing its kind or precedence. A healthy route without a move stays unblocked. Advisor consumes the key once, after every existing context check, so existing errors keep their precedence. Malformed records are rejected with the field to repair. These are input-reported obstructions, not a diagnosis, and they authorize neither execution nor installation. `--brief` still shows only the move kind; the full review stays in CAS. Contexts without the key are unchanged.
+Applicable records are referenced from the existing `next_move` without changing its kind or precedence. A healthy route without a move stays unblocked. Advisor consumes the key once, after every existing context check, so existing errors keep their precedence. Only the Advisor entry consumes it; a frontier-only context validates it without effect. Malformed records are rejected with the field to repair. These are input-reported obstructions, not a diagnosis, and they authorize neither execution nor installation. `--brief` still shows only the move kind; the full review stays in CAS. Contexts without the key are unchanged.
 
 Large provenance maps belong in their original source manifest. Use its digest and locator in a scoped context rather than repeating the full file map in every fact. Oversized loop input retains the same byte cap and now reports the actual size plus a repair hint; no facts are silently dropped or compressed into stronger evidence.
 

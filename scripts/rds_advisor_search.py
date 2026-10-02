@@ -550,15 +550,17 @@ def _obstruction_review(records, context, goal):
             entries.append({**entry, "status": "APPLICABLE", **_obstruction_response(record)})
             continue
         entries.append({**entry, "status": status, "reason": reason})
-    # A capability gap is not established while another cause is declared for the same open obligation.
-    for entry in entries:
+    # A capability gap is not established while another cause is declared for the same open obligation,
+    # including one whose applicability is unknown; only a cause ruled out (NOT_APPLICABLE) is ignored.
+    for record, entry in zip(records, entries):
         if entry.get("response") != "CAPABILITY_REQUIRED":
             continue
-        others = sorted({e["cause"] for e in entries if e["status"] == "APPLICABLE" and e["obligation"] == entry["obligation"]
-                         and e["cause"] != "UNSUPPORTED_OPERATION"})
+        others = sorted({e["cause"] for e in entries if e["status"] in {"APPLICABLE", UNKNOWN}
+                         and e["obligation"] == entry["obligation"] and e["cause"] != "UNSUPPORTED_OPERATION"})
         if others:
             del entry["required_capability"]
             entry.update(response="DISCRIMINATING_CHECK", cause_status=UNKNOWN, next=UNDETERMINED_NEXT,
+                         requirement=deepcopy(record["requirement"]),
                          reason="Co-declared " + ", ".join(others) + " on this obligation must be resolved or ruled out "
                                 "before it is treated as a capability gap.")
     return entries
@@ -568,7 +570,8 @@ def review_obstructions(search, context):
     """Validate and consume declared obstructions after every existing context check.
 
     Responses are added to selection_review and referenced from the existing next_move;
-    its kind, precedence and authorization are unchanged.
+    its kind, precedence and authorization are unchanged. Only the Advisor entry calls this:
+    direct search_directions callers neither validate nor receive obstruction_review.
     """
     records = _obstruction_records(context)
     review = search.get("selection_review") if isinstance(search, dict) else None

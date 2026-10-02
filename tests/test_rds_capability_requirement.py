@@ -145,8 +145,19 @@ class CapabilityRequirementCLITests(unittest.TestCase):
                 held, kept = review['obstruction_review']
                 self.assertEqual((held['response'], held['cause_status']), ('DISCRIMINATING_CHECK', 'UNKNOWN'))
                 self.assertNotIn('required_capability', held)
+                self.assertEqual(held['requirement'], REQUIREMENT)  # The declared contract is retained.
                 self.assertIn(other, held['reason'])
                 self.assertNotEqual(kept['response'], 'CAPABILITY_REQUIRED')
+        # A co-cause whose applicability is unknown still holds back; one ruled out by scope does not.
+        ctx = context(*DEEP_LEARNING)
+        del ctx['decision']['scope']
+        ctx['obstructions'] = [capability, {**obstruction(goal, 'MISSING_INPUT'), 'scope': {'domain': 'synthetic'}}]
+        held, unknown = self.advise(ctx, route(goal))['obstruction_review']
+        self.assertEqual((held['response'], unknown['status']), ('DISCRIMINATING_CHECK', 'UNKNOWN'))
+        _, review = self.baseline_and_review(
+            DEEP_LEARNING, [capability, {**obstruction(goal, 'MISSING_INPUT'), 'scope': {'domain': 'older'}}])
+        self.assertEqual([e.get('response', e['status']) for e in review['obstruction_review']],
+                         ['CAPABILITY_REQUIRED', 'NOT_APPLICABLE'])
         # Two unsupported operations on the same obligation are not a conflict.
         second = {**capability, 'id': 'second'}
         _, review = self.baseline_and_review(DEEP_LEARNING, [capability, second])
