@@ -96,6 +96,29 @@ class ImportTests(unittest.TestCase):
             self.assertEqual(result[fid]["reason"], "invalid array index", fid)
         self.assertEqual(result["out_of_range"]["kind"], "UNKNOWN")
 
+    def test_jsonl_row_is_an_integer_line_number_through_the_import_cli(self):
+        # 1.0 and true compare equal to line 1 but would mint a second locator for the same reading.
+        spellings = {"int": 1, "float": 1.0, "true": True, "string": "1", "zero": 0, "negative": -1,
+                     "blank_line": 2, "after_blank": 3, "past_end": 4, "missing": None}
+        facts = [{"id": k, "pointer": "/err", **({} if v is None else {"row": v})} for k, v in spellings.items()]
+        sources = [self.source("log.jsonl", "log", b'{"err":0.05}\n\n{"err":0.5}\n', facts, "jsonl")]
+        manifest = {"schema": "rds-artifact-manifest-v1", "decision": "choose", "sources": sources,
+                    "derived": [], "cost_bindings": []}
+        (self.base / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        proc = subprocess.run([sys.executable, "-B", str(ROOT / "scripts/rds_cli.py"), "--root", str(self.base),
+                               "artifacts", "import", "--manifest", str(self.base / "manifest.json")],
+                              cwd=ROOT, capture_output=True, encoding="utf-8", timeout=20)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        result = json.loads(proc.stdout)["facts"]
+        for fid, value, line in (("int", 0.05, 1), ("after_blank", 0.5, 3)):
+            self.assertEqual((result[fid]["kind"], result[fid]["value"]), ("OBSERVED", value), fid)
+            self.assertEqual(result[fid]["source"]["locator"], f"line:{line}:pointer:/err", fid)
+        for fid in ("float", "true", "string", "zero", "negative", "missing"):
+            self.assertEqual((result[fid]["kind"], result[fid]["value"]), ("UNKNOWN", None), fid)
+            self.assertEqual(result[fid]["reason"], "JSONL row is a 1-based physical line number", fid)
+        for fid in ("blank_line", "past_end"):
+            self.assertEqual((result[fid]["kind"], result[fid]["reason"]), ("UNKNOWN", "JSONL physical line must exist"), fid)
+
     def test_issue19_file_hash_inventory_is_not_scalar_code_identity(self):
         record = {"source_sha256": {"model.py": "a" * 64}, "value": 1.0}
         binding = {**self.binding, "run_id": "toy", "code_sha256": digest(record["source_sha256"]),

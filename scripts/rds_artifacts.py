@@ -171,6 +171,8 @@ def _extract(document, selector, fmt):
         return value, "line:" + str(number) + ":key:" + key, key
     if fmt == "jsonl":
         number = selector.get("row")
+        # 1.0 and true equal 1 but would mint a second locator for the same physical line.
+        require(type(number) is int and number >= 1, "JSONL row is a 1-based physical line number")
         matching = [row for row in document if row[0] == number]
         require(len(matching) == 1, "JSONL physical line must exist")
         pointer = selector.get("pointer")
