@@ -96,6 +96,8 @@
 
 These compatible feature additions use the MINOR increment under `docs/versioning.md`. CLI and Skill versions are aligned to 5.8.0; 5.7.0 ledgers remain readable while changed execution bindings still require review or a new contract.
 
+- Link Advisor's goal-evidence discriminator guidance only to ready rival checks that directly target an unresolved goal predicate or have a valid existing declared contribution path to it. Keep unrelated exploratory candidates available, name uncovered obligations, preserve invalid/missing-link fallback and describe declared links without claiming the rival outcome resolves the goal. (#99)
+
 ## 5.7.0 — 2026-10-01
 
 Publish the compatible feature additions merged since 5.6.0-rc.2, including explicit theory budgets, native Lean verification and advisory resource planning. Preserve the existing rc.2 tag and readable ledgers; changed execution-engine bindings still require a new contract.
