@@ -512,6 +512,9 @@ class RDSAdvisor:
                 reason="Use sourced graph gaps, residuals and integer dimensional constraints to ask for new relations.",
                 frontier=frontier, observations=frontier["gaps"], limitations=frontier["limitations"]))
             if "decision" not in context:
+                if "obstructions" in context:  # Validated, but only a direction search has goal obligations to consume them.
+                    from rds_advisor_search import _obstruction_records
+                    _obstruction_records(context)
                 return recommendations  # Pure frontier queries do not need unrelated ML advice or rule libraries.
         if context and (not isinstance(context, dict) or "decision" in context or "frontier" not in context):
             from rds_advisor_search import search_directions, review_selection
@@ -551,6 +554,10 @@ class RDSAdvisor:
                 recommendations.append(_advice("STRATEGIC_RESEARCH_ADVICE", type="RESOURCE_BATCH_PLAN", urgency="REVIEW",
                     reason="Use explicit research priority, current capacity and full-duration estimates to propose one concurrent batch.",
                     resource_plan=resource_plan, observations=resource_plan["batch"], limitations=resource_plan["limitations"]))
+            if isinstance(context, dict) and "obstructions" in context:
+                # One fixed point after every existing check, whether or not the review was deferred.
+                from rds_advisor_search import review_obstructions
+                review_obstructions(search, context)
         if research_mode is not None:
             # Explicit domain work uses its configured obligations/comparisons;
             # legacy ML branch heuristics and reference catalogs are unrelated.
