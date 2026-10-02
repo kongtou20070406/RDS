@@ -141,17 +141,20 @@ class OperatorUnitTests(unittest.TestCase):
 
     def test_registry_and_scaffolding(self):
         available = ops.list_available_operators()
-        self.assertEqual(len(available), 9)
+        self.assertEqual(len(available), 22)
         card_ids = [item["card_id"] for item in available]
-        self.assertIn("state_space_refinement", card_ids)
-        self.assertIn("contraction_target_bias", card_ids)
-        self.assertIn("structural_preflight", card_ids)
-        self.assertIn("exact_symbolic_constraints", card_ids)
-        self.assertIn("gershgorin_spectral_bound", card_ids)
-        self.assertIn("lipschitz_layer_bound", card_ids)
-        self.assertIn("hoeffding_sample_bound", card_ids)
-        self.assertIn("rational_voronoi_partition", card_ids)
-        self.assertIn("multi_step_energy_dissipation", card_ids)
+        expected_cards = [
+            "state_space_refinement", "contraction_target_bias", "structural_preflight",
+            "exact_symbolic_constraints", "gershgorin_spectral_bound", "lipschitz_layer_bound",
+            "hoeffding_sample_bound", "rational_voronoi_partition", "multi_step_energy_dissipation",
+            "markov_chebyshev_bound", "false_discovery_rate_bh", "sequential_ville_eprocess",
+            "empirical_bernstein_bound", "symplectic_energy_conservation", "control_barrier_invariance",
+            "poincare_section_return", "liouville_phase_volume", "dimensional_homogeneity",
+            "causal_dag_no_leakage", "data_processing_inequality", "conservation_flow_balance",
+            "kolmogorov_probability_axioms",
+        ]
+        for exp in expected_cards:
+            self.assertIn(exp, card_ids)
 
         for card_id in card_ids:
             scaffold = ops.get_operator_scaffold(card_id)
@@ -328,6 +331,32 @@ class OperatorUnitTests(unittest.TestCase):
                     exported_class.check_domain_covering = lambda *args, **kwargs: {"status": "FAIL"}
                 elif card_id == "multi_step_energy_dissipation":
                     exported_class.analyze_trajectory = lambda *args, **kwargs: {"status": "FAIL", "amplification_ratio": 2.0}
+                elif card_id == "markov_chebyshev_bound":
+                    exported_class.compute_tail_bounds = lambda *args, **kwargs: {"status": "FAIL", "certified_upper_probability": 1.0}
+                elif card_id == "false_discovery_rate_bh":
+                    exported_class.control_fdr = lambda *args, **kwargs: {"status": "FAIL", "discoveries_count": 0}
+                elif card_id == "sequential_ville_eprocess":
+                    exported_class.audit_evidence_stream = lambda *args, **kwargs: {"status": "FAIL"}
+                elif card_id == "empirical_bernstein_bound":
+                    exported_class.certify_sample_mean = lambda *args, **kwargs: {"status": "FAIL", "empirical_bernstein_radius": 99.0}
+                elif card_id == "symplectic_energy_conservation":
+                    exported_class.audit_conservation = lambda *args, **kwargs: {"status": "FAIL", "max_relative_drift": 99.0}
+                elif card_id == "control_barrier_invariance":
+                    exported_class.verify_forward_invariance = lambda *args, **kwargs: {"status": "FAIL", "minimum_barrier_observed": -1.0}
+                elif card_id == "poincare_section_return":
+                    exported_class.analyze_crossings = lambda *args, **kwargs: {"status": "FAIL", "crossings_count": 0}
+                elif card_id == "liouville_phase_volume":
+                    exported_class.certify_volume_rate = lambda *args, **kwargs: {"status": "FAIL", "minimum_contraction_rate": -1.0}
+                elif card_id == "dimensional_homogeneity":
+                    exported_class.verify_additive_terms = lambda *args, **kwargs: {"status": "FAIL"}
+                elif card_id == "causal_dag_no_leakage":
+                    exported_class.verify_causal_graph = lambda *args, **kwargs: {"status": "FAIL"}
+                elif card_id == "data_processing_inequality":
+                    exported_class.verify_information_chain = lambda *args, **kwargs: {"status": "FAIL", "chain_length": 0}
+                elif card_id == "conservation_flow_balance":
+                    exported_class.verify_flow_balance = lambda *args, **kwargs: {"status": "FAIL", "nodes_audited": 0}
+                elif card_id == "kolmogorov_probability_axioms":
+                    exported_class.verify_probability_distribution = lambda *args, **kwargs: {"status": "FAIL", "events_count": 0}
                 with self.assertRaises(AssertionError):
                     namespace["operator_self_test"]()
 
@@ -494,6 +523,259 @@ class OperatorUnitTests(unittest.TestCase):
             ops.MultiStepEnergyDissipationOperator.analyze_trajectory([[1.0, 0.0]])
         with self.assertRaises(ValueError):
             ops.MultiStepEnergyDissipationOperator.analyze_trajectory([[1.0, 0.0], [0.5]])
+
+    def test_markov_chebyshev_bound_operator(self):
+        # Normal positive case with variance
+        res = ops.MarkovChebyshevBoundOperator.compute_tail_bounds(mean=1.0, variance=0.25, threshold=5.0, max_allowable_probability=0.25)
+        self.assertEqual(res["status"], "PASS")
+        self.assertEqual(res["assurance"], "TAIL_RISK_CERTIFIED_BOUND")
+        self.assertLessEqual(res["certified_upper_probability"], 0.25)
+        self.assertAlmostEqual(res["markov_bound"], 0.2, places=4)
+        self.assertAlmostEqual(res["chebyshev_cantelli_bound"], 0.25 / (0.25 + 16.0), places=4)
+
+        # Breach case where bound exceeds allowed probability
+        res_fail = ops.MarkovChebyshevBoundOperator.compute_tail_bounds(mean=2.0, threshold=3.0, max_allowable_probability=0.5)
+        self.assertEqual(res_fail["status"], "FAIL")
+        self.assertEqual(res_fail["assurance"], "TAIL_RISK_BREACH_WITNESS")
+        self.assertIn("witness", res_fail)
+
+        # Invalid arguments
+        with self.assertRaises(ValueError):
+            ops.MarkovChebyshevBoundOperator.compute_tail_bounds(-1.0, threshold=2.0)
+        with self.assertRaises(ValueError):
+            ops.MarkovChebyshevBoundOperator.compute_tail_bounds(1.0, threshold=-2.0)
+
+    def test_false_discovery_rate_operator(self):
+        # Benjamini-Hochberg with discoveries
+        p_vals = [0.001, 0.005, 0.02, 0.3, 0.8]
+        res = ops.FalseDiscoveryRateOperator.control_fdr(p_vals, alpha=0.05, method="bh")
+        self.assertEqual(res["status"], "PASS")
+        self.assertEqual(res["assurance"], "FDR_CONTROLLED_DISCOVERIES")
+        self.assertEqual(res["discoveries_count"], 3)
+        self.assertEqual(res["discovered_indices"], [0, 1, 2])
+
+        # Benjamini-Yekutieli (arbitrary dependence)
+        res_by = ops.FalseDiscoveryRateOperator.control_fdr(p_vals, alpha=0.05, method="by")
+        self.assertIn(res_by["status"], ["PASS", "FAIL"])
+
+        # No discoveries: FAIL
+        res_none = ops.FalseDiscoveryRateOperator.control_fdr([0.2, 0.4, 0.8], alpha=0.05)
+        self.assertEqual(res_none["status"], "FAIL")
+        self.assertEqual(res_none["assurance"], "NO_DISCOVERIES_AT_FDR_THRESHOLD")
+        self.assertEqual(res_none["discoveries_count"], 0)
+
+        with self.assertRaises(ValueError):
+            ops.FalseDiscoveryRateOperator.control_fdr([-0.1, 0.5])
+        with self.assertRaises(ValueError):
+            ops.FalseDiscoveryRateOperator.control_fdr([0.1, 0.5], method="INVALID")
+
+    def test_sequential_ville_eprocess_operator(self):
+        # Stopping triggered
+        factors = [2.5, 4.0, 2.5]  # product = 25 > 20 (alpha=0.05)
+        res = ops.SequentialVilleEProcessOperator.audit_evidence_stream(factors, alpha=0.05)
+        self.assertEqual(res["status"], "PASS")
+        self.assertEqual(res["assurance"], "ANYTIME_VALID_EVIDENCE_REJECTION")
+        self.assertEqual(res["stopping_step"], 3)
+
+        # Inconclusive stream
+        factors_low = [1.1, 1.2, 0.9]
+        res_fail = ops.SequentialVilleEProcessOperator.audit_evidence_stream(factors_low, alpha=0.05)
+        self.assertEqual(res_fail["status"], "FAIL")
+        self.assertEqual(res_fail["assurance"], "EVIDENCE_THRESHOLD_UNREACHED_WITNESS")
+
+        with self.assertRaises(ValueError):
+            ops.SequentialVilleEProcessOperator.audit_evidence_stream([-1.0, 2.0])
+
+    def test_empirical_bernstein_operator(self):
+        # Large sample with low variance satisfies target precision
+        samples = [0.5] * 100 + [0.51] * 100
+        res = ops.EmpiricalBernsteinOperator.certify_sample_mean(samples, value_range=(0, 1), target_precision=0.15)
+        self.assertEqual(res["status"], "PASS")
+        self.assertEqual(res["assurance"], "EMPIRICAL_BERNSTEIN_PRECISION_CERTIFIED")
+        self.assertLessEqual(res["empirical_bernstein_radius"], 0.15)
+
+        # Small sample fails target precision
+        res_fail = ops.EmpiricalBernsteinOperator.certify_sample_mean([0.1, 0.9], value_range=(0, 1), target_precision=0.10)
+        self.assertEqual(res_fail["status"], "FAIL")
+        self.assertEqual(res_fail["assurance"], "INSUFFICIENT_EMPIRICAL_PRECISION_WITNESS")
+
+        with self.assertRaises(ValueError):
+            ops.EmpiricalBernsteinOperator.certify_sample_mean([0.5], value_range=(0, 1))
+
+    def test_symplectic_energy_conservation_operator(self):
+        # Harmonic oscillator
+        q = [[math.cos(i * 0.1)] for i in range(10)]
+        p = [[-math.sin(i * 0.1)] for i in range(10)]
+        res = ops.SymplecticConservationOperator.audit_conservation(q, p, max_relative_drift=0.05)
+        self.assertEqual(res["status"], "PASS")
+        self.assertEqual(res["assurance"], "SYMPLECTIC_ENERGY_CONSERVED")
+        self.assertLessEqual(res["max_relative_drift"], 0.05)
+
+        # Drifting momentum fails
+        p_bad = [[-math.sin(i * 0.1) * (1.0 + i * 0.2)] for i in range(10)]
+        res_fail = ops.SymplecticConservationOperator.audit_conservation(q, p_bad, max_relative_drift=0.05)
+        self.assertEqual(res_fail["status"], "FAIL")
+        self.assertEqual(res_fail["assurance"], "HAMILTONIAN_ENERGY_DRIFT_WITNESS")
+
+        with self.assertRaises(ValueError):
+            ops.SymplecticConservationOperator.audit_conservation([[1.0]], [[1.0], [2.0]])
+
+    def test_control_barrier_function_operator(self):
+        # Trajectory staying safe above barrier h(x) = x - 1 >= 0
+        traj = [[2.0], [1.8], [1.6]]
+        res = ops.ControlBarrierFunctionOperator.verify_forward_invariance(traj, barrier_normal=[1.0], alpha_decay=0.2)
+        self.assertEqual(res["status"], "PASS")
+        self.assertEqual(res["assurance"], "BARRIER_FORWARD_INVARIANCE_CERTIFIED")
+        self.assertGreaterEqual(res["minimum_barrier_observed"], 0.0)
+
+        # Trajectory breaching safety
+        traj_bad = [[2.0], [0.5], [-0.5]]
+        res_fail = ops.ControlBarrierFunctionOperator.verify_forward_invariance(traj_bad, barrier_normal=[1.0], alpha_decay=0.2)
+        self.assertEqual(res_fail["status"], "FAIL")
+        self.assertEqual(res_fail["assurance"], "BARRIER_SAFETY_BREACH_WITNESS")
+
+        with self.assertRaises(ValueError):
+            ops.ControlBarrierFunctionOperator.verify_forward_invariance([[1.0]], [1.0])
+
+    def test_poincare_limit_cycle_operator(self):
+        # 2D converging trajectory crossing x=0 transversal section
+        traj_conv = [[-1.0, 2.0], [1.0, 2.0], [-1.0, 1.0], [1.0, 1.0], [-1.0, 0.5], [1.0, 0.5], [-1.0, 0.25], [1.0, 0.25]]
+        res = ops.PoincareLimitCycleOperator.analyze_crossings(traj_conv, section_normal=[1.0, 0.0])
+        self.assertEqual(res["status"], "PASS")
+        self.assertEqual(res["assurance"], "POINCARE_LIMIT_CYCLE_CONVERGENCE_CERTIFIED")
+        self.assertLess(res["finest_crossing_diff"], res["initial_crossing_diff"])
+        self.assertGreaterEqual(res["crossings_count"], 3)
+
+        # Diverging trajectory
+        traj_div = [[-1.0, 0.1], [1.0, 0.1], [-1.0, 0.5], [1.0, 0.5], [-1.0, 1.5], [1.0, 1.5], [-1.0, 3.5], [1.0, 3.5]]
+        res_fail = ops.PoincareLimitCycleOperator.analyze_crossings(traj_div, section_normal=[1.0, 0.0])
+        self.assertEqual(res_fail["status"], "FAIL")
+        self.assertEqual(res_fail["assurance"], "POINCARE_RETURN_EXPANSION_WITNESS")
+
+        with self.assertRaises(ValueError):
+            ops.PoincareLimitCycleOperator.analyze_crossings([[-1.0, 1.0]], section_normal=[1.0, 0.0])
+
+    def test_liouville_volume_operator(self):
+        # Damped phase space volume contraction
+        jacobians = [[[-1.0, 0.0], [0.0, -1.0]]]
+        res = ops.LiouvilleVolumeOperator.certify_volume_rate(jacobians, expected_behavior="contraction", max_divergence_bound=-0.01)
+        self.assertEqual(res["status"], "PASS")
+        self.assertEqual(res["assurance"], "LIOUVILLE_VOLUME_CONTRACTION_CERTIFIED")
+        self.assertGreater(res["minimum_contraction_rate"], 0.0)
+
+        # Divergent phase space
+        jac_div = [[[0.5, 0.0], [0.0, 0.5]]]
+        res_fail = ops.LiouvilleVolumeOperator.certify_volume_rate(jac_div, expected_behavior="contraction", max_divergence_bound=-0.01)
+        self.assertEqual(res_fail["status"], "FAIL")
+        self.assertEqual(res_fail["assurance"], "VOLUME_EXPANSION_WITNESS")
+
+        with self.assertRaises(ValueError):
+            ops.LiouvilleVolumeOperator.certify_volume_rate([[[-1.0, 0.0]]])
+
+    def test_dimensional_homogeneity_operator(self):
+        # Additive terms: Force + Force
+        res = ops.DimensionalHomogeneityOperator.verify_additive_terms([[1, 1, -2, 0, 0, 0, 0], [1, 1, -2, 0, 0, 0, 0]])
+        self.assertEqual(res["status"], "PASS")
+        self.assertEqual(res["assurance"], "DIMENSIONAL_HOMOGENEITY_CERTIFIED")
+        self.assertEqual(res["common_dimension"], [1, 1, -2, 0, 0, 0, 0])
+
+        # Incompatible addition: Force + Energy
+        res_fail = ops.DimensionalHomogeneityOperator.verify_additive_terms([[1, 1, -2, 0, 0, 0, 0], [2, 1, -2, 0, 0, 0, 0]])
+        self.assertEqual(res_fail["status"], "FAIL")
+        self.assertEqual(res_fail["assurance"], "DIMENSIONAL_INHOMOGENEITY_WITNESS")
+
+        # Transcendental argument check
+        res_dimless = ops.DimensionalHomogeneityOperator.verify_dimensionless_argument([0, 0, 0, 0, 0, 0, 0])
+        self.assertEqual(res_dimless["status"], "PASS")
+
+        res_dim_fail = ops.DimensionalHomogeneityOperator.verify_dimensionless_argument([1, 0, 0, 0, 0, 0, 0])
+        self.assertEqual(res_dim_fail["status"], "FAIL")
+        self.assertEqual(res_dim_fail["assurance"], "TRANSCENDENTAL_DIMENSION_ERROR_WITNESS")
+
+        with self.assertRaises(ValueError):
+            ops.DimensionalHomogeneityOperator.verify_additive_terms([[1, 2, 3]])
+
+    def test_causal_dag_no_leakage_operator(self):
+        # Valid causal chain
+        res = ops.CausalDAGNoLeakageOperator.verify_causal_graph({"x": 0.0, "y": 1.0, "z": 2.0}, [("x", "y"), ("y", "z")])
+        self.assertEqual(res["status"], "PASS")
+        self.assertEqual(res["assurance"], "CAUSAL_DAG_NO_LEAKAGE_CERTIFIED")
+        self.assertEqual(res["topological_causal_order"], ["x", "y", "z"])
+
+        # Temporal look-ahead leakage (future into past)
+        res_leak = ops.CausalDAGNoLeakageOperator.verify_causal_graph({"x": 2.0, "y": 1.0}, [("x", "y")])
+        self.assertEqual(res_leak["status"], "FAIL")
+        self.assertEqual(res_leak["assurance"], "TEMPORAL_LOOK_AHEAD_LEAKAGE_WITNESS")
+
+        # Causal cycle
+        res_cyc = ops.CausalDAGNoLeakageOperator.verify_causal_graph({"x": 1.0, "y": 1.0}, [("x", "y"), ("y", "x")])
+        self.assertEqual(res_cyc["status"], "FAIL")
+        self.assertEqual(res_cyc["assurance"], "CAUSAL_CYCLE_DETECTED_WITNESS")
+
+        with self.assertRaises(ValueError):
+            ops.CausalDAGNoLeakageOperator.verify_causal_graph({"x": 1.0}, [("x", "missing")])
+
+    def test_data_processing_inequality_operator(self):
+        # Monotonically non-increasing mutual information along Markov chain
+        res = ops.DataProcessingInequalityOperator.verify_information_chain([1.5, 1.2, 0.9, 0.4])
+        self.assertEqual(res["status"], "PASS")
+        self.assertEqual(res["assurance"], "DATA_PROCESSING_INEQUALITY_CERTIFIED")
+        self.assertEqual(res["chain_length"], 4)
+        self.assertAlmostEqual(res["total_information_loss"], 1.1, places=4)
+
+        # Information synthesis breach
+        res_fail = ops.DataProcessingInequalityOperator.verify_information_chain([1.5, 1.2, 1.8])
+        self.assertEqual(res_fail["status"], "FAIL")
+        self.assertEqual(res_fail["assurance"], "DATA_PROCESSING_INEQUALITY_BREACH_WITNESS")
+
+        # Negative mutual information
+        res_neg = ops.DataProcessingInequalityOperator.verify_information_chain([-0.1, 0.5])
+        self.assertEqual(res_neg["status"], "FAIL")
+        self.assertEqual(res_neg["assurance"], "NEGATIVE_MUTUAL_INFORMATION_WITNESS")
+
+        with self.assertRaises(ValueError):
+            ops.DataProcessingInequalityOperator.verify_information_chain([1.0])
+
+    def test_conservation_flow_balance_operator(self):
+        # Inflow = Outflow + Accumulation: 10 = 8 + 2
+        res = ops.ConservationFlowBalanceOperator.verify_flow_balance({"A": 10.0}, {"A": 8.0}, {"A": 2.0})
+        self.assertEqual(res["status"], "PASS")
+        self.assertEqual(res["assurance"], "CONSERVATION_FLOW_BALANCE_CERTIFIED")
+        self.assertEqual(res["nodes_audited"], 1)
+
+        # Imbalance / leakage
+        res_leak = ops.ConservationFlowBalanceOperator.verify_flow_balance({"A": 10.0}, {"A": 8.0}, {"A": 0.0})
+        self.assertEqual(res_leak["status"], "FAIL")
+        self.assertEqual(res_leak["assurance"], "CONSERVATION_LEAKAGE_WITNESS")
+
+        # Negative flow rates raise error
+        with self.assertRaises(ValueError):
+            ops.ConservationFlowBalanceOperator.verify_flow_balance({"A": -5.0}, {"A": 8.0})
+
+    def test_kolmogorov_probability_axioms_operator(self):
+        # Valid discrete probability distribution
+        res = ops.KolmogorovProbabilityAxiomOperator.verify_probability_distribution([0.2, 0.5, 0.3])
+        self.assertEqual(res["status"], "PASS")
+        self.assertEqual(res["assurance"], "KOLMOGOROV_DISTRIBUTION_AXIOMS_CERTIFIED")
+        self.assertEqual(res["events_count"], 3)
+        self.assertAlmostEqual(res["total_mass"], 1.0, places=6)
+
+        # Negative probability (violates Axiom 1)
+        res_neg = ops.KolmogorovProbabilityAxiomOperator.verify_probability_distribution([-0.05, 0.55, 0.50])
+        self.assertEqual(res_neg["status"], "FAIL")
+        self.assertEqual(res_neg["assurance"], "KOLMOGOROV_AXIOM_1_NON_NEGATIVITY_WITNESS")
+
+        # Overflow probability > 1.0
+        res_over = ops.KolmogorovProbabilityAxiomOperator.verify_probability_distribution([1.2, -0.2])
+        self.assertEqual(res_over["status"], "FAIL")
+
+        # Total mass != 1.0 (violates Axiom 2)
+        res_norm = ops.KolmogorovProbabilityAxiomOperator.verify_probability_distribution([0.2, 0.5, 0.5])
+        self.assertEqual(res_norm["status"], "FAIL")
+        self.assertEqual(res_norm["assurance"], "KOLMOGOROV_AXIOM_2_NORMALIZATION_WITNESS")
+
+        with self.assertRaises(ValueError):
+            ops.KolmogorovProbabilityAxiomOperator.verify_probability_distribution([])
 
 
 if __name__ == "__main__":

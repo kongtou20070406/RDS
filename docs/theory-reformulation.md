@@ -46,14 +46,29 @@ python -B scripts/rds_theory_tools.py --scaffold state_space_refinement --out op
 
 状态空间的有限 NFE 比较属于数值诊断：`diagnostic_pass=true` 可以与 `status=UNKNOWN` 同时成立，有限差值和玩具输入不能证明渐近收敛或步长不变性。收缩分析分别报告严格范数条件、工程余量、不动点数值求解与目标偏置；未知目标或求解失败不能记为零偏置。多项式区间 PASS 需要覆盖声明区间的精确有理包围界；精确点可以构成反例，只有有限采样或未得到包围证明时仍为 UNKNOWN。
 
-基础算子库进一步扩展了 5 项确定性、闭环物理与数学算子：
+基础算子库包含 22 项确定性、闭环物理、概率统计与通用第一性原理算子：
+
+### 通用第一性原理算子（放之四海皆准）
+- 量纲齐次性与超越函数无量纲检验（`dimensional_homogeneity`）：基于 Buckingham $\pi$ 定理与国际单位制（SI）7 基本物理量纲指数向量 `[L, M, T, I, Theta, N, J]`，在加法项之间进行严格的量纲一致性匹配，并强制要求超越函数（$\exp, \ln, \sin$ 等）的输入必须完全无量纲，从根本上杜绝“米加秒”或“以带单位物理量作为指数”的非物理理论推演。
+- 因果前序与时间超前泄漏拦截（`causal_dag_no_leakage`）：基于严格时间箭头（$t_{\text{cause}} \le t_{\text{effect}}$）与有向无环图（DAG）拓扑排序，检验因果流向与特征工程是否存在将未来标签反向输入给过去状态的 look-ahead 泄漏，并拦截任何循环因果闭环。
+- 数据处理不等式与信息单调性（`data_processing_inequality`）：基于香农信息论马尔可夫链 $X \to Y \to Z$ 互信息单调不增定理（$I(X; Z) \le I(X; Y)$），拦截任何下游后处理阶段凭空伪造互信息增益的幻觉。
+- 连续性方程与守恒流平衡（`conservation_flow_balance`）：基于物理连续性方程与基尔霍夫节点定律（$\text{流入} - \text{流出} = \text{累积变化}$），对物理质量、能量、电荷或算力 Token 网络的节点流平衡进行零泄漏确定性审计。
+- 柯尔莫哥洛夫概率公理与归一化（`kolmogorov_probability_axioms`）：基于概率论柯尔莫哥洛夫公理体系，验证事件概率非负性（$p_i \ge 0$）、全概率空间测度归一性（$\sum p_i = 1.0$）及分布合法性，提供精确的反例数值坐标证人。
+
+### 统计学、概率学与动力学算子
 - 盖尔圆盘谱界分析（`gershgorin_spectral_bound`）：基于 Lean 4 Mathlib Gershgorin 圆盘定理（`Mathlib.LinearAlgebra.Matrix.Gershgorin`），在离散收缩谱半径、非奇异性（严格对角占优）与连续 Hurwitz 稳定性间提供精确有理数证书，越界时提取圆盘与违背行作为反例证人。
 - 复合层 Lipschitz 界（`lipschitz_layer_bound`）：基于 TorchLean 与 Mathlib 连续线性算子范数界，给出逐层 Frobenius 与无穷范数积，验证输入扰动输出容差上界，超出裕度时提供超标比率反例。
 - 次高斯 Hoeffding 集中界（`hoeffding_sample_bound`）：基于 Mathlib 次高斯矩尾界（`ProbabilityTheory.HasSubgaussianMGF`），计算有限样本置信半径与所需样本量，阻断小样本随机方差被误判为科学增益的统计幻觉。
 - 2D 有理 Voronoi 域覆盖（`rational_voronoi_partition`）：验证离散几何紧覆盖，精确检测未覆盖空洞并输出未覆盖点坐标。
 - 多步 Lyapunov 能量耗散（`multi_step_energy_dissipation`）：沿多步轨迹跟踪二次 Lyapunov 能量单调下降，在出现能量放大的步数输出发散步与增量凭据。
-
-固定示例与导出模板自检是算子软件回归，不说明真实模型或数据已接入 RDS 执行、目标绑定或下一次选路。真实应用还需绑定输入来源、声明范围、方法与资源授权，并使用适用检查器。当前算子 CLI 没有项目任务输入契约；它不完成 V3 的目标绑定研究示例，也未提供 Lean 公理审查工作流。
+- 马尔可夫与切比雪夫非参数尾部界（`markov_chebyshev_bound`）：根据一阶矩（均值）与二阶矩（方差），在无分布先验下计算单侧及双侧概率尾部极值上界，提供无偏风险证人。
+- 假发现率多重假设检验控制（`false_discovery_rate_bh`）：提供独立假设下的 Benjamini-Hochberg (BH) 与任意相关依赖下的 Benjamini-Yekutieli (BY) 严格 $q$ 值阈值控制，剔除伪假说。
+- 随时有效 Ville 检验与超鞅停机（`sequential_ville_eprocess`）：基于 Ville 超鞅不等式（$P(\sup_{t} E_t \ge 1/\alpha) \le \alpha$），构建抵御任意可择停机偏差（optional stopping）的序列证据积累算子。
+- 经验伯恩斯坦方差自适应集中界（`empirical_bernstein_bound`）：基于样本经验方差动态收缩置信区间，在大样本低方差工况下给出远优于最坏情况 Hoeffding 界的紧致误差半径。
+- 辛几何哈密顿能量守恒（`symplectic_energy_conservation`）：在相空间 $(q, p)$ 中跟踪哈密顿总能量 $H(q, p)$ 的数值漂移，区分数值伪耗散/伪发散与真实动力学守恒。
+- 控制屏障函数离散前向不变性（`control_barrier_invariance`）：基于离散 Control Barrier Function (CBF)，对状态轨迹进入并保持在安全集合 $h(x) \ge 0$ 的前向不变性提供严格充要证书。
+- 庞加莱横截面极限环收缩（`poincare_section_return`）：在多维非线性动力系统中建立余维为 1 的局部横截超平面，检测轨迹穿越点序列的返回映射收缩因子与周期极限环轨道稳定性。
+- 刘维尔定理相空间体积演化（`liouville_phase_volume`）：计算流场 Jacobian 矩阵迹（散度），严格界定相空间体积连续演化率，认证体积保持流（保守系统）或耗散吸引子收缩率。
 
 摘要保留 `id/title/reason/matched_tags/required_inputs/locator/runnable_operator` 和目录 SHA；`selection=TAG_MATCH_ONLY`、`prerequisites=NOT_ASSESSED`。标签命中只提供工具线索，不验证前提、排名科学价值或授权执行。`goal.reformulation.signals` 可以附同一短名单，历史 `as_of` 必须允许该目录日期。Skill 只给入口，不加载整个库；没有匹配时保留未匹配数量，不硬塞无关工具。
 

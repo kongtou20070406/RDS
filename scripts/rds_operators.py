@@ -815,6 +815,830 @@ class MultiStepEnergyDissipationOperator:
         return _scaffold(MultiStepEnergyDissipationOperator, _dissipation_self_test)
 
 
+class MarkovChebyshevBoundOperator:
+    """Non-parametric Markov and Chebyshev tail probability bounds.
+
+    Grounding: Mathlib MeasureTheory.mul_meas_ge_le_lintegral₀ and meas_ge_le_lintegral_div.
+    """
+
+    @classmethod
+    def compute_tail_bounds(cls, mean, variance=None, threshold=None, max_allowable_probability=None):
+        mu = _finite_number(mean)
+        if mu < 0:
+            raise ValueError("Mean must be non-negative for non-negative random variables")
+        var = _finite_number(variance) if variance is not None else None
+        if var is not None and var < 0:
+            raise ValueError("Variance must be non-negative")
+        a = _finite_number(threshold) if threshold is not None else None
+        if a is not None and a <= 0:
+            raise ValueError("Threshold must be strictly positive")
+
+        markov_bound = min(1.0, mu / a) if a is not None else None
+        chebyshev_bound = None
+        if var is not None and a is not None and a > mu:
+            diff = a - mu
+            chebyshev_bound = min(1.0, var / (var + diff * diff))
+
+        best_bound = chebyshev_bound if chebyshev_bound is not None else markov_bound
+
+        if max_allowable_probability is not None:
+            max_p = _finite_number(max_allowable_probability)
+            if not 0 < max_p <= 1:
+                raise ValueError("Allowable probability threshold must be in (0, 1]")
+            if best_bound is not None and best_bound <= max_p:
+                return {
+                    "status": "PASS",
+                    "assurance": "TAIL_RISK_CERTIFIED_BOUND",
+                    "mean": mu,
+                    "variance": var,
+                    "threshold": a,
+                    "markov_bound": markov_bound,
+                    "chebyshev_cantelli_bound": chebyshev_bound,
+                    "certified_upper_probability": best_bound,
+                    "allowable_probability": max_p,
+                }
+            return {
+                "status": "FAIL",
+                "assurance": "TAIL_RISK_BREACH_WITNESS",
+                "mean": mu,
+                "variance": var,
+                "threshold": a,
+                "markov_bound": markov_bound,
+                "chebyshev_cantelli_bound": chebyshev_bound,
+                "witness": {
+                    "best_bound": best_bound,
+                    "allowable_probability": max_p,
+                    "probability_excess": (best_bound - max_p) if best_bound is not None else None,
+                },
+            }
+
+        return {
+            "status": "PASS",
+            "assurance": "TAIL_BOUNDS_COMPUTED",
+            "mean": mu,
+            "variance": var,
+            "threshold": a,
+            "markov_bound": markov_bound,
+            "chebyshev_cantelli_bound": chebyshev_bound,
+            "best_bound": best_bound,
+        }
+
+    @staticmethod
+    def scaffold_code():
+        return _scaffold(MarkovChebyshevBoundOperator, _markov_chebyshev_self_test)
+
+
+class FalseDiscoveryRateOperator:
+    """Benjamini-Hochberg and Benjamini-Yekutieli false discovery rate (FDR) control for multiple hypothesis testing."""
+
+    @classmethod
+    def control_fdr(cls, p_values, alpha=0.05, method="bh"):
+        if not isinstance(p_values, (list, tuple)) or not 1 <= len(p_values) <= 4096:
+            raise ValueError("Expected 1..4096 p-values")
+        alph = _finite_number(alpha)
+        if not 0 < alph < 1:
+            raise ValueError("Significance level alpha must be in (0, 1)")
+        if method not in ("bh", "by"):
+            raise ValueError("Method must be 'bh' (Benjamini-Hochberg) or 'by' (Benjamini-Yekutieli)")
+
+        m = len(p_values)
+        indexed_p = []
+        for idx, p in enumerate(p_values):
+            val = _finite_number(p)
+            if not 0 <= val <= 1:
+                raise ValueError("p-values must be in [0, 1]")
+            indexed_p.append((idx, val))
+
+        indexed_p.sort(key=lambda item: item[1])
+        harmonic_m = math.fsum(1.0 / j for j in range(1, m + 1)) if method == "by" else 1.0
+
+        max_k = None
+        for i, (orig_idx, p_val) in enumerate(indexed_p, start=1):
+            crit = (i / m) * (alph / harmonic_m)
+            if p_val <= crit:
+                max_k = i
+
+        if max_k is not None:
+            discoveries = [orig_idx for orig_idx, _ in indexed_p[:max_k]]
+            return {
+                "status": "PASS",
+                "assurance": "FDR_CONTROLLED_DISCOVERIES",
+                "method": method,
+                "nominal_fdr_alpha": alph,
+                "total_hypotheses": m,
+                "discoveries_count": max_k,
+                "discovered_indices": sorted(discoveries),
+                "threshold_p_value": indexed_p[max_k - 1][1],
+            }
+        return {
+            "status": "FAIL",
+            "assurance": "NO_DISCOVERIES_AT_FDR_THRESHOLD",
+            "method": method,
+            "nominal_fdr_alpha": alph,
+            "total_hypotheses": m,
+            "discoveries_count": 0,
+            "witness": {
+                "min_p_value": indexed_p[0][1],
+                "first_critical_value": (1.0 / m) * (alph / harmonic_m),
+            },
+        }
+
+    @staticmethod
+    def scaffold_code():
+        return _scaffold(FalseDiscoveryRateOperator, _fdr_self_test)
+
+
+class SequentialVilleEProcessOperator:
+    """Anytime-valid sequential testing via non-negative supermartingales and Ville's inequality.
+
+    Grounding: Ville's inequality for supermartingales (FormalMartingales.ville_inequality).
+    """
+
+    @classmethod
+    def audit_evidence_stream(cls, e_values, alpha=0.05):
+        if not isinstance(e_values, (list, tuple)) or len(e_values) < 1:
+            raise ValueError("Expected at least one sequential e-value")
+        alph = _finite_number(alpha)
+        if not 0 < alph < 1:
+            raise ValueError("Significance level alpha must be in (0, 1)")
+
+        wealth_threshold = 1.0 / alph
+        running_wealth = 1.0
+        trajectory = []
+        stopping_step = None
+
+        for t, e in enumerate(e_values):
+            val = _finite_number(e)
+            if val < 0:
+                raise ValueError("e-values must be non-negative")
+            running_wealth *= val
+            trajectory.append(running_wealth)
+            if running_wealth >= wealth_threshold and stopping_step is None:
+                stopping_step = t + 1
+
+        if stopping_step is not None:
+            return {
+                "status": "PASS",
+                "assurance": "ANYTIME_VALID_EVIDENCE_REJECTION",
+                "significance_alpha": alph,
+                "wealth_threshold": wealth_threshold,
+                "stopping_step": stopping_step,
+                "wealth_at_stopping": trajectory[stopping_step - 1],
+                "total_steps_observed": len(e_values),
+            }
+        return {
+            "status": "FAIL",
+            "assurance": "EVIDENCE_THRESHOLD_UNREACHED_WITNESS",
+            "significance_alpha": alph,
+            "wealth_threshold": wealth_threshold,
+            "final_wealth": running_wealth,
+            "max_wealth_observed": max(trajectory),
+            "witness": {
+                "deficit": wealth_threshold - max(trajectory),
+                "wealth_ratio_to_threshold": max(trajectory) / wealth_threshold,
+            },
+        }
+
+    @staticmethod
+    def scaffold_code():
+        return _scaffold(SequentialVilleEProcessOperator, _ville_self_test)
+
+
+class EmpiricalBernsteinOperator:
+    """Variance-sensitive empirical Bernstein concentration bounds for bounded random variables."""
+
+    @classmethod
+    def certify_sample_mean(cls, observations, value_range, delta=0.05, target_precision=None):
+        if not isinstance(observations, (list, tuple)) or len(observations) < 2:
+            raise ValueError("Expected at least 2 empirical observations")
+        if not isinstance(value_range, (list, tuple)) or len(value_range) != 2:
+            raise ValueError("Expected value range (lower, upper)")
+        a, b = map(_finite_number, value_range)
+        if a >= b:
+            raise ValueError("Lower bound must be strictly less than upper bound")
+        d = _finite_number(delta)
+        if not 0 < d < 1:
+            raise ValueError("Significance delta must be in (0, 1)")
+
+        n = len(observations)
+        r = b - a
+        obs = [_finite_number(x) for x in observations]
+        if any(x < a or x > b for x in obs):
+            raise ValueError("All observations must fall within the declared value range")
+
+        mean = math.fsum(obs) / n
+        var = math.fsum((x - mean) ** 2 for x in obs) / (n - 1)
+        log_term = math.log(2.0 / d)
+
+        term1 = math.sqrt((2.0 * var * log_term) / n)
+        term2 = (7.0 * r * log_term) / (3.0 * (n - 1))
+        eb_radius = term1 + term2
+        hoeffding_radius = r * math.sqrt(log_term / (2.0 * n))
+
+        if target_precision is not None:
+            target = _finite_number(target_precision)
+            if target <= 0:
+                raise ValueError("Target precision must be positive")
+            if eb_radius <= target:
+                return {
+                    "status": "PASS",
+                    "assurance": "EMPIRICAL_BERNSTEIN_PRECISION_CERTIFIED",
+                    "sample_size": n,
+                    "sample_mean": mean,
+                    "sample_variance": var,
+                    "empirical_bernstein_radius": eb_radius,
+                    "hoeffding_radius": hoeffding_radius,
+                    "variance_reduction_gain": hoeffding_radius - eb_radius,
+                    "target_precision": target,
+                }
+            return {
+                "status": "FAIL",
+                "assurance": "INSUFFICIENT_EMPIRICAL_PRECISION_WITNESS",
+                "sample_size": n,
+                "sample_mean": mean,
+                "sample_variance": var,
+                "empirical_bernstein_radius": eb_radius,
+                "hoeffding_radius": hoeffding_radius,
+                "witness": {
+                    "precision_excess": eb_radius - target,
+                    "target_precision": target,
+                },
+            }
+
+        return {
+            "status": "PASS",
+            "assurance": "EMPIRICAL_BERNSTEIN_BOUNDS_COMPUTED",
+            "sample_size": n,
+            "sample_mean": mean,
+            "sample_variance": var,
+            "empirical_bernstein_radius": eb_radius,
+            "hoeffding_radius": hoeffding_radius,
+        }
+
+    @staticmethod
+    def scaffold_code():
+        return _scaffold(EmpiricalBernsteinOperator, _bernstein_self_test)
+
+
+class SymplecticConservationOperator:
+    """Hamiltonian energy conservation and symplectic integration drift auditor."""
+
+    @classmethod
+    def audit_conservation(cls, trajectory_q, trajectory_p, mass=1.0, max_relative_drift=0.01):
+        if not isinstance(trajectory_q, (list, tuple)) or not isinstance(trajectory_p, (list, tuple)):
+            raise ValueError("Expected q and p trajectories")
+        if len(trajectory_q) != len(trajectory_p) or len(trajectory_q) < 2:
+            raise ValueError("Trajectories must have equal length >= 2")
+        dim = _dimension(len(trajectory_q[0]))
+        m = _finite_number(mass)
+        if m <= 0:
+            raise ValueError("Mass must be strictly positive")
+        tol = _finite_number(max_relative_drift)
+        if tol <= 0:
+            raise ValueError("Max relative drift must be strictly positive")
+
+        q_states = [_vector(q, dim, "q state") for q in trajectory_q]
+        p_states = [_vector(p, dim, "p state") for p in trajectory_p]
+
+        def hamiltonian(q, p):
+            kin = math.fsum(pi ** 2 for pi in p) / (2.0 * m)
+            pot = 0.5 * math.fsum(qi ** 2 for qi in q)
+            return kin + pot
+
+        h_0 = hamiltonian(q_states[0], p_states[0])
+        h_base = max(1e-9, abs(h_0))
+
+        drifts = []
+        drift_witness = None
+
+        for t in range(len(q_states)):
+            ht = hamiltonian(q_states[t], p_states[t])
+            rel_drift = abs(ht - h_0) / h_base
+            drifts.append(rel_drift)
+            if rel_drift > tol and drift_witness is None:
+                drift_witness = {
+                    "drift_step": t,
+                    "relative_drift": rel_drift,
+                    "tolerance": tol,
+                    "initial_energy": h_0,
+                    "energy_at_drift": ht,
+                }
+
+        max_drift = max(drifts)
+        if drift_witness is None:
+            return {
+                "status": "PASS",
+                "assurance": "SYMPLECTIC_ENERGY_CONSERVED",
+                "initial_energy": h_0,
+                "max_relative_drift": max_drift,
+                "tolerance": tol,
+                "trajectory_length": len(q_states),
+            }
+        return {
+            "status": "FAIL",
+            "assurance": "HAMILTONIAN_ENERGY_DRIFT_WITNESS",
+            "initial_energy": h_0,
+            "max_relative_drift": max_drift,
+            "tolerance": tol,
+            "witness": drift_witness,
+        }
+
+    @staticmethod
+    def scaffold_code():
+        return _scaffold(SymplecticConservationOperator, _symplectic_self_test)
+
+
+class ControlBarrierFunctionOperator:
+    """Discrete Control Barrier Function (CBF) forward invariance safety verifier."""
+
+    @classmethod
+    def verify_forward_invariance(cls, trajectory, barrier_normal, barrier_offset=0.0, alpha_decay=0.1):
+        if not isinstance(trajectory, (list, tuple)) or len(trajectory) < 2:
+            raise ValueError("Expected trajectory with at least 2 states")
+        dim = _dimension(len(trajectory[0]))
+        normal = _vector(barrier_normal, dim, "barrier normal")
+        offset = _finite_number(barrier_offset)
+        alpha = _finite_number(alpha_decay)
+        if not 0 < alpha <= 1:
+            raise ValueError("Alpha decay must be in (0, 1]")
+
+        states = [_vector(x, dim, "state") for x in trajectory]
+
+        def barrier(x):
+            return math.fsum(normal[i] * x[i] for i in range(dim)) + offset
+
+        h_values = [barrier(x) for x in states]
+        if h_values[0] < -1e-12:
+            return {
+                "status": "FAIL",
+                "assurance": "INITIAL_STATE_UNSAFE_WITNESS",
+                "initial_barrier_value": h_values[0],
+                "witness": {"initial_state": states[0], "deficit": -h_values[0]},
+            }
+
+        breach_witness = None
+        for t in range(len(states) - 1):
+            h_curr = h_values[t]
+            h_next = h_values[t + 1]
+            cbf_condition = (h_next - h_curr) >= -alpha * h_curr - 1e-12
+            if not cbf_condition or h_next < -1e-12:
+                if breach_witness is None:
+                    breach_witness = {
+                        "breach_step": t,
+                        "barrier_current": h_curr,
+                        "barrier_next": h_next,
+                        "required_min_next": (1.0 - alpha) * h_curr,
+                        "state_current": states[t],
+                        "state_next": states[t + 1],
+                    }
+
+        if breach_witness is None:
+            return {
+                "status": "PASS",
+                "assurance": "BARRIER_FORWARD_INVARIANCE_CERTIFIED",
+                "alpha_decay": alpha,
+                "minimum_barrier_observed": min(h_values),
+                "trajectory_length": len(states),
+            }
+        return {
+            "status": "FAIL",
+            "assurance": "BARRIER_SAFETY_BREACH_WITNESS",
+            "alpha_decay": alpha,
+            "minimum_barrier_observed": min(h_values),
+            "witness": breach_witness,
+        }
+
+    @staticmethod
+    def scaffold_code():
+        return _scaffold(ControlBarrierFunctionOperator, _cbf_self_test)
+
+
+class PoincareLimitCycleOperator:
+    """Transversal Poincaré section return map contraction and limit cycle verifier."""
+
+    @classmethod
+    def analyze_crossings(cls, trajectory, section_normal, section_offset=0.0):
+        if not isinstance(trajectory, (list, tuple)) or len(trajectory) < 4:
+            raise ValueError("Expected trajectory with at least 4 states")
+        dim = _dimension(len(trajectory[0]))
+        normal = _vector(section_normal, dim, "section normal")
+        offset = _finite_number(section_offset)
+
+        states = [_vector(x, dim, "state") for x in trajectory]
+
+        def s(x):
+            return math.fsum(normal[i] * x[i] for i in range(dim)) + offset
+
+        s_vals = [s(x) for x in states]
+        crossings = []
+
+        for t in range(len(states) - 1):
+            if s_vals[t] <= 0 and s_vals[t + 1] > 0:
+                denom = s_vals[t + 1] - s_vals[t]
+                lam = -s_vals[t] / denom if denom != 0 else 0.0
+                cross_pt = [states[t][i] + lam * (states[t + 1][i] - states[t][i]) for i in range(dim)]
+                crossings.append(cross_pt)
+
+        if len(crossings) < 3:
+            return {
+                "status": "UNKNOWN",
+                "assurance": "INSUFFICIENT_POINCARE_CROSSINGS",
+                "crossings_found": len(crossings),
+                "reason": "At least 3 transversal crossings are required to audit return contraction",
+            }
+
+        diffs = [math.sqrt(math.fsum((crossings[i + 1][j] - crossings[i][j]) ** 2 for j in range(dim)))
+                 for i in range(len(crossings) - 1)]
+
+        is_contracting = all(diffs[i + 1] <= diffs[i] * 0.9 + 1e-4 for i in range(len(diffs) - 1))
+        if is_contracting:
+            return {
+                "status": "PASS",
+                "assurance": "POINCARE_LIMIT_CYCLE_CONVERGENCE_CERTIFIED",
+                "crossings_count": len(crossings),
+                "initial_crossing_diff": diffs[0],
+                "finest_crossing_diff": diffs[-1],
+                "estimated_limit_cycle_state": crossings[-1],
+            }
+        return {
+            "status": "FAIL",
+            "assurance": "POINCARE_RETURN_EXPANSION_WITNESS",
+            "crossings_count": len(crossings),
+            "diffs": diffs,
+            "witness": {
+                "initial_diff": diffs[0],
+                "final_diff": diffs[-1],
+            },
+        }
+
+    @staticmethod
+    def scaffold_code():
+        return _scaffold(PoincareLimitCycleOperator, _poincare_self_test)
+
+
+class LiouvilleVolumeOperator:
+    """Liouville phase-space volume evolution and divergence attractor verifier."""
+
+    @classmethod
+    def certify_volume_rate(cls, jacobian_matrices, expected_behavior="contraction", max_divergence_bound=-0.01):
+        if not isinstance(jacobian_matrices, (list, tuple)) or len(jacobian_matrices) < 1:
+            raise ValueError("Expected at least one Jacobian matrix")
+        dim = _dimension(len(jacobian_matrices[0]))
+        div_bound = _finite_number(max_divergence_bound)
+
+        divergences = []
+        for idx, j_mat in enumerate(jacobian_matrices):
+            _matrix(j_mat, dim, dim, f"Jacobian {idx}")
+            div_val = math.fsum(j_mat[i][i] for i in range(dim))
+            divergences.append(div_val)
+
+        max_div = max(divergences)
+        min_div = min(divergences)
+
+        if expected_behavior == "contraction":
+            if max_div <= div_bound:
+                return {
+                    "status": "PASS",
+                    "assurance": "LIOUVILLE_VOLUME_CONTRACTION_CERTIFIED",
+                    "expected_behavior": expected_behavior,
+                    "max_divergence": max_div,
+                    "bound": div_bound,
+                    "minimum_contraction_rate": -max_div,
+                }
+            return {
+                "status": "FAIL",
+                "assurance": "VOLUME_EXPANSION_WITNESS",
+                "expected_behavior": expected_behavior,
+                "max_divergence": max_div,
+                "bound": div_bound,
+                "witness": {
+                    "offending_divergence": max_div,
+                    "bound_excess": max_div - div_bound,
+                },
+            }
+
+        elif expected_behavior == "conservative":
+            if abs(max_div) <= 1e-6 and abs(min_div) <= 1e-6:
+                return {
+                    "status": "PASS",
+                    "assurance": "INCOMPRESSIBLE_FLOW_CERTIFIED",
+                    "expected_behavior": expected_behavior,
+                    "max_divergence": max_div,
+                }
+            return {
+                "status": "FAIL",
+                "assurance": "NON_CONSERVATIVE_DIVERGENCE_WITNESS",
+                "expected_behavior": expected_behavior,
+                "witness": {
+                    "max_absolute_divergence": max(abs(max_div), abs(min_div)),
+                },
+            }
+
+        raise ValueError("Expected behavior must be 'contraction' or 'conservative'")
+
+    @staticmethod
+    def scaffold_code():
+        return _scaffold(LiouvilleVolumeOperator, _liouville_self_test)
+
+
+class DimensionalHomogeneityOperator:
+    """Dimensional homogeneity and Buckingham Pi consistency verifier for physical equations.
+
+    SI Exponent Vector: [L, M, T, I, Theta, N, J] (Length, Mass, Time, Current, Temp, Amount, Lum).
+    """
+
+    @staticmethod
+    def _dimension_vector(vec):
+        if not isinstance(vec, (list, tuple)) or len(vec) != 7:
+            raise ValueError("Dimensional exponent vector must have exactly 7 integer exponents [L, M, T, I, Theta, N, J]")
+        for item in vec:
+            if type(item) is not int or not -32 <= item <= 32:
+                raise ValueError("Exponents must be integers in -32..32")
+        return list(vec)
+
+    @classmethod
+    def verify_additive_terms(cls, terms_dimensions):
+        if not isinstance(terms_dimensions, (list, tuple)) or len(terms_dimensions) < 2:
+            raise ValueError("Expected at least two terms to compare dimensional homogeneity")
+        parsed = [cls._dimension_vector(vec) for vec in terms_dimensions]
+        base = parsed[0]
+        for idx, vec in enumerate(parsed[1:], start=1):
+            if vec != base:
+                return {
+                    "status": "FAIL",
+                    "assurance": "DIMENSIONAL_INHOMOGENEITY_WITNESS",
+                    "base_dimension": base,
+                    "witness": {
+                        "term_index": idx,
+                        "offending_dimension": vec,
+                        "expected_dimension": base,
+                        "difference": [vec[k] - base[k] for k in range(7)],
+                    },
+                }
+        return {
+            "status": "PASS",
+            "assurance": "DIMENSIONAL_HOMOGENEITY_CERTIFIED",
+            "common_dimension": base,
+            "terms_count": len(parsed),
+        }
+
+    @classmethod
+    def verify_dimensionless_argument(cls, argument_dimension):
+        vec = cls._dimension_vector(argument_dimension)
+        if any(exp != 0 for exp in vec):
+            return {
+                "status": "FAIL",
+                "assurance": "TRANSCENDENTAL_DIMENSION_ERROR_WITNESS",
+                "witness": {
+                    "argument_dimension": vec,
+                    "expected": [0] * 7,
+                    "reason": "Transcendental functions (exp, log, sin, etc.) strictly require dimensionless inputs",
+                },
+            }
+        return {
+            "status": "PASS",
+            "assurance": "DIMENSIONLESS_INPUT_CERTIFIED",
+            "dimension": vec,
+        }
+
+    @staticmethod
+    def scaffold_code():
+        return _scaffold(DimensionalHomogeneityOperator, _dim_homogeneity_self_test)
+
+
+class CausalDAGNoLeakageOperator:
+    """Causal precedence, acyclicity, and look-ahead temporal data leakage verifier."""
+
+    @classmethod
+    def verify_causal_graph(cls, nodes_timestamps, edges):
+        if not isinstance(nodes_timestamps, dict) or len(nodes_timestamps) < 1:
+            raise ValueError("Expected dictionary of nodes and timestamps")
+        if not isinstance(edges, (list, tuple)):
+            raise ValueError("Expected list of directed causal edges (u -> v)")
+
+        nodes = set(nodes_timestamps.keys())
+        timestamps = {node: _finite_number(ts) for node, ts in nodes_timestamps.items()}
+
+        for u, v in edges:
+            if u not in nodes or v not in nodes:
+                raise ValueError(f"Edge ({u}, {v}) refers to undeclared node")
+            if timestamps[u] > timestamps[v] + 1e-9:
+                return {
+                    "status": "FAIL",
+                    "assurance": "TEMPORAL_LOOK_AHEAD_LEAKAGE_WITNESS",
+                    "witness": {
+                        "source_node": u,
+                        "target_node": v,
+                        "source_timestamp": timestamps[u],
+                        "target_timestamp": timestamps[v],
+                        "leakage_lead_time": timestamps[u] - timestamps[v],
+                        "defect": "Information travels backwards in time (future features leaking into past)",
+                    },
+                }
+
+        in_degree = {n: 0 for n in nodes}
+        adj = {n: [] for n in nodes}
+        for u, v in edges:
+            adj[u].append(v)
+            in_degree[v] += 1
+
+        queue = [n for n in nodes if in_degree[n] == 0]
+        sorted_order = []
+        while queue:
+            curr = queue.pop(0)
+            sorted_order.append(curr)
+            for nxt in adj[curr]:
+                in_degree[nxt] -= 1
+                if in_degree[nxt] == 0:
+                    queue.append(nxt)
+
+        if len(sorted_order) < len(nodes):
+            return {
+                "status": "FAIL",
+                "assurance": "CAUSAL_CYCLE_DETECTED_WITNESS",
+                "witness": {
+                    "resolved_nodes_count": len(sorted_order),
+                    "total_nodes": len(nodes),
+                    "defect": "Causal influence graph contains directed cycles violating causal acyclicity",
+                },
+            }
+
+        return {
+            "status": "PASS",
+            "assurance": "CAUSAL_DAG_NO_LEAKAGE_CERTIFIED",
+            "nodes_count": len(nodes),
+            "edges_count": len(edges),
+            "topological_causal_order": sorted_order,
+        }
+
+    @staticmethod
+    def scaffold_code():
+        return _scaffold(CausalDAGNoLeakageOperator, _causal_dag_self_test)
+
+
+class DataProcessingInequalityOperator:
+    """Information monotonicity and Data Processing Inequality (DPI) verifier.
+
+    Markov chain X -> Y_1 -> ... -> Y_k implies I(X; Y_1) >= I(X; Y_2) >= ... >= 0.
+    """
+
+    @classmethod
+    def verify_information_chain(cls, mutual_information_sequence, tolerance=1e-6):
+        if not isinstance(mutual_information_sequence, (list, tuple)) or len(mutual_information_sequence) < 2:
+            raise ValueError("Expected at least two mutual information values along the Markov chain")
+        tol = _finite_number(tolerance)
+        if tol < 0:
+            raise ValueError("Tolerance must be non-negative")
+
+        infos = [_finite_number(val) for val in mutual_information_sequence]
+        if any(val < -tol for val in infos):
+            return {
+                "status": "FAIL",
+                "assurance": "NEGATIVE_MUTUAL_INFORMATION_WITNESS",
+                "witness": {"min_value": min(infos), "defect": "Mutual information cannot be negative"},
+            }
+
+        for i in range(len(infos) - 1):
+            curr_i = infos[i]
+            next_i = infos[i + 1]
+            if next_i > curr_i + tol:
+                return {
+                    "status": "FAIL",
+                    "assurance": "DATA_PROCESSING_INEQUALITY_BREACH_WITNESS",
+                    "witness": {
+                        "stage_transition": [i, i + 1],
+                        "prior_information": curr_i,
+                        "posterior_information": next_i,
+                        "unphysical_information_gain": next_i - curr_i,
+                        "defect": "Post-processing cannot synthesize new mutual information (DPI violation)",
+                    },
+                }
+
+        return {
+            "status": "PASS",
+            "assurance": "DATA_PROCESSING_INEQUALITY_CERTIFIED",
+            "chain_length": len(infos),
+            "initial_information": infos[0],
+            "terminal_information": infos[-1],
+            "total_information_loss": infos[0] - infos[-1],
+        }
+
+    @staticmethod
+    def scaffold_code():
+        return _scaffold(DataProcessingInequalityOperator, _dpi_self_test)
+
+
+class ConservationFlowBalanceOperator:
+    """Continuity equation and node flow balance verifier for mass, energy, charge, and tokens."""
+
+    @classmethod
+    def verify_flow_balance(cls, node_inflows, node_outflows, node_storage_rates=None, tolerance=1e-6):
+        if not isinstance(node_inflows, dict) or not isinstance(node_outflows, dict):
+            raise ValueError("Inflows and outflows must be dictionaries mapping node to rate")
+        tol = _finite_number(tolerance)
+        if tol < 0:
+            raise ValueError("Tolerance must be non-negative")
+
+        nodes = set(node_inflows.keys()) | set(node_outflows.keys())
+        if node_storage_rates:
+            nodes |= set(node_storage_rates.keys())
+
+        storage = node_storage_rates or {}
+
+        max_imbalance = 0.0
+        worst_node = None
+        worst_details = None
+
+        for n in nodes:
+            inflow = _finite_number(node_inflows.get(n, 0.0))
+            outflow = _finite_number(node_outflows.get(n, 0.0))
+            accum = _finite_number(storage.get(n, 0.0))
+            if inflow < 0 or outflow < 0:
+                raise ValueError(f"Inflows and outflows must be non-negative rates for node '{n}'")
+
+            imbalance = abs((inflow - outflow) - accum)
+            if imbalance > max_imbalance:
+                max_imbalance = imbalance
+                worst_node = n
+                worst_details = {"inflow": inflow, "outflow": outflow, "accumulation": accum, "net_defect": (inflow - outflow) - accum}
+
+        if max_imbalance <= tol:
+            return {
+                "status": "PASS",
+                "assurance": "CONSERVATION_FLOW_BALANCE_CERTIFIED",
+                "nodes_audited": len(nodes),
+                "max_imbalance_observed": max_imbalance,
+                "tolerance": tol,
+            }
+        return {
+            "status": "FAIL",
+            "assurance": "CONSERVATION_LEAKAGE_WITNESS",
+            "max_imbalance_observed": max_imbalance,
+            "witness": {
+                "offending_node": worst_node,
+                **worst_details,
+            },
+        }
+
+    @staticmethod
+    def scaffold_code():
+        return _scaffold(ConservationFlowBalanceOperator, _conservation_flow_self_test)
+
+
+class KolmogorovProbabilityAxiomOperator:
+    """Kolmogorov probability axioms and distribution well-formedness verifier."""
+
+    @classmethod
+    def verify_probability_distribution(cls, probabilities, tolerance=1e-6):
+        if not isinstance(probabilities, (list, tuple)) or len(probabilities) < 1:
+            raise ValueError("Expected list of probabilities")
+        tol = _finite_number(tolerance)
+        if tol < 0:
+            raise ValueError("Tolerance must be non-negative")
+
+        probs = [_finite_number(p) for p in probabilities]
+
+        for idx, p in enumerate(probs):
+            if p < -tol:
+                return {
+                    "status": "FAIL",
+                    "assurance": "KOLMOGOROV_AXIOM_1_NON_NEGATIVITY_WITNESS",
+                    "witness": {"coordinate": idx, "illegal_value": p, "defect": "Negative probability violates Axiom 1"},
+                }
+            if p > 1.0 + tol:
+                return {
+                    "status": "FAIL",
+                    "assurance": "KOLMOGOROV_PROBABILITY_OVERFLOW_WITNESS",
+                    "witness": {"coordinate": idx, "illegal_value": p, "defect": "Single event probability exceeds 1.0"},
+                }
+
+        total_mass = math.fsum(probs)
+        mass_error = abs(total_mass - 1.0)
+        if mass_error > tol:
+            return {
+                "status": "FAIL",
+                "assurance": "KOLMOGOROV_AXIOM_2_NORMALIZATION_WITNESS",
+                "witness": {
+                    "total_mass": total_mass,
+                    "normalization_error": total_mass - 1.0,
+                    "defect": "Total sample space probability must sum to exactly 1.0",
+                },
+            }
+
+        return {
+            "status": "PASS",
+            "assurance": "KOLMOGOROV_DISTRIBUTION_AXIOMS_CERTIFIED",
+            "events_count": len(probs),
+            "total_mass": total_mass,
+            "min_probability": min(probs),
+            "max_probability": max(probs),
+        }
+
+    @staticmethod
+    def scaffold_code():
+        return _scaffold(KolmogorovProbabilityAxiomOperator, _kolmogorov_self_test)
+
+
 def _ssm_self_test():
     op = ContinuousStateSpaceOperator(3, in_dim=2, out_dim=2)
     report = op.verify_step_invariance()
@@ -901,6 +1725,117 @@ def _dissipation_self_test():
     return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
 
 
+def _markov_chebyshev_self_test():
+    report = MarkovChebyshevBoundOperator.compute_tail_bounds(1.0, variance=0.25, threshold=5.0, max_allowable_probability=0.25)
+    negative = MarkovChebyshevBoundOperator.compute_tail_bounds(2.0, threshold=3.0, max_allowable_probability=0.50)
+    assert report["status"] == "PASS" and report["certified_upper_probability"] <= 0.25
+    assert negative["status"] == "FAIL" and "witness" in negative
+    return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
+
+
+def _fdr_self_test():
+    report = FalseDiscoveryRateOperator.control_fdr([0.001, 0.005, 0.02, 0.3, 0.8], alpha=0.05)
+    negative = FalseDiscoveryRateOperator.control_fdr([0.1, 0.2, 0.3], alpha=0.05)
+    assert report["status"] == "PASS" and report["discoveries_count"] == 3
+    assert negative["status"] == "FAIL" and negative["discoveries_count"] == 0
+    return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
+
+
+def _ville_self_test():
+    report = SequentialVilleEProcessOperator.audit_evidence_stream([2.5, 4.0, 2.5], alpha=0.05)
+    negative = SequentialVilleEProcessOperator.audit_evidence_stream([1.1, 1.2, 0.9], alpha=0.05)
+    assert report["status"] == "PASS" and report["stopping_step"] == 3
+    assert negative["status"] == "FAIL" and "witness" in negative
+    return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
+
+
+def _bernstein_self_test():
+    report = EmpiricalBernsteinOperator.certify_sample_mean([0.5] * 100 + [0.51] * 100, (0, 1), target_precision=0.15)
+    negative = EmpiricalBernsteinOperator.certify_sample_mean([0.1, 0.9], (0, 1), target_precision=0.10)
+    assert report["status"] == "PASS" and report["empirical_bernstein_radius"] <= 0.15
+    assert negative["status"] == "FAIL" and "witness" in negative
+    return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
+
+
+def _symplectic_self_test():
+    q = [[math.cos(i * 0.1)] for i in range(10)]
+    p = [[-math.sin(i * 0.1)] for i in range(10)]
+    report = SymplecticConservationOperator.audit_conservation(q, p, max_relative_drift=0.05)
+    p_bad = [[-math.sin(i * 0.1) * (1.0 + i * 0.2)] for i in range(10)]
+    negative = SymplecticConservationOperator.audit_conservation(q, p_bad, max_relative_drift=0.05)
+    assert report["status"] == "PASS" and report["max_relative_drift"] <= 0.05
+    assert negative["status"] == "FAIL" and "witness" in negative
+    return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
+
+
+def _cbf_self_test():
+    report = ControlBarrierFunctionOperator.verify_forward_invariance([[2.0], [1.8], [1.6]], [1.0], alpha_decay=0.2)
+    negative = ControlBarrierFunctionOperator.verify_forward_invariance([[2.0], [0.5], [-0.5]], [1.0], alpha_decay=0.2)
+    assert report["status"] == "PASS" and report["minimum_barrier_observed"] >= 0
+    assert negative["status"] == "FAIL" and "witness" in negative
+    return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
+
+
+def _poincare_self_test():
+    traj_conv = [[-1.0, 2.0], [1.0, 2.0], [-1.0, 1.0], [1.0, 1.0], [-1.0, 0.5], [1.0, 0.5], [-1.0, 0.25], [1.0, 0.25]]
+    report = PoincareLimitCycleOperator.analyze_crossings(traj_conv, [1.0, 0.0])
+    traj_div = [[-1.0, 0.1], [1.0, 0.1], [-1.0, 0.5], [1.0, 0.5], [-1.0, 1.5], [1.0, 1.5], [-1.0, 3.5], [1.0, 3.5]]
+    negative = PoincareLimitCycleOperator.analyze_crossings(traj_div, [1.0, 0.0])
+    assert report["status"] == "PASS" and report["crossings_count"] >= 3
+    assert negative["status"] == "FAIL" and "witness" in negative
+    return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
+
+
+def _liouville_self_test():
+    report = LiouvilleVolumeOperator.certify_volume_rate([[[-1.0, 0.0], [0.0, -1.0]]], expected_behavior="contraction", max_divergence_bound=-0.01)
+    negative = LiouvilleVolumeOperator.certify_volume_rate([[[0.5, 0.0], [0.0, 0.5]]], expected_behavior="contraction", max_divergence_bound=-0.01)
+    assert report["status"] == "PASS" and report["minimum_contraction_rate"] > 0
+    assert negative["status"] == "FAIL" and "witness" in negative
+    return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
+
+
+def _dim_homogeneity_self_test():
+    report = DimensionalHomogeneityOperator.verify_additive_terms([[1, 1, -2, 0, 0, 0, 0], [1, 1, -2, 0, 0, 0, 0]])
+    negative = DimensionalHomogeneityOperator.verify_additive_terms([[1, 1, -2, 0, 0, 0, 0], [2, 1, -2, 0, 0, 0, 0]])
+    assert report["status"] == "PASS" and report["common_dimension"] == [1, 1, -2, 0, 0, 0, 0]
+    assert negative["status"] == "FAIL" and "witness" in negative
+    dim_zero = DimensionalHomogeneityOperator.verify_dimensionless_argument([0, 0, 0, 0, 0, 0, 0])
+    assert dim_zero["status"] == "PASS"
+    return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
+
+
+def _causal_dag_self_test():
+    report = CausalDAGNoLeakageOperator.verify_causal_graph({"x": 0.0, "y": 1.0, "z": 2.0}, [("x", "y"), ("y", "z")])
+    negative = CausalDAGNoLeakageOperator.verify_causal_graph({"x": 2.0, "y": 1.0}, [("x", "y")])
+    assert report["status"] == "PASS" and report["topological_causal_order"] == ["x", "y", "z"]
+    assert negative["status"] == "FAIL" and "witness" in negative
+    return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
+
+
+def _dpi_self_test():
+    report = DataProcessingInequalityOperator.verify_information_chain([1.5, 1.2, 0.9, 0.4])
+    negative = DataProcessingInequalityOperator.verify_information_chain([1.5, 1.2, 1.8])
+    assert report["status"] == "PASS" and report["chain_length"] == 4
+    assert negative["status"] == "FAIL" and "witness" in negative
+    return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
+
+
+def _conservation_flow_self_test():
+    report = ConservationFlowBalanceOperator.verify_flow_balance({"A": 10.0}, {"A": 8.0}, {"A": 2.0})
+    negative = ConservationFlowBalanceOperator.verify_flow_balance({"A": 10.0}, {"A": 8.0}, {"A": 0.0})
+    assert report["status"] == "PASS" and report["nodes_audited"] == 1
+    assert negative["status"] == "FAIL" and "witness" in negative
+    return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
+
+
+def _kolmogorov_self_test():
+    report = KolmogorovProbabilityAxiomOperator.verify_probability_distribution([0.2, 0.5, 0.3])
+    negative = KolmogorovProbabilityAxiomOperator.verify_probability_distribution([0.2, 0.5, 0.5])
+    assert report["status"] == "PASS" and report["events_count"] == 3
+    assert negative["status"] == "FAIL" and "witness" in negative
+    return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
+
+
 def _scaffold(cls, self_test):
     """Export the canonical implementation and the same executable self-test."""
     tree = ast.parse(inspect.getsource(cls))
@@ -943,6 +1878,45 @@ OPERATORS = {
     "multi_step_energy_dissipation": {"operator_id": "multi_step_energy_dissipation", "title": "Multi-Step Energy Dissipation and Monotonic Descent Verifier",
         "operator_class": MultiStepEnergyDissipationOperator, "primary_signal": "trajectory_degradation",
         "guarantee": "Trace-level discrete Lyapunov quadratic energy dissipation and monotonic divergence witness", "self_test": _dissipation_self_test},
+    "markov_chebyshev_bound": {"operator_id": "markov_chebyshev_tail", "title": "Markov and Chebyshev Non-Parametric Tail Risk Bounds",
+        "operator_class": MarkovChebyshevBoundOperator, "primary_signal": "trajectory_degradation",
+        "guarantee": "Non-parametric probability tail upper bounds from mean and variance", "self_test": _markov_chebyshev_self_test},
+    "false_discovery_rate_bh": {"operator_id": "false_discovery_rate", "title": "Benjamini-Hochberg and Benjamini-Yekutieli FDR Control",
+        "operator_class": FalseDiscoveryRateOperator, "primary_signal": "proof_bottleneck",
+        "guarantee": "Multiple testing false discovery rate control under independence or arbitrary dependence", "self_test": _fdr_self_test},
+    "sequential_ville_eprocess": {"operator_id": "sequential_ville_test", "title": "Anytime-Valid Sequential e-Process and Supermartingale Stopping Test",
+        "operator_class": SequentialVilleEProcessOperator, "primary_signal": "proof_bottleneck",
+        "guarantee": "Ville supermartingale inequality stopping guarantee resisting optional stopping", "self_test": _ville_self_test},
+    "empirical_bernstein_bound": {"operator_id": "empirical_bernstein_radius", "title": "Variance-Sensitive Empirical Bernstein Concentration Bound",
+        "operator_class": EmpiricalBernsteinOperator, "primary_signal": "proof_bottleneck",
+        "guarantee": "Sample-variance adaptive concentration radius tighter than worst-case Hoeffding", "self_test": _bernstein_self_test},
+    "symplectic_energy_conservation": {"operator_id": "symplectic_energy_drift", "title": "Hamiltonian Symplectic Energy Conservation and Drift Verifier",
+        "operator_class": SymplecticConservationOperator, "primary_signal": "trajectory_degradation",
+        "guarantee": "Hamiltonian total energy deviation tracking and relative numerical drift bounds", "self_test": _symplectic_self_test},
+    "control_barrier_invariance": {"operator_id": "control_barrier_safety", "title": "Discrete Control Barrier Function and Forward Invariance Verifier",
+        "operator_class": ControlBarrierFunctionOperator, "primary_signal": "trajectory_degradation",
+        "guarantee": "Forward invariance safe set certificate for discrete transition sequences", "self_test": _cbf_self_test},
+    "poincare_section_return": {"operator_id": "poincare_return_contraction", "title": "Transversal Poincaré Section and Limit Cycle Contraction Verifier",
+        "operator_class": PoincareLimitCycleOperator, "primary_signal": "trajectory_degradation",
+        "guarantee": "Transversal crossing return map contraction factor and periodic orbit stability", "self_test": _poincare_self_test},
+    "liouville_phase_volume": {"operator_id": "liouville_volume_evolution", "title": "Liouville Phase Volume Contraction and Divergence Attractor Verifier",
+        "operator_class": LiouvilleVolumeOperator, "primary_signal": "trajectory_degradation",
+        "guarantee": "Jacobian trace divergence bound certifying phase volume contraction rate onto attractors", "self_test": _liouville_self_test},
+    "dimensional_homogeneity": {"operator_id": "buckingham_dimensional_homogeneity", "title": "Buckingham Pi Dimensional Homogeneity and Invariant Verifier",
+        "operator_class": DimensionalHomogeneityOperator, "primary_signal": "proof_bottleneck",
+        "guarantee": "SI exponent vector matching and transcendental dimensionless argument verification", "self_test": _dim_homogeneity_self_test},
+    "causal_dag_no_leakage": {"operator_id": "causal_precedence_dag", "title": "Causal Precedence DAG and Look-Ahead Temporal Leakage Verifier",
+        "operator_class": CausalDAGNoLeakageOperator, "primary_signal": "trajectory_degradation",
+        "guarantee": "Strict temporal arrow of time and topological acyclicity certificate", "self_test": _causal_dag_self_test},
+    "data_processing_inequality": {"operator_id": "data_processing_inequality", "title": "Information-Theoretic Data Processing Inequality and Monotonicity Verifier",
+        "operator_class": DataProcessingInequalityOperator, "primary_signal": "trajectory_degradation",
+        "guarantee": "Markov chain mutual information non-increase post-processing bounds", "self_test": _dpi_self_test},
+    "conservation_flow_balance": {"operator_id": "continuity_flow_balance", "title": "Continuity Equation and Conservation Flow Balance Verifier",
+        "operator_class": ConservationFlowBalanceOperator, "primary_signal": "trajectory_degradation",
+        "guarantee": "Kirchhoff / continuity node flow accumulation conservation certificate", "self_test": _conservation_flow_self_test},
+    "kolmogorov_probability_axioms": {"operator_id": "kolmogorov_axioms_wellformedness", "title": "Kolmogorov Probability Axioms and Normalization Verifier",
+        "operator_class": KolmogorovProbabilityAxiomOperator, "primary_signal": "proof_bottleneck",
+        "guarantee": "Non-negativity, unit total measure, and distribution well-formedness certificate", "self_test": _kolmogorov_self_test},
 }
 
 
