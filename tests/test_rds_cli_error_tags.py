@@ -1,0 +1,92 @@
+"""Gate rejections and internal/state faults stay distinguishable on stderr (#59)."""
+import contextlib
+import io
+import os
+from pathlib import Path
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest import mock
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+
+import rds_cli
+
+
+def run_cli(root, *argv):
+    environment = dict(os.environ, RDS_USAGE_LOG="0")
+    return subprocess.run([sys.executable, "-B", str(ROOT / "scripts/rds_cli.py"), "--root", str(root), *argv],
+                          cwd=ROOT, capture_output=True, encoding="utf-8", timeout=30, env=environment)
+
+
+class CLIErrorTagTests(unittest.TestCase):
+    def test_gate_rejection_keeps_reject_tag_and_exit_code(self):
+        with tempfile.TemporaryDirectory() as raw:
+            result = run_cli(Path(raw), "status", "--brief")
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("[RDS-REJECT] RDS is not initialized", result.stderr)
+            self.assertNotIn("[RDS-ERROR]", result.stderr)
+            self.assertFalse((Path(raw) / ".rds").exists())
+
+    def test_malformed_user_specs_stay_rejections(self):
+        # Unvalidated user JSON reaches _main as KeyError/TypeError; the caller must repair it.
+        for content in ("5", "null", '{"budget": {}}'):
+            with self.subTest(content=content), tempfile.TemporaryDirectory() as raw:
+                contract = Path(raw) / "contract.json"
+                contract.write_text(content, encoding="utf-8")
+                result = run_cli(Path(raw) / "project", "init", "--contract", str(contract))
+                self.assertEqual(result.returncode, 1)
+                self.assertTrue(result.stderr.startswith("[RDS-REJECT] "), result.stderr)
+                self.assertNotIn("[RDS-ERROR]", result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+
+    def test_corrupt_state_database_is_reported_as_error_not_rejection(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            (root / ".rds").mkdir()
+            database = root / ".rds/state.sqlite3"
+            corrupt = b"synthetic corruption: this is not a sqlite database\n"
+            database.write_bytes(corrupt)
+            result = run_cli(root, "status", "--brief")
+            self.assertEqual(result.returncode, 1)
+            self.assertNotIn("[RDS-REJECT]", result.stderr)
+            self.assertIn("[RDS-ERROR] DatabaseError: file is not a database", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+            self.assertEqual(result.stderr.count("\n"), 1)
+            self.assertEqual(database.read_bytes(), corrupt)
+
+    def test_handler_maps_each_caught_exception_class(self):
+        cases = [
+            (ValueError("synthetic gate refusal"), "[RDS-REJECT] synthetic gate refusal"),
+            (FileNotFoundError("synthetic missing input"), "[RDS-REJECT] synthetic missing input"),
+            (KeyError("missing_field"), "[RDS-REJECT] 'missing_field'"),
+            (TypeError("synthetic shape"), "[RDS-REJECT] synthetic shape"),
+            (RecursionError("synthetic depth"), "[RDS-REJECT] synthetic depth"),
+            (SyntaxError("synthetic syntax"), "[RDS-REJECT] synthetic syntax"),
+            (ImportError("synthetic dependency"), "[RDS-ERROR] ImportError: synthetic dependency"),
+            (sqlite3.OperationalError("synthetic lock"), "[RDS-ERROR] OperationalError: synthetic lock"),
+            (subprocess.SubprocessError("synthetic spawn"), "[RDS-ERROR] SubprocessError: synthetic spawn"),
+        ]
+        for exc, expected in cases:
+            with self.subTest(exc=type(exc).__name__), tempfile.TemporaryDirectory() as raw:
+                stderr = io.StringIO()
+                with mock.patch.object(sys, "argv", ["rds_cli.py", "--root", raw, "status", "--brief"]), \
+                        mock.patch.object(rds_cli, "cmd_status", side_effect=exc), \
+                        contextlib.redirect_stderr(stderr):
+                    code = rds_cli._main()
+                self.assertEqual(code, 1)
+                self.assertEqual(stderr.getvalue(), expected + "\n")
+
+    def test_uncaught_exception_classes_are_not_swallowed(self):
+        with tempfile.TemporaryDirectory() as raw:
+            with mock.patch.object(sys, "argv", ["rds_cli.py", "--root", raw, "status", "--brief"]), \
+                    mock.patch.object(rds_cli, "cmd_status", side_effect=AttributeError("synthetic")):
+                with self.assertRaises(AttributeError):
+                    rds_cli._main()
+
+
+if __name__ == "__main__":
+    unittest.main()

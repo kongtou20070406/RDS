@@ -13,7 +13,7 @@ import re
 import sys
 import time
 
-from rds_project import ProjectStore, canonical, digest, file_sha, number, require
+from rds_project import ProjectStore, canonical, digest, execution_route, file_sha, number, require
 
 MAX_INPUT_BYTES = 2 * 1024 * 1024
 MAX_FILES = 128
@@ -211,7 +211,15 @@ def record_falsification(root, *, witness, reason, route=None, domain=None):
                                        domain=cas_json(root, domain)['path'] if domain is not None else None))
 
 
-def _charge_ledger(root, workspace, request, seconds):
+def _policy_route(request, route):
+    guard = request.get('guard')
+    if guard is None:
+        return route
+    return {'advisor_route': route, 'guard': {key: guard.get(key) for key in ('engine_sha256', 'verifier_sha256')},
+            'native_executable_sha256': guard.get('native_binding', {}).get('sha256')}
+
+
+def _charge_ledger(root, workspace, request, seconds, route=None, source_root=None, dispatch=True, executor_sha256=None, existing_only=False):
     """Conservatively charge external controller work to the existing budget.
 
     This decreases allowance; it never extends the contract or grants execution
@@ -221,9 +229,64 @@ def _charge_ledger(root, workspace, request, seconds):
     with store._db() as db:
         db.execute('BEGIN IMMEDIATE')
         contract = store._contract(db)
+        require('stop_policy' not in contract and 'maintenance_allowance' not in contract,
+                'Configured stop/maintenance policies require project create/execute; quick child allowance cannot bypass them')
         require(set(contract['budget']) == {'wall_seconds'}, 'Quick exec supports a wall-only parent ledger; use a full project manifest for other resources')
         _, errors = store._bindings(contract)
         require(not errors, '; '.join(errors))
+        require(not existing_only or dispatch and 'execution_policy' in contract,
+                'Execution policy: observation requires its configured parent ledger')
+        if dispatch and 'execution_policy' in contract:
+            if executor_sha256 is not None:
+                require(file_sha(request['argv'][0]) == executor_sha256, 'Execution policy: command executable changed before charge')
+            key = execution_route(request['argv'], request['inputs'], request['outputs'], source_root or workspace,
+                                  contract.get('objective_sha256', request.get('objective_sha256')), route=_policy_route(request, None),
+                                  arm='tool', executor_sha256=executor_sha256)
+            request['execution_policy_owner'] = {'root': str(store.root), 'contract_sha256': digest(contract),
+                                                'policy_sha256': digest(contract['execution_policy']), 'route_sha256': key}
+            rows = [json.loads(row['body']) for row in db.execute(
+                "SELECT body FROM events WHERE json_extract(body,'$.kind')='EXTERNAL_RUN_ALLOWANCE' "
+                "AND json_extract(body,'$.execution_route_sha256')=? ORDER BY id", (key,))]
+            if existing_only:
+                rows = [prior for prior in rows if Path(prior['job_root']).resolve() == workspace.resolve()]
+                require(len(rows) == 1 and rows[0]['request_sha256'] == digest(request),
+                        'Execution policy: existing child has no matching parent allowance for this job and request')
+            for prior in rows:
+                require(prior.get('contract_sha256') == digest(contract)
+                        and prior.get('execution_policy_sha256') == digest(contract['execution_policy']),
+                        'Execution policy: retained parent allowance binding differs')
+                require(Path(prior['job_root']).is_dir(),
+                        'Execution policy: charged child state is unavailable; inspect retained allowance, no refund or new launch')
+                child = ProjectStore(prior['job_root'])
+                require(child.path.is_file(), 'Execution policy: charged child state is unavailable; inspect retained allowance, no refund or new launch')
+                from rds_project import load_json
+                stored = load_json(child.root / 'rds-exec-request.json')
+                require(digest(stored) == prior['request_sha256'] and stored.get('execution_policy_owner') == request['execution_policy_owner'],
+                        'Execution policy: retained child request binding differs')
+                with child._db(True) as child_db:
+                    runs = list(child_db.execute('SELECT id FROM runs'))
+                    require(len(runs) == 1, 'Execution policy: charged child has an incomplete or ambiguous run; recover it without a new allowance')
+                    run = child._run(child_db, runs[0]['id'])
+                    observed = child._observe(child_db, run)
+                    reviewed = stored.get('guard') is not None and (run['status'] == 'COMPLETED'
+                               or existing_only and run['status'] in {'FAILED', 'INTERRUPTED'})
+                    guard_event = (child_db.execute("SELECT body FROM events WHERE json_extract(body,'$.kind')='QUICK_EXEC_REGRESSION_REVIEW' ORDER BY id DESC LIMIT 1").fetchone()
+                                   if reviewed else None)
+                if existing_only or run['status'] in {'RESERVED', 'RUNNING', 'COMPLETED'}:
+                    result = {'status': 'EXISTING_JOB', 'job_root': str(child.root), 'ledger_root': str(store.root),
+                            'receipt': observed if 'sha256' in observed else None, 'execution_started': False,
+                            'policy_observation': 'Retained attempt; inspect or recover it', 'scientific_support': 'UNKNOWN'}
+                    if reviewed:
+                        require(guard_event is not None, 'Guard review is unfinished; inspect retained job and allowance')
+                        ref = json.loads(guard_event['body'])['report']
+                        report_path = Path(ref['path']).resolve()
+                        require(report_path.is_relative_to((child.root / '.rds/cas').resolve()) and file_sha(report_path) == ref['sha256'],
+                                'Guard report CAS integrity failure')
+                        from rds_guard import read
+                        result['regression_review'] = read(report_path)[0]
+                    return result
+            require(len(rows) < contract['execution_policy']['max_attempts'],
+                    'Execution policy: unchanged route reached max_attempts; failures do not establish scientific impossibility')
         amount = number(seconds, 'external wall allowance', True)
         row = db.execute("SELECT * FROM budget WHERE resource='wall_seconds'").fetchone()
         require(row['spent'] + row['charged'] + row['reserved'] + amount <= row['cap'] + 1e-9,
@@ -231,6 +294,9 @@ def _charge_ledger(root, workspace, request, seconds):
         event = {'kind': 'EXTERNAL_RUN_ALLOWANCE', 'job_root': str(workspace), 'request_sha256': digest(request),
                  'resource': 'wall_seconds', 'amount': amount, 'accounting': 'CONSERVATIVE_ALLOWANCE',
                  'execution_authority': 'UNCHANGED'}
+        if dispatch and 'execution_policy' in contract:
+            event.update(execution_route_sha256=key, contract_sha256=digest(contract),
+                         execution_policy_sha256=digest(contract['execution_policy']), advisor_route_sha256=route)
         require(db.execute("SELECT 1 FROM events WHERE json_extract(body,'$.kind')='EXTERNAL_RUN_ALLOWANCE' AND json_extract(body,'$.job_root')=? LIMIT 1",
                            (str(workspace),)).fetchone() is None, 'External job allowance already consumed; inspect its preserved state')
         db.execute("UPDATE budget SET charged=charged+? WHERE resource='wall_seconds'", (amount,))
@@ -313,6 +379,18 @@ def execute(args, review=None):
     """Create one frozen normal ProjectStore per named job, without JSON boilerplate."""
     root = Path(args.root).resolve()
     require(root.is_dir(), 'Source root must exist')
+    owner = Path(args.ledger).resolve() if review is not None else None
+    source_store = ProjectStore(root)
+    if source_store.path.is_file():
+        with source_store._db(True) as db:
+            # Native research records can share this database before project init.
+            has_contract = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='contract'").fetchone()
+            source_contract = source_store._contract(db) if has_contract else {}
+        require('stop_policy' not in source_contract and 'maintenance_allowance' not in source_contract,
+                'Configured stop/maintenance policies require project create/execute; quick exec cannot bypass them')
+        if 'execution_policy' in source_contract:
+            require(owner is None or owner == root, 'Frozen source execution policy cannot be replaced by another ledger')
+            owner = root
     timeout = number(args.timeout, 'timeout', True)
     require(timeout <= 3600, 'Quick exec is bounded to 3600 seconds; use project execute --background for longer jobs')
     argv = list(args.argv)
@@ -373,6 +451,21 @@ def execute(args, review=None):
     if review is not None:
         request['research_context'] = {'sha256': digest(review[1]), 'candidate': args.choose,
                                        'ledger': str(Path(args.ledger).resolve())}
+    execution_policy, executor_sha256 = None, None
+    if owner is not None:
+        parent = ProjectStore(owner)
+        with parent._db(True) as db:
+            parent_contract = parent._contract(db)
+            execution_policy = parent_contract.get('execution_policy')
+            if execution_policy is not None:
+                _, errors = parent._bindings(parent_contract)
+                require(not errors, '; '.join(errors))
+        if execution_policy is not None:
+            executor_sha256 = file_sha(argv[0])
+            request['execution_policy_owner'] = {'root': str(parent.root), 'contract_sha256': digest(parent_contract),
+                'policy_sha256': digest(execution_policy), 'route_sha256': execution_route(request['argv'], request['inputs'],
+                    request['outputs'], root, parent_contract.get('objective_sha256', request.get('objective_sha256')),
+                    route=_policy_route(request, None), arm='tool', executor_sha256=executor_sha256)}
     args.name = args.name or 'exec-' + digest(request)[:20]
     require(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}', args.name), 'Job name must contain 1–64 safe identifier characters')
     workspace = root / '.rds' / 'exec' / args.name
@@ -381,6 +474,9 @@ def execute(args, review=None):
         from rds_project import load_json
         previous = load_json(workspace / 'rds-exec-request.json')
         require(previous == request, 'Job identity is frozen; changed inputs need a new --name')
+        if execution_policy is not None:
+            return _charge_ledger(owner, workspace, request, timeout, source_root=root,
+                                  executor_sha256=executor_sha256, existing_only=True)
         state = ProjectStore(workspace).snapshot(check_bindings=True)
         require(not state['binding_check']['errors'], 'Frozen job bindings changed')
         receipt = next((r for r in state['receipts'] if r['run_id'] == args.name), None)
@@ -397,8 +493,13 @@ def execute(args, review=None):
             from rds_guard import read
             result['regression_review'] = read(report_path)[0]
         return result
-    if review is not None:
-        _charge_ledger(args.ledger, workspace, request, timeout)
+    if owner is not None:
+        from rds_advisor import _loop_route
+        observation = _charge_ledger(owner, workspace, request, timeout,
+            route=_loop_route(selected['candidate']) if review is not None else None, source_root=root,
+            executor_sha256=executor_sha256)
+        if observation is not None:
+            return observation
     workspace.mkdir(parents=True)
     bindings = []
     if goal_raw is not None:
@@ -437,6 +538,8 @@ def execute(args, review=None):
                 'output_roots': output_roots, 'budget': {'wall_seconds': timeout}, 'description': 'Explicitly invoked frozen tool command; not an OS sandbox or science verdict'}
     if goal_raw is not None:
         contract['objective_sha256'] = request['objective_sha256']
+    if execution_policy is not None:
+        contract['execution_policy'] = deepcopy(execution_policy)
     store.initialize(contract)
     if review is not None:
         require(args.ledger, '--context for exec needs an existing --ledger for prospective decisions')
@@ -445,11 +548,11 @@ def execute(args, review=None):
                 'protocol': {'path': 'rds-exec-protocol.json', 'sha256': file_sha(workspace / 'rds-exec-protocol.json')},
                 'argv': frozen_argv, 'outpaths': args.output, 'timeout_seconds': timeout - guard_seconds,
                 'resource_estimates': {'wall_seconds': timeout - guard_seconds}, 'description': 'Frozen quick exec'}
-    store.register(manifest)
+    store.register(manifest, executor_sha256=executor_sha256)
     for output in args.output:
         store._path(output, output=True, contract=contract).parent.mkdir(parents=True, exist_ok=True)
     if guard_path is not None:
-        _charge_ledger(workspace, workspace, request, guard_seconds)
+        _charge_ledger(workspace, workspace, request, guard_seconds, dispatch=False)
     receipt = store.execute(args.name, background=args.background)
     regression = None
     if guard_path is not None:

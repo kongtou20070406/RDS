@@ -1,84 +1,107 @@
-# Configured stop policy and maintenance allowance
+# Configured project stops and goal-bound maintenance
 
-The project runner stops a hung experiment in two configured ways instead of
-letting a bounded reservation burn the whole campaign. Both are frozen into the
-contract at `initialize()` time; neither can be added, changed or removed
-afterwards. No configured policy means the previous behavior is unchanged: the
-per-attempt `timeout_seconds` and the budget vector remain the only bounds.
+These optional fields freeze at project initialization. An absent policy keeps
+the existing manifest timeout and resource budget. They apply to the owning
+`project create --manifest` / `project execute` ledger, including its scheduled workers.
+Quick child execution and theory allowances refuse a parent/source contract
+with either field: those routes cannot silently discard these policies. Use a
+project manifest until their own policy integration has been reviewed.
 
-## Contract fields
+## Stop policy
 
 ```json
-{
-  "stop_policy": {
-    "schema": 1,
-    "wall_seconds": 3600,
-    "progress": {"window_seconds": 900, "min_bytes": 1}
-  },
-  "maintenance_allowance": {
-    "schema": 1,
-    "wall_seconds": 120,
-    "max_uses": 4
-  }
-}
+{"stop_policy": {"schema": 1, "wall_seconds": 3600,
+                 "progress": {"window_seconds": 900, "min_bytes": 1}}}
 ```
 
-- `stop_policy.wall_seconds` is a campaign deadline measured from the start of
-  the current attempt (`CAMPAIGN_DEADLINE`). It is distinct from the manifest's
-  per-attempt `timeout_seconds` and from the budget vector: it bounds wall time
-  even while budget remains.
-- `stop_policy.progress` is a growth watchdog over the two byte streams the
-  controller actually owns, `stdout.bin` and `stderr.bin` in the run's artifact
-  directory. If the combined stream size grows by less than `min_bytes` over
-  the trailing `window_seconds`, the controller stops the process
-  (`PROGRESS_NO_GROWTH`). Both streams are hashed into the receipt as
-  artifacts, so the watchdog watches exactly what the evidence trail retains.
+`wall_seconds` is an elapsed campaign limit, distinct from both per-attempt
+timeouts and the sum-of-work resource budget. The first successful reservation
+appends `CAMPAIGN_STARTED` to the existing ledger, binding the contract hash
+and UTC start. All later registrations and starts use that same absolute
+deadline. Idle time, renamed jobs, reopened controllers and recovery count;
+checkpoint continuation retains the event. A new root needs explicit new
+authorization. Across processes this relies on the system UTC clock; during
+an owned attempt the remaining interval is enforced with a monotonic clock.
 
-## What a stop does and does not claim
+`progress` checks growth of the controller's retained `stdout.bin` and
+`stderr.bin` over a trailing window. Less than `min_bytes` triggers
+`PROGRESS_NO_GROWTH`; zero disables that growth condition. This measures log
+bytes, not research progress. Silent file/database work can trigger it and
+meaningless logging can satisfy it. Configure it only when that signal is
+appropriate. It supplies no scientific forecast or proof of feasibility.
 
-A policy stop records `stop_reason` on the receipt and the error list
-(`Stop policy: <REASON>`), preserves partial `stdout.bin`/`stderr.bin`, marks
-the run `FAILED`, and settles measured wall time against the budget. It does
-not claim the experiment is scientifically impossible, does not write any
-output path, and does not infer a task or mechanism gain; `assessment` stays
-`UNKNOWN`. A stopped run is terminal: `execute` refuses a second dispatch and
-`recover` returns the recorded receipt.
-
-The watchdog only claims what it polls. It cannot see progress in a file, a
-database or a network stream; that silence is a documented limit, not proof of
-a stalled program.
+The controller terminates only its owned process tree, records
+`CAMPAIGN_DEADLINE` or `PROGRESS_NO_GROWTH`, retains partial logs and settles
+costs into a FAILED receipt with UNKNOWN scientific assessment. A worker
+arriving after the deadline records a terminal failure without launch.
+Recovery returns that receipt and never restarts it. Normal execution-policy
+observation still applies; inspecting an existing receipt grants no new work.
 
 ## Maintenance allowance
 
-A contract with `maintenance_allowance` may admit runs whose manifest carries a
-`maintenance` declaration:
+Bind a [native objective](native-research.md) before initializing the contract.
+Add an ordinary config binding for the goal context file; the allowance uses
+its exact path and SHA256, rather than a second goal registry:
 
 ```json
-{
-  "reason": "MAINTENANCE",
-  "blocker": "config reader rejects empty file",
-  "affected_obligation": "obligation: dataset freshness",
-  "repair": "regenerate config.json",
-  "acceptance": "code.py exits 0 on refreshed config"
-}
+{"maintenance_allowance": {"schema": 1, "wall_seconds": 120, "max_uses": 4,
+                           "context": {"path": "maintenance-context.json",
+                                       "sha256": "<actual file SHA256>"}}}
 ```
 
-Registration refuses a maintenance run when no allowance is frozen, when the
-wall estimate exceeds `maintenance_allowance.wall_seconds` (unless that cap is
-`0`, which disables the cap), or when `max_uses` prior maintenance runs are
-already recorded (`MAINTENANCE_USE` events, append-only in the ledger). The
-four declaration strings are required and must be nonempty; a maintenance run
-without a concrete blocker, obligation, repair and acceptance is refused.
+The context uses the existing Advisor shape: exact `objective_binding`
+(`question_id`, `goal_revision`, original asset `sha256`), compatible `scope`
+and `dependency_map`. Include `completion_standard` among the map's goals.
+No arbitrary textual objective, absent binding or stale revision is accepted.
 
-Maintenance runs consume the same budget vector and their resources are
-measured and charged exactly like any other run. Their receipts are marked
-`maintenance: true` and their `assessment.purpose` is `MAINTENANCE`, so repair
-work can never be read as scientific progress: `task_gain` and `mechanism`
-stay `UNKNOWN`.
+A maintenance manifest adds this declaration, for example for an unresolved
+`config_health` node linked to the original completion predicate:
 
-## Regression coverage
+```json
+{"maintenance": {
+  "reason": "MAINTENANCE", "blocker": "node:config_health",
+  "affected_obligation": "config_health",
+  "repair": "check the config reader on the authorized synthetic fixture",
+  "acceptance": "retain the reader result and review the original obligation",
+  "goal_contribution": {"target": "completion_standard",
+                        "path": ["config_health", "completion_standard"],
+                        "source": "the original task's declared dependency"}
+}}
+```
 
-- `tests/test_rds_project.py::StopPolicyAndMaintenanceTests` — contract
-  validation, deadline stop with partial stdout preserved, no-growth stop,
-  growth completes normally, no-policy regression guard, maintenance
-  admission/exhaustion and declaration validation.
+The runner reuses Advisor's current dependency review. The action must start
+at the affected obligation and end at bound `completion_standard`; the blocker
+token (`node:<id>` or `rule:<id>`) must match that start, be ready, and occur in
+an unresolved minimal missing-evidence set. Incomplete/truncated maps,
+unsupported links, already supported goals and irrelevant side tasks refuse
+admission. The context/hash/objective is checked again before dispatch.
+These are input-reported structural checks, **not verified proof** that a
+repair helps research or that any graph label is scientifically true.
+
+`wall_seconds` is the **total** conservative maintenance allowance. Each
+successful reservation atomically appends `MAINTENANCE_USE` with its estimate
+and review, while reserving the normal budget. Admission uses the larger of
+each retained estimate, observed wall time and settled cost. `max_uses` limits
+admitted runs. Zero wall allowance refuses all maintenance. Failed admission
+rolls back the event and reservation; admitted failures and recovery never
+refund the maintenance allowance. Renaming cannot reset it. Late-settled
+overruns are also checked before a previously reserved run starts.
+
+Maintenance consumes the ordinary resource vector; it creates no extra budget
+or permission. Receipts retain `maintenance_review`, `maintenance: true` and
+`assessment.purpose: MAINTENANCE`; task gain and mechanism remain UNKNOWN.
+Frozen source inputs are still immutable: a repair requiring source/config
+changes needs an explicitly rebound authorized project, not writes over them.
+
+## Validation and remaining scope
+
+The project tests exercise real CLI refusals without state mutation, native
+objective/context binding, unrelated/completed/truncated obligations, atomic
+concurrent total allowances, zero/exhausted caps, failed-cost retention, shared
+deadlines at admission/worker startup and partial-output stops. The shared
+execution/state checks, historical examples and red-team scenarios still apply.
+
+This delivers configured project stopping and a bounded maintenance consumer.
+It does not finish V4 host enforcement, all quick/theory continuation routes,
+scope-bound research forecasts or the rest of the V5/V6 acceptance work.
+The 5.8 umbrella issue remains open; software tests do not prove research gain.
