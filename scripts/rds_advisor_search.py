@@ -5,6 +5,8 @@ artifacts retain their provenance labels; caller dictionaries remain INPUT_REPOR
 """
 from copy import deepcopy
 from itertools import combinations
+import hashlib
+import json
 import math
 
 TRUE, FALSE, UNKNOWN = "TRUE", "FALSE", "UNKNOWN"
@@ -183,6 +185,122 @@ def _discrimination(action, facts):
             "issues": issues}
 
 
+def _dependency_review(context):
+    """Consume the existing bounded AND/OR analyzer only when a map is supplied."""
+    if "dependency_map" not in context:
+        return None
+    try:
+        spec = context["dependency_map"]
+        raw = json.dumps(spec, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+        if len(raw) > 128 * 1024:
+            raise ValueError("dependency_map exceeds 128 KiB; retain only the current decision map")
+        from rds_hypergraph import analyze_hypergraph
+        result = analyze_hypergraph(spec)
+        return {**result, "input_sha256": hashlib.sha256(raw).hexdigest(),
+                "status": "INCOMPLETE" if result["truncated"] else "ANALYZED",
+                "authorization": "UNCHANGED"}
+    except (ValueError, TypeError, KeyError) as exc:
+        return {"status": UNKNOWN, "reason": str(exc), "authorization": "UNCHANGED",
+                "assurance": "INPUT_REPORTED_DEPENDENCY_ANALYSIS_NOT_PROOF"}
+
+
+def _mapped_path(spec, dependency, action):
+    """Check a contributory path, keeping every AND premise as a separate obligation."""
+    report = {"status": UNKNOWN, "assurance": "INPUT_REPORTED_GRAPH_PATH_NOT_PROOF"}
+    if dependency["status"] == UNKNOWN:
+        return {**report, "reason": dependency["reason"]}
+    path, target = spec["path"], spec["target"]
+    nodes = {n["id"]: n for n in dependency["reported_nodes"]}
+    if target not in dependency["goals"] or path[-1] != target:
+        return {**report, "reason": "The path must end at its target in dependency_map.goals."}
+    if dependency['goals'][target]['status'] == 'UNRESOLVED':
+        return {**report, "reason": "The supplied map has no grounded closing route to this goal; inspect cyclic or missing premises."}
+    edges = dependency["reported_hyperedges"]
+    rule_start = None if path[0] in nodes else next((e for e in edges if 'rule:' + e['id'] == path[0]), None)
+    node_path = path[1:] if rule_start is not None else path
+    # A downstream conclusion cannot justify a prerequisite of this same path,
+    # even when a different OR route could independently prove that conclusion.
+    downstream = set(node_path if rule_start is not None else node_path[1:])
+    grounded = (set(dependency['declared_supported_closure']) | set(dependency['direct_evidence_node_ids'])) - downstream
+
+    def extend_grounded():
+        changed = True
+        while changed:
+            changed = False
+            for edge in edges:
+                if (edge['status'] != 'CONTRADICTED' and nodes[edge['conclusion']]['status'] != 'CONTRADICTED'
+                        and set(edge['premises']) <= grounded and edge['conclusion'] not in grounded | downstream):
+                    grounded.add(edge['conclusion'])
+                    changed = True
+
+    extend_grounded()
+    if rule_start is not None and (len(path) < 2 or rule_start['conclusion'] != path[1]
+            or rule_start['status'] == 'CONTRADICTED'
+            or rule_start['conclusion'] in rule_start['premises']
+            or not set(rule_start['premises']) <= grounded):
+        return {**report, "reason": "The starting rule is unavailable or does not conclude the next node."}
+    if len(path) != len(set(path)) or any(n not in nodes or nodes[n]["status"] == "CONTRADICTED" for n in node_path):
+        return {**report, "reason": "The path has unknown, contradicted or repeated node IDs."}
+    links = []
+    if rule_start is not None:
+        links.append([rule_start['id']])
+        grounded.add(rule_start['conclusion'])
+        downstream.discard(rule_start['conclusion'])
+        extend_grounded()
+    for left, right in zip(node_path, node_path[1:]):
+        available = [e['id'] for e in edges if e['status'] != 'CONTRADICTED'
+                     and left in e['premises'] and e['conclusion'] == right
+                     and right not in e['premises'] and set(e['premises']) <= grounded]
+        if not available:
+            return {**report, "reason": "A path step has no grounded non-contradicted hyperedge to its next conclusion."}
+        links.append(available)
+        grounded.add(right)
+        downstream.discard(right)
+        extend_grounded()
+    return {**report, "status": "DECLARED_CONNECTED_PATH", "link_rule_alternatives": links,
+            "start_token": 'rule:' + rule_start['id'] if rule_start is not None else 'node:' + path[0],
+            "goal_review": deepcopy(dependency["goals"][target]),
+            "reason": "The path is connected in the supplied map; AND premises, proposed rules and source validity still need evidence."}
+
+
+def _goal_contribution(action, context, dependency=None):
+    """Review a declared path to an existing goal, never its scientific validity."""
+    decision = context.get("decision", {})
+    goals = decision.get("goal_conditions", []) if isinstance(decision, dict) else []
+    targets = {g["fact"] for g in goals if isinstance(g, dict) and isinstance(g.get("fact"), str)} if isinstance(goals, list) else set()
+    if isinstance(context.get("objective_binding"), dict) and context["objective_binding"]:
+        targets.add("completion_standard")
+    if not targets and "goal_contribution" not in action:
+        return None
+    report = {"status": "UNDECLARED", "assurance": "DECLARED_LINK_NOT_SCIENTIFIC_PROOF",
+              "authorization": "UNCHANGED"}
+    if "goal_contribution" not in action:
+        return {**report, "reason": "No dependency path from this action to an explicit original goal was declared."}
+    spec = action["goal_contribution"]
+    bounded_text = lambda value: isinstance(value, str) and bool(value.strip()) and len(value) <= 512
+    if not (isinstance(spec, dict) and set(spec) == {"target", "path", "source"}
+            and bounded_text(spec["target"]) and bounded_text(spec["source"])
+            and isinstance(spec["path"], list) and 1 <= len(spec["path"]) <= 8
+            and all(bounded_text(step) for step in spec["path"])):
+        return {**report, "status": UNKNOWN,
+                "reason": "A contribution needs target, source and 1 to 8 nonempty path steps, each at most 512 characters."}
+    if action.get("target") != spec["path"][0]:
+        return {**report, "status": UNKNOWN,
+                "reason": "A contribution path must start at action.target, the obligation being checked or measured."}
+    if spec["target"] not in targets:
+        return {**report, "status": UNKNOWN,
+                "reason": "The contribution target is not an existing goal predicate or bound completion_standard."}
+    result = {**report, **deepcopy(spec), "status": "DECLARED_PATH",
+              "reason": "The supplied text path names an existing goal; it is not an evaluated graph path, proof or verified completion."}
+    if dependency is not None:
+        result["graph_path"] = _mapped_path(spec, dependency, action)
+        if result["graph_path"]["status"] == UNKNOWN:
+            result.update(status=UNKNOWN, reason=result["graph_path"]["reason"])
+        else:
+            result["reason"] = result["graph_path"]["reason"]
+    return result
+
+
 def _next_move(review, search):
     """Suggest a bounded reasoning step from input review, without changing a route."""
     flags = {f["kind"] for f in review["flags"]}
@@ -195,6 +313,8 @@ def _next_move(review, search):
         if not any(ready_ids.intersection(f.get("candidate_ids", []))
                    for f in history_flags if f.get("kind") == "DECISION_OSCILLATION"):
             loop_flags.remove("DECISION_OSCILLATION")
+    unlinked = bool(ready_ids) and all(c.get("goal_contribution", {}).get("status") in {"UNDECLARED", UNKNOWN}
+                                     for c in review["candidates"])
     # Local warnings remain visible, but do not block an available supported route.
     supported_route = any(c["basis"] == "SCOPED_OBLIGATION" or
                           (c["basis"] == "CONDITIONAL_RIVAL_TEST" and not c["unresolved_pairs"])
@@ -210,11 +330,15 @@ def _next_move(review, search):
         kind, reason = "RESOLVE_PREMISE", "The original goal has unresolved evidence; no scientific failure is established."
     elif ("PREDICTION_PREMISES_UNRESOLVED" in flags and not supported_route) or (not ready_ids and (pending or blocked)):
         kind, reason = "RESOLVE_PREMISE", "Resolve the affected evidence, prediction scope, method or budget conditions first."
-    elif "SEARCH_TRUNCATED" in flags:
+    elif flags & {"SEARCH_TRUNCATED", "DEPENDENCY_MAP_INCOMPLETE"}:
         kind, reason = "RESOLVE_PREMISE", "The bounded search omitted part of the supplied scope."
     elif loop_flags & {"REPEAT_REJECTED_ROUTE", "REPEAT_DECLARED_REJECTED_DOMAIN", "DECISION_OSCILLATION"}:
         kind, reason = "REFORMULATE", "Recorded choices repeat a rejected route/domain or oscillate within the reviewed scope."
-    elif goal.get("status") == TRUE or (review["basis"] == "SCOPED_OBLIGATION" and goal.get("status") != FALSE):
+    elif goal.get("status") == TRUE:
+        return None
+    elif unlinked:
+        kind, reason = "REVIEW_GOAL_LINK", "The ready actions have no declared dependency path to an explicit original goal."
+    elif review["basis"] == "SCOPED_OBLIGATION" and goal.get("status") != FALSE:
         return None
     elif "RIVAL_PREDICTIONS_OVERLAP" in flags and not supported_route:
         kind, reason = "DESIGN_DISCRIMINATOR", "Supported same-scope prediction sets overlap; seek a distinguishing observation."
@@ -232,6 +356,10 @@ def _next_move(review, search):
         "Resolve only the affected evidence or scope using original sources and explicit predicates; keep UNKNOWN where unsupported. "
         "State the smallest deciding observation or proof check and its stop condition. Continue independent authorized work. "
         if kind == "RESOLVE_PREMISE" else
+        "Name the original acceptance condition and explain how this action's output resolves a remaining obligation or decision. "
+        "Retain useful lemmas and diagnostics; a missing declaration does not show they are useless. "
+        "Supply a sourced dependency path without treating the text declaration as an evaluated graph, proof or goal completion. "
+        if kind == "REVIEW_GOAL_LINK" else
         "Retain the existing rival hypotheses and design one observation or scoped proof check with different predictions. "
         "Give the counterfactual difference each rival predicts, the check's cost and a stop condition. "
         if kind == "DESIGN_DISCRIMINATOR" else
@@ -252,6 +380,7 @@ def review_selection(search, context):
     """Expose what the supplied directions can decide; never invent utility."""
     ready = [c for c in search.get("candidates", []) if c.get("status") == "READY"]
     flags, candidates = [], []
+    dependency = _dependency_review(context)
     if search.get("truncation", {}).get("truncated"):
         flags.append({"kind": "SEARCH_TRUNCATED", "next": "Review the omitted search scope before claiming a best route."})
     obligations = all(c.get("action", {}).get("kind") == "OBLIGATION_CHECK" for c in ready)
@@ -279,7 +408,20 @@ def review_selection(search, context):
                 if disc["unresolved_pairs"]:
                     flags.append({"kind": "RIVAL_PREDICTIONS_OVERLAP", "candidate": c["id"],
                                   "next": "Some rival predictions still overlap; identify which additional observation would distinguish them."})
+        contribution = _goal_contribution(c.get("action", {}), context, dependency)
+        if contribution is not None:
+            report["goal_contribution"] = contribution
+            if contribution["status"] != "DECLARED_PATH":
+                flags.append({"kind": "GOAL_CONTRIBUTION_UNDECLARED" if contribution["status"] == "UNDECLARED" else "GOAL_CONTRIBUTION_INVALID",
+                              "candidate": c["id"], "next": contribution["reason"]})
         candidates.append(report)
+    mapped = [c.get("goal_contribution", {}).get("graph_path", {}) for c in candidates]
+    healthy_mapped = any(p.get('status') == 'DECLARED_CONNECTED_PATH'
+                         and p.get('goal_review', {}).get('blocker_sets_complete') is True for p in mapped)
+    if dependency is not None and (dependency["status"] == UNKNOWN or
+            dependency["status"] == "INCOMPLETE" and not healthy_mapped):
+        flags.append({"kind": "DEPENDENCY_MAP_INCOMPLETE",
+                      "next": "Repair the map or inspect its truncated scope; missing blocker sets do not close the goal."})
     basis = "NO_READY_DIRECTION" if not ready else "SCOPED_OBLIGATION" if obligations else "REVIEW_ONLY"
     # Ranking can also compare conditional routes whose prerequisites remain open.
     ready_ids = {c["id"] for c in ready}
@@ -288,6 +430,10 @@ def review_selection(search, context):
         basis = "CONDITIONAL_COMPARISON"
     review = {"basis": basis, "ready_graph_directions": len(ready), "candidates": candidates, "flags": flags,
               "assurance": "INPUT_REPORTED_NOT_SCIENTIFIC_VERIFICATION", "authorization": "UNCHANGED"}
+    if dependency is not None:
+        review["dependency_review"] = dependency
+    if "objective_binding" in context:
+        review["objective_binding"] = deepcopy(context["objective_binding"])
     decision = context.get("decision")
     if isinstance(decision, dict) and "goal_conditions" in decision:
         goals = decision["goal_conditions"]

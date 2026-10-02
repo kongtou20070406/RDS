@@ -56,7 +56,8 @@ def main():
     data = [{"path": "tests/" + pattern, "sha256": file_sha(root / "tests" / pattern), "role": "data"}
             for pattern in patterns]
     fixture_paths = ["examples/experiment-templates/templates.json", "examples/rsi/base-graph.json",
-                     "examples/rsi/candidate-rule.json", "examples/rsi/cases.json", "references/theory-tools.json"]
+                     "examples/rsi/candidate-rule.json", "examples/rsi/cases.json", "references/theory-tools.json",
+                     "examples/goal-linked-hypergraph.json"]
     data.extend({"path": path, "sha256": file_sha(root / path), "role": "data"} for path in fixture_paths)
     if "test_rds_advancement_cli.py" in patterns:
         path = "examples/advancement-loop/run.py"

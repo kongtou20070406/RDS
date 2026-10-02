@@ -171,6 +171,28 @@ Additional aliases include `test`/`eval`/`start`/`测试` → `exec`, `suggest`/
 
 Use `hypergraph --input proof-graph.json` for the existing bounded AND/OR dependency analysis. `--audit-files` checks declared file hashes; neither graph reachability nor a `SUPPORTED` label proves mathematics. Full results are retained; `--json` exposes them. Truncation returns exit code 2.
 
+## Goal-linked dependencies
+
+Keep a small map of the original acceptance, necessary premises and serious alternatives. One hyperedge's premises are AND; separate edges to a conclusion are OR. Unknown evidence remains `UNKNOWN`, an unproved implication remains `PROPOSED`, and every node/rule has a source. Do not confuse a domain's enumerated hypergraph with RDS's research dependency map. The [synthetic example](../examples/goal-linked-hypergraph.json) deliberately leaves all original-goal obligations open despite two supported side results.
+
+Supply that existing hypergraph schema in `advisor_context.dependency_map` (or the top level of a `--research-context` file). Advisor runs the bounded analyzer and retains the actual map, input SHA, minimal missing evidence sets, ready obligations and truncation in `selection_review.dependency_review`. It does not infer dependencies from prose or auto-verify labels. Source files can separately be audited by the existing hypergraph CLI.
+
+For an action whose actual `target` is `unrestricted_lower`, declare `goal_contribution` with three fields:
+
+```json
+{"target":"completion_standard",
+ "path":["unrestricted_lower","completion_standard"],
+ "source":"original-contract.json#/completion_standard"}
+```
+
+The contribution's target must name an existing `decision.goal_conditions` fact or the native bound `completion_standard`. In every mode, `action.target` must exactly match the first path entry; a missing or mismatched target leaves the contribution `UNKNOWN` without changing `READY`. Without a map this is a text declaration. With a map, path entries must be actual, distinct node IDs ending at a listed goal, and each step must follow a non-contradicted hyperedge. Actual node IDs take precedence over `rule:<id>` aliases; when no such node exists, start with `rule:<id>` followed by its conclusion to check that proposed bridge. A contributory path cannot bypass the edge's other AND premises or a proposed rule. Contradicted AND premises and ungrounded circular goals cannot supply a valid path. Preserve a transfer/reduction obligation before applying a small-domain certificate to a wider goal. Empirical maps similarly need application and manipulation bridges; a path does not identify a causal effect.
+
+Set `require_goal_link: true` in the prospective research context when execution must be restricted to current original-goal obligations. Before recording/launching/charging, quick entry recomputes the actual map and path, requires complete blocker analysis, and requires the path's first node/rule to be a current ready obligation of an open goal. Every selected AND bridge needs a grounded route for all its premises; a healthy OR alternative cannot hide a cyclic branch. A text-only link, closed node/goal, contradicted bridge, missing map or forged advice label cannot satisfy this check. The existing choice record retains the actual checked map/hash and contribution under `goal_guard`, alongside the earlier Advisor review. Keep this setting through continuation; existing contexts default to advisory behavior for compatibility. This is a structural guard on declared inputs, not a verifier of the graph's scientific soundness or a guarantee of research gain; it does not prevent executing unrelated commands outside this entry.
+
+For native objectives, quick exec checks the current ledger binding before choice and fills it from that check when omitted from the raw context. A conflicting stale advice binding is rejected; direct `choice` calls cannot use advice to supply a missing current binding. A missing or mismatched action target also fails the strict guard before recording, launch or parent charge.
+
+`REVIEW_GOAL_LINK` requests a missing/invalid link only when all available actions lack one; a healthy linked alternative remains available. These prompts change neither `READY`, budget nor scientific acceptance, and replication remains legitimate. Full paths and reasons stay in CAS/checkpoints; `--brief` retains at most three relevant warning kinds. A graph closed under reported labels remains reported closure, not original-goal completion.
+
 An optional `exec --guard policy.json` checks comparable metrics or replays frozen milestones before allowing promotion. `reject --domain domain.json` records only explicitly justified parameter exclusions. Both use existing artifacts and checkpoints; see [regression guards](regression-guards.md).
 
 ## Performance and design provenance

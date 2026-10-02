@@ -2,6 +2,9 @@
 
 ## 5.8.0 — Unreleased
 
+- Bind native objectives before Advisor selection; review action-to-goal declarations and optionally consume the existing AND/OR dependency map. Retain missing evidence sets and proposed-rule obligations, and surface missing links without promoting graph closure to scientific acceptance.
+- Add an opt-in prospective goal-link guard that recomputes a connected path and current ready obligation before recording, launch or parent charge. Bind every mode's actual action target to the first path obligation, prefer actual node IDs over rule aliases, and recheck the current native objective binding without allowing stale advice to replace it. Preserve dependency maps and existing mode/method/objective fields through artifact import; closed side tasks and forged readiness do not bypass the configured structural check.
+
 - Diagnose scope shape, field count, keys and non-atomic values separately, with bounded field locators and explicit-source guidance; retain the existing 16-field, 2048-byte and finite-JSON constraints.
 - Distinguish a declared output directory from a missing output file in failed receipts, and clarify file-only outputs in CLI help and runner guidance. Process exit 0 still requires output and binding validation for operational success.
 - Include the complete receipt error count and first bounded error in brief project status, exposing artifact-validation failures even when the command exits 0 and stderr is empty; retain all original errors in the full CAS record.
