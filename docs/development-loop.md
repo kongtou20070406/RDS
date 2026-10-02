@@ -145,7 +145,7 @@ python -B scripts/rds_cli.py --root <project> project recover --id <run-id>
 python -B scripts/rds_cli.py --root <project> project status
 ```
 
-The version-1 contract locks `bindings` with code/config/data/evaluator/protocol roles, exact `allowed_commands`, `output_roots` and a resource budget. The run manifest binds its protocol, argv, expected output paths, timeout and resource reservations. Execution uses the project directory and `shell=False`. Before and after execution, input and executable identities are checked; missing outputs, nonzero exit, timeout or changed bindings prevent successful completion.
+The version-1 contract locks `bindings` with code/config/data/evaluator/protocol roles, exact `allowed_commands`, `output_roots` and a resource budget. A root-level file output that cannot sit strictly below a directory root is authorized by an optional `output_files` list of exact project-relative paths; the quick entry fills it for single-component outputs. The run manifest binds its protocol, argv, expected output paths, timeout and resource reservations. Execution uses the project directory and `shell=False`. Before and after execution, input and executable identities are checked; missing outputs, nonzero exit, timeout or changed bindings prevent successful completion.
 
 Before project initialization, an explicitly configured [execution policy](execution-policy.md) can freeze an attempt limit for bound requests. Project and quick entry then refuse duplicate spending or observe the existing attempt; the guide explains identity, recovery and coverage boundaries. This optional policy is separate from scientific acceptance.
 

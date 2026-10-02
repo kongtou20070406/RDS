@@ -360,6 +360,42 @@ raise SystemExit(rds_cli.main())
     def advise(self, *tail, ok=True):
         return self.call('advise', '--context', str(self.context_path), '--graph', str(self.graph_path), *tail, root=self.ledger, ok=ok)
 
+    def test_root_level_file_output_is_authorized_at_its_own_path(self):
+        # Issue #46: a valid-looking root-level filename must not be rejected by
+        # inferring the file itself as a directory root. It keeps exact identity.
+        self.script('from pathlib import Path\nPath("result.json").write_text(\'{"ok":true}\', encoding="utf-8")\n')
+        result = json.loads(self.job('root-file', True, '--output', 'result.json').stdout)
+        self.assertEqual(result['run_status'], 'SUCCEEDED')
+        self.assertEqual(json.loads((Path(result['job_root']) / 'result.json').read_text(encoding='utf-8')), {'ok': True})
+
+    def test_root_level_output_does_not_widen_the_boundary(self):
+        # Declaring one root-level file must not authorize traversal or overwrite a
+        # bound input; both fail before any execution is dispatched.
+        self.script('print("noop")\n')
+        traversal = self.job('traverse', False, '--output', '../escape.json')
+        self.assertNotEqual(traversal.returncode, 0)
+        self.assertIn('escapes project root', traversal.stderr)
+        collision = self.job('collide', False, '--output', 'probe.py')
+        self.assertNotEqual(collision.returncode, 0)
+        self.assertIn('overwrites bound input', collision.stderr)
+
+    def test_invalid_output_binding_is_rejected_before_parent_charge_or_child_creation(self):
+        self.initialize_policy_ledger()
+        marker = self.root / 'collision-launched'
+        self.script(f'from pathlib import Path\nPath({str(marker)!r}).write_text("launched")\n')
+        before_budget = ProjectStore(self.ledger).snapshot()['budget']
+        before_children = set((self.root / '.rds/exec').iterdir())
+
+        for name, output in [('collision-retry', 'probe.py'), ('nested-collision-retry', 'probe.py/child.json'), ('traversal-retry', '../escape.json')]:
+            first = self.job(name, False, *self.policy_options(), '--output', output)
+            second = self.job(name, False, *self.policy_options(), '--output', output)
+            self.assertNotEqual(first.returncode, 0)
+            self.assertNotEqual(second.returncode, 0)
+            self.assertFalse((self.root / '.rds/exec' / name).exists())
+
+        self.assertEqual(set((self.root / '.rds/exec').iterdir()), before_children)
+        self.assertEqual(ProjectStore(self.ledger).snapshot()['budget'], before_budget)
+        self.assertFalse(marker.exists())
     def test_native_objective_without_operational_contract_keeps_quick_compatibility(self):
         from rds_math import bind_objective
         from test_rds_native_research import GOAL
