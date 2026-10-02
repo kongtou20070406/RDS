@@ -795,7 +795,8 @@ def cmd_branch(args, rds):
         elif args.action == "fork":
             spec = load_spec(args.spec)
             reject_self_signatures(spec)
-            bid = identity(spec["id"])
+            json_object(spec, "Branch spec")
+            bid = identity(required_field(spec, "id", "branch"))
             parent = identity(spec.get("parent_id", active))
             require(bid not in branches, f"Branch ID '{bid}' already exists")
             require(parent in branches, f"Parent branch '{parent}' does not exist")
@@ -888,7 +889,7 @@ def cmd_meta(args, rds):
         return result
     elif args.action == "fuzz":
         from rds_adversary import AdversarialMutator
-        plan = load_spec(args.plan)
+        plan = json_object(load_spec(args.plan), "Plan spec")
         m_type = getattr(args, "type", "all")
         mutants = AdversarialMutator.mutate_plan(plan, mutation_type=m_type)
         return {"original_plan_id": plan.get("id"), "mutants_count": len(mutants), "mutants": mutants}
@@ -949,7 +950,8 @@ def cmd_advise(args, rds):
     if getattr(args, "doc", None):
         return advisor.ingest_document(Path(args.doc), topic=getattr(args, "topic", None))
     if getattr(args, "plan", None):
-        plan = load_spec(args.plan)
+        # A non-object plan is malformed input, not a compliance finding to advise on.
+        plan = json_object(load_spec(args.plan), "Plan spec")
         try:
             cmd_plan(argparse.Namespace(plan=args.plan, action="check"), rds, advisory=True)
         except Exception as exc:
