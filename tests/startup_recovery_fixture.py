@@ -145,7 +145,11 @@ def controller(root, spec_path, scenario):
                     db.execute("BEGIN IMMEDIATE")
                     began = time.monotonic()
                     held.set()
-                    time.sleep(5.2)
+                    # Requested sleep duration is not the measured lock interval.
+                    # Keep the real lock until the assertion's clock reaches the
+                    # full threshold, even if a timer wakes slightly early.
+                    while (remaining := 5.2 - (time.monotonic() - began)) > 0:
+                        time.sleep(remaining)
                 report["writer_lock_seconds"] = time.monotonic() - began
             except BaseException as exc:
                 errors.append(exc)
