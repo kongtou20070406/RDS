@@ -298,8 +298,11 @@ def cmd_init(args, rds):
     reject_self_signatures(contract)
     # Scalars cannot be searched for fields; lists and strings keep their missing-field message.
     require(isinstance(contract, (dict, list, str)), "Contract must be a JSON object")
-    for key in ("project_id", "claim", "primary_metric", "budget", "splits"):
-        require(key in contract, "Missing contract field: " + key)
+    # Batch every missing required field into one rejection so a caller repairs
+    # all of them in a single round trip instead of one field per attempt (#72).
+    missing = [key for key in ("project_id", "claim", "primary_metric", "budget", "splits", "baseline_source")
+               if key not in contract]
+    require(not missing, "Missing contract fields: " + ", ".join(missing))
     json_object(contract, "Contract")
     identity(contract["project_id"])
     metric = json_object(contract["primary_metric"], "Contract primary_metric")
@@ -332,8 +335,7 @@ def cmd_init(args, rds):
         registry[sid] = {**split, "path": str(path), "sha256": digest(raw),
                          "sample_ids": [digest(r[0]) for r in rows]}
     contract["splits"] = registry
-    baseline = Path(path_field(required_field(contract, "baseline_source", "contract"),
-                               "Contract baseline_source"))
+    baseline = Path(path_field(contract["baseline_source"], "Contract baseline_source"))
     baseline = (rds.root / baseline).resolve() if not baseline.is_absolute() else baseline.resolve()
     baseline_raw = read_bounded(baseline, 8192)
     baseline_ast = parse_source(baseline_raw.decode("utf-8-sig"))["control"]
@@ -920,6 +922,8 @@ def cmd_advise(args, rds):
     has_context = bool(has_search_context or getattr(args, "frontier", None) or getattr(args, "frontier_proposals", None))
     require(not getattr(args, "templates", None) or has_search_context,
             "--templates requires --research-context or --artifacts with a decision")
+    require(not getattr(args, 'saved_dependencies', False) or has_search_context,
+            '--saved-dependencies requires a research context or artifact decision')
     require(not (any(modes) or has_train) or not (has_context or getattr(args, "templates", None) or getattr(args, "graph", None)),
             "Research context, artifacts, templates, frontier and graph require the direction-search mode")
     require(not getattr(args, "topic", None) or getattr(args, "doc", None), "--topic requires --doc")
@@ -966,6 +970,9 @@ def cmd_advise(args, rds):
         state = {}
     if getattr(args, "research_context", None):
         state["advisor_context"] = load_spec(args.research_context)
+    if getattr(args, 'saved_dependencies', False):
+        from rds_tms_store import with_saved_dependencies
+        state['advisor_context'] = with_saved_dependencies(args.root, state.get('advisor_context', {}))
     if getattr(args, "frontier", None):
         context = state.setdefault("advisor_context", {})
         require(isinstance(context, dict), "Research context must be an object")
@@ -989,7 +996,9 @@ def cmd_advise(args, rds):
                 "Research context and facts must be objects")
         require(isinstance(manual.get("costs", {}), dict), "Research context costs must be an object")
         for key in ("decision", "targets", "budget", "max_depth", "max_candidates", "target_types", "templates", "frontier", "frontier_proposals", "resources",
-                    "dependency_map", "objective_binding", "method_constraints", "research_mode", "require_goal_link", "scope"):
+                    "dependency_map", "objective_binding", "method_constraints", "research_mode", "require_goal_link", "scope",
+                    "audit_receipts", "audit_files",
+                    "obstructions"):
             if key in manual:
                 context[key] = manual[key]
         facts = dict(context.get("facts", {}))
@@ -1092,6 +1101,10 @@ def cmd_project(args):
         return store.execute(args.id, background=args.background)
     if args.action == "recover":
         return store.recover(args.id)
+    if args.action == "next":
+        return store.next_move()
+    if args.action == "compare":
+        return store.compare()
     if args.action == "costs":
         from rds_costs import summarize_costs
         return summarize_costs(store.snapshot().get("receipts", []))
@@ -1259,8 +1272,11 @@ class FriendlyParser(argparse.ArgumentParser):
         options = list(self._option_string_actions)
         unknown = next((token for token in message.split() if token.startswith('--')), None)
         suggestions = difflib.get_close_matches(unknown or '', options, n=2, cutoff=0.5)
-        hint = 'python scripts/rds_cli.py ' + (' '.join(suggestions) if suggestions else self.prog.split('rds_cli.py')[-1].strip() + ' --help')
-        super().error(message + '\n[RDS-HINT] ' + hint)
+        if suggestions:
+            message += " (closest: " + ", ".join(suggestions) + ")"
+        # The hint must run as printed: keep the failing subcommand path and ask for help (#72).
+        path = ' '.join(self.prog.split()[1:])
+        super().error(message + '\n[RDS-HINT] python scripts/rds_cli.py ' + (path + ' ' if path else '') + '--help')
 
 
 def parser():
@@ -1278,6 +1294,7 @@ def parser():
     quick.add_argument("--background", action="store_true", help="Use the existing Windows Task Scheduler runner")
     quick.add_argument("--context", "--research-context", "-c", "--ctx", dest="research_context")
     quick.add_argument("--graph")
+    quick.add_argument('--saved-dependencies', action='store_true', help='Read current dependencies from --ledger before advice and admission')
     quick.add_argument("--choose", help="Exact candidate ID from the direction review")
     quick.add_argument("--ledger", "-l", "--db", help="Existing project ledger for prospective choice and execution feedback")
     quick.add_argument("--json", action="store_true", help="Return the full operational receipt")
@@ -1293,9 +1310,17 @@ def parser():
     guard.add_argument('--policy', required=True)
     guard.add_argument('--json', action='store_true')
     hypergraph = commands.add_parser('hypergraph', help='Bounded AND/OR proof dependency analysis, not proof certification')
-    hypergraph.add_argument('--input', '-i', required=True)
+    hypergraph.add_argument('--input', '-i', help='Import or restore a map; omitted inputs reuse this root\'s saved map')
     hypergraph.add_argument('--output', '-o')
     hypergraph.add_argument('--audit-files', action='store_true')
+    hypergraph.add_argument('--update', '-u', action='append', default=[], help='Merge a small declaration fragment into the saved map')
+    hypergraph.add_argument('--declare', action='append', default=[], help='Small JSON declaration, without writing an input file')
+    for flag in ('retract-node', 'retract-rule', 'refute-node', 'refute-rule'):
+        hypergraph.add_argument('--' + flag, action='append', default=[])
+    hypergraph.add_argument('--change-source', help='Locator for the declared change; creates no scientific verdict')
+    hypergraph.add_argument('--trace-cone', help='Explain the selected support for one claim')
+    hypergraph.add_argument('--audit-receipts', action='store_true',
+                            help='verify receipt-bound evidence against project ledgers')
     hypergraph.add_argument('--json', action='store_true')
     usage = commands.add_parser("usage", help="Show locally recorded daily CLI invocation counts")
     window = usage.add_mutually_exclusive_group()
@@ -1369,11 +1394,23 @@ def parser():
     pr_exec.add_argument("--id", required=True)
     pr_exec.add_argument("--background", action="store_true", help="Use a tool-owned Windows Task Scheduler task")
     pr_actions.add_parser("recover").add_argument("--id", required=True)
+    pr_actions.add_parser("next", help="Print the single next actionable project step and its command")
+    pr_actions.add_parser("compare", help="Compare recorded arms against the precommitted min_useful_delta")
     pr_actions.add_parser("status").add_argument("--brief", "--digest", action="store_true")
     pr_actions.add_parser("costs")
     pr_control = pr_actions.add_parser("control-check")
     pr_control.add_argument("--candidate", required=True)
     pr_control.add_argument("--current", required=True)
+
+    hook = commands.add_parser("host-hook", help="Bind host dispatch to ledger admission identities; coverage is not an OS sandbox")
+    hook_actions = hook.add_subparsers(dest="action", required=True)
+    hook_actions.add_parser("install").add_argument("--permissive", action="store_true",
+                                                    help="Record advisory (non-strict) coverage")
+    hook_actions.add_parser("coverage")
+    hook_validate = hook_actions.add_parser("validate")
+    hook_validate.add_argument("--request", required=True)
+    for child in hook_actions.choices.values():
+        child.add_argument("--json", action="store_true")
 
     checkpoints = commands.add_parser("checkpoint", help="Record decisions and recover against live project state")
     cp_actions = checkpoints.add_subparsers(dest="action", required=True)
@@ -1472,6 +1509,7 @@ def parser():
     adv.add_argument("--fit-telemetry", default=None, help="Paired, comparable curve observations for fit diagnosis")
     adv.add_argument("--literature", default=None, help="Search scoped local primary-source records")
     adv.add_argument("--research-context", "--context", "-c", "--ctx", default=None, help="Sourced facts and the decision for bounded graph search")
+    adv.add_argument('--saved-dependencies', action='store_true', help='Read this root\'s program-owned dependency map into the existing Advisor context')
     adv.add_argument("--choose", help="Exact candidate ID to record as the caller's planned route")
     adv.add_argument("--record", help="New checkpoint ID; use with --choose to complete the decision fields")
     adv.add_argument("--brief", "--digest", action="store_true", help="Save full advice and return a bounded digest")
@@ -1491,6 +1529,20 @@ def parser():
     return p
 
 
+L3_LEDGER_COMMANDS = frozenset({"init", "hypothesis", "gate", "plan", "run", "data", "decide",
+                                "branch", "artifacts", "meta"})
+
+
+def _project_ledger_message(root):
+    """True split naming for L3 commands in a root that holds only a project ledger (#76)."""
+    ledger = Path(root).resolve() / ".rds" / "project.sqlite3"
+    if not ledger.is_file():
+        return None
+    return ("L3 kernel not initialized in this root (project ledger found; L3 commands need "
+            "`init --contract`). This root's recorded project state is intact; use "
+            "`python -B scripts/rds_cli.py project next` for the campaign's next step")
+
+
 def _main():
     try:
         args = parser().parse_args()
@@ -1507,6 +1559,18 @@ def _main():
             print("[RDS-USAGE] " + str(exc), file=sys.stderr)
             return 1
     rds = RDSState(args.root)
+    if args.command in L3_LEDGER_COMMANDS and not rds.db_path.exists():
+        message = _project_ledger_message(args.root)
+    elif (args.command == "checkpoint" and args.action == "save"
+          and args.kind == "reference" and not rds.db_path.exists()):
+        # A reference save reads the L3 snapshot; a project save must stay reachable.
+        message = _project_ledger_message(args.root)
+    else:
+        message = None
+    if message:
+        print("[RDS-REJECT] " + message, file=sys.stderr)
+        print("[RDS-HINT] python -B scripts/rds_cli.py --root \"" + str(args.root) + "\" project next", file=sys.stderr)
+        return 1
     try:
         if args.command == "history":
             from rds_obelisk import history_command
@@ -1557,11 +1621,33 @@ def _main():
             from rds_guard import evaluate
             result = evaluate(args.policy, args.root)
         elif args.command == 'hypergraph':
-            from rds_hypergraph import analyze_hypergraph, audit_sources
-            spec = strict_json(read_bounded(args.input, 8 * 1024 * 1024).decode('utf-8-sig'))
-            result = analyze_hypergraph(spec)
-            if args.audit_files:
-                result['source_file_audit'] = audit_sources(spec, Path(args.input).resolve().parent)
+            from rds_hypergraph_input import load_input
+            from rds_tms_store import maintain
+            spec, repairs = None, []
+            if args.input:
+                spec, repairs = load_input(read_bounded(args.input, 8 * 1024 * 1024).decode('utf-8-sig'))
+            require(len(args.update) + len(args.declare) <= 8, 'At most eight dependency declarations')
+            updates, locators = [], []
+            for update_path in args.update:
+                update, fixed = load_input(read_bounded(update_path, 8 * 1024 * 1024).decode('utf-8-sig'))
+                updates.append(update)
+                locators.append(str(Path(update_path).resolve()))
+                repairs.extend(fixed)
+            for declaration in args.declare:
+                require(len(declaration.encode('utf-8')) <= 128 * 1024, 'Inline declaration exceeds 128 KiB; use --update for larger input')
+                update, fixed = load_input(declaration)
+                updates.append(update)
+                locators.append('command-line declaration')
+                repairs.extend(fixed)
+            result = maintain(args.root, initial=spec,
+                              locator=str(Path(args.input).resolve()) if args.input else 'command-line declaration',
+                              source_base=Path(args.input).resolve().parent if args.input else None,
+                              audit_files=args.audit_files, format_repairs=repairs,
+                              audit_receipts_enabled=args.audit_receipts,
+                              retract_nodes=args.retract_node, retract_rules=args.retract_rule,
+                              refute_nodes=args.refute_node, refute_rules=args.refute_rule,
+                              change_source=args.change_source, trace=args.trace_cone,
+                              updates=updates, update_locators=locators)
             if args.output:
                 output = Path(args.output)
                 output.parent.mkdir(parents=True, exist_ok=True)
@@ -1572,9 +1658,17 @@ def _main():
             review = None
             require(bool(args.research_context) == bool(args.ledger) and (not args.choose or args.research_context),
                     "Prospective exec needs --context and --ledger; --choose is optional only for one READY candidate")
+            require(not args.saved_dependencies or args.research_context,
+                    '--saved-dependencies requires prospective --context and --ledger')
             if args.research_context:
-                review_args = argparse.Namespace(root=args.ledger, research_context=args.research_context, graph=args.graph)
-                review = (cmd_advise(review_args, RDSState(args.ledger)), load_spec(args.research_context))
+                review_args = argparse.Namespace(root=args.ledger, research_context=args.research_context,
+                                                 graph=args.graph, saved_dependencies=args.saved_dependencies)
+                advice = cmd_advise(review_args, RDSState(args.ledger))
+                context = load_spec(args.research_context)
+                if args.saved_dependencies:
+                    from rds_tms_store import with_saved_dependencies
+                    context = with_saved_dependencies(args.ledger, context)
+                review = (advice, context)
             result = execute(args, review=review)
         elif args.command == "reject":
             from rds_quick import reject_route
@@ -1583,6 +1677,14 @@ def _main():
             result = cmd_advise(args, rds)
         elif args.command == "project":
             result = cmd_project(args)
+        elif args.command == "host-hook":
+            from rds_host_hook import install, coverage, validate_request
+            if args.action == "install":
+                result = install(args.root, strict=not args.permissive)
+            elif args.action == "coverage":
+                result = coverage(args.root)
+            else:
+                result = validate_request(args.root, load_spec(args.request))
         elif args.command == "checkpoint":
             result = cmd_checkpoint(args, rds)
         elif args.command == "artifacts":
@@ -1618,7 +1720,10 @@ def _main():
             return 1
         if args.command == 'guard' or args.command == 'exec' and 'regression_review' in result:
             return {'PASS': 0, 'FAIL': 1, 'UNKNOWN': 2}.get(result.get('regression_review', result).get('status'), 2)
-        if args.command == 'hypergraph' and result.get('truncated'):
+        if args.command == 'hypergraph' and (result.get('truncated') or result.get('input_review', {}).get('errors')
+                                              or result.get('status') == 'CONFLICT'):
+            return 2
+        if args.command == 'host-hook' and result.get('status') == 'HOST_GUARD_MISSING':
             return 2
         if args.command == 'rsi' and args.action == 'validate':
             return {'LOCAL_CASES_PASSED': 0, 'FAILED': 1, 'UNKNOWN': 2}[result['status']]
@@ -1631,6 +1736,9 @@ def _main():
     except (ValueError, KeyError, TypeError, RecursionError, OSError, SyntaxError) as exc:
         # KeyError/TypeError also come from unvalidated user specs, so they stay rejections.
         print("[RDS-REJECT] " + str(exc), file=sys.stderr)
+        if args.command == "init" or args.command == "project" and args.action == "init":
+            # Point at a command that produces a valid, bound contract from scratch (#72).
+            print("[RDS-HINT] python -B examples/project-runner/prepare.py --root ./my-project", file=sys.stderr)
         return 1
     except (sqlite3.Error, ImportError, subprocess.SubprocessError) as exc:
         # Nothing in the request was refused: the state database, a dependency or a subprocess failed.

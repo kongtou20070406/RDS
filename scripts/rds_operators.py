@@ -358,135 +358,281 @@ class RationalCertificateOperator:
         return _scaffold(RationalCertificateOperator, _rational_self_test)
 
 
+# ---------------------------------------------------------------------------
 # Operator 5: EGraphEquivalenceOperator (egraph_equivalence_saturation)
 # ---------------------------------------------------------------------------
 
 class EGraphEquivalenceOperator:
-    """Equivalence Saturation and E-Graph Operator.
+    """Bounded rewrites for declared rational-polynomial expressions.
 
-    Compactly encodes exponentially many algebraically equivalent terms simultaneously
-    using congruence closure and union-find, avoiding phase-ordering divergence in equational rewrites.
+    Only commutativity and the 0/1 identities are implemented. Distinct classes
+    do not establish inequality; FAIL requires an exact rational witness.
     """
 
+    DOMAIN = "rational_polynomials"
+    AXIOMS = ("add_commutativity", "mul_commutativity", "add_zero", "mul_one")
+    MAX_INPUT_NODES = 512
+    MAX_DEPTH = 32
+    MAX_CONSTANT_BITS = 128
+    MAX_VALUE_BITS = 4096
+
+    class BudgetExhausted(RuntimeError):
+        pass
+
+    @staticmethod
+    def _limit(value, name, lower, upper):
+        if type(value) is not int or not lower <= value <= upper:
+            raise ValueError(f"{name} must be an integer in {lower}..{upper}")
+        return value
+
+    @classmethod
+    def _variables(cls, variables):
+        import re
+        if not isinstance(variables, (list, tuple)) or len(variables) > 16:
+            raise ValueError("Declare at most 16 rational variables")
+        if not all(isinstance(name, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,31}", name)
+                   for name in variables) or len(set(variables)) != len(variables):
+            raise ValueError("Variables must be distinct bounded identifiers")
+        return tuple(sorted(variables))
+
+    @classmethod
+    def _normalize(cls, expr, variables, count, depth=0):
+        from fractions import Fraction
+        import re
+        count[0] += 1
+        if count[0] > cls.MAX_INPUT_NODES or depth > cls.MAX_DEPTH:
+            raise ValueError("Expression exceeds node/depth limits")
+        if isinstance(expr, (list, tuple)):
+            if len(expr) != 3 or expr[0] not in ("+", "*"):
+                raise ValueError("Only binary + and * expressions are supported")
+            return (expr[0], cls._normalize(expr[1], variables, count, depth + 1),
+                    cls._normalize(expr[2], variables, count, depth + 1))
+        if type(expr) is int or isinstance(expr, Fraction):
+            value = Fraction(expr)
+        elif isinstance(expr, str):
+            if expr in variables:
+                return expr
+            if not re.fullmatch(r"[+-]?\d{1,32}(?:/[1-9]\d{0,31})?", expr):
+                raise ValueError("Unknown symbol or unsupported rational literal")
+            value = Fraction(expr)
+        else:
+            raise ValueError("Leaves must be exact rationals or declared variables; floats/bools are unsupported")
+        if max(abs(value.numerator).bit_length(), value.denominator.bit_length()) > cls.MAX_CONSTANT_BITS:
+            raise ValueError("Rational constant exceeds 128 bits")
+        return value
+
     class EGraph:
-        def __init__(self):
-            self.parent = {}
-            self.classes = {}
-            self.hashcons = {}
+        def __init__(self, variables=(), max_nodes=1024, max_work=50000):
+            self.variables = EGraphEquivalenceOperator._variables(variables)
+            self.max_nodes = EGraphEquivalenceOperator._limit(max_nodes, "max_nodes", 1, 2048)
+            self.max_work = EGraphEquivalenceOperator._limit(max_work, "max_work", 1, 200000)
+            self.work = 0
+            self.parent, self.rank, self.classes, self.hashcons = {}, {}, {}, {}
 
-        def find(self, i: int) -> int:
-            if self.parent[i] != i:
-                self.parent[i] = self.find(self.parent[i])
-            return self.parent[i]
+        def _tick(self):
+            if self.work >= self.max_work:
+                raise EGraphEquivalenceOperator.BudgetExhausted("E-graph work budget exhausted")
+            self.work += 1
 
-        def union(self, id1: int, id2: int) -> int:
+        def find(self, i):
+            if type(i) is not int or i not in self.parent:
+                raise ValueError("Unknown e-class")
+            root = i
+            while self.parent[root] != root:
+                root = self.parent[root]
+            while self.parent[i] != i:
+                parent = self.parent[i]
+                self.parent[i] = root
+                i = parent
+            return root
+
+        def union(self, id1, id2):
+            self._tick()
             root1, root2 = self.find(id1), self.find(id2)
             if root1 != root2:
+                if self.rank[root1] < self.rank[root2]:
+                    root1, root2 = root2, root1
                 self.parent[root2] = root1
-                self.classes[root1].update(self.classes[root2])
-                del self.classes[root2]
-                return root1
+                if self.rank[root1] == self.rank[root2]:
+                    self.rank[root1] += 1
+                self.classes[root1].update(self.classes.pop(root2))
             return root1
 
-        def canonicalize_node(self, node: Tuple[str, Tuple[int, ...]]) -> Tuple[str, Tuple[int, ...]]:
+        def canonicalize_node(self, node):
             op, children = node
-            return (op, tuple(self.find(c) for c in children))
+            return op, tuple(self.find(child) for child in children)
 
-        def _insert_node(self, node: Tuple[str, Tuple[int, ...]]) -> int:
-            c_node = self.canonicalize_node(node)
-            if c_node in self.hashcons:
-                return self.find(self.hashcons[c_node])
-
+        def _insert_node(self, node):
+            self._tick()
+            node = self.canonicalize_node(node)
+            if node in self.hashcons:
+                return self.find(self.hashcons[node])
+            if len(self.parent) >= self.max_nodes:
+                raise EGraphEquivalenceOperator.BudgetExhausted("E-graph node budget exhausted")
             new_id = len(self.parent)
-            self.parent[new_id] = new_id
-            self.classes[new_id] = {c_node}
-            self.hashcons[c_node] = new_id
+            self.parent[new_id], self.rank[new_id] = new_id, 0
+            self.classes[new_id], self.hashcons[node] = {node}, new_id
             return new_id
 
-        def add_node(self, op: str, child_ids: Tuple[int, ...]) -> int:
-            node = (str(op), tuple(self.find(c) for c in child_ids))
-            return self._insert_node(node)
+        def add_node(self, op, child_ids):
+            if op not in ("+", "*") or len(child_ids) != 2:
+                raise ValueError("Expected a binary supported operator")
+            return self._insert_node((op, tuple(child_ids)))
 
-        def add(self, expr: Any) -> int:
-            if not isinstance(expr, (list, tuple)):
-                node = (str(expr), ())
-                return self._insert_node(node)
-            op = str(expr[0])
-            child_ids = tuple(self.add(c) for c in expr[1:])
-            return self.add_node(op, child_ids)
+        def _add(self, expr):
+            from fractions import Fraction
+            if isinstance(expr, Fraction):
+                return self._insert_node(("const:" + str(expr), ()))
+            if isinstance(expr, str):
+                return self._insert_node(("var:" + expr, ()))
+            return self.add_node(expr[0], (self._add(expr[1]), self._add(expr[2])))
+
+        def add(self, expr):
+            normalized = EGraphEquivalenceOperator._normalize(expr, self.variables, [0])
+            return self._add(normalized)
 
         def rebuild(self):
-            changed = True
-            while changed:
-                changed = False
-                new_hashcons = {}
+            while True:
+                changed, rebuilt = False, {}
                 for node, class_id in list(self.hashcons.items()):
-                    canon = self.canonicalize_node(node)
-                    root = self.find(class_id)
-                    if canon in new_hashcons and self.find(new_hashcons[canon]) != root:
-                        self.union(root, new_hashcons[canon])
+                    self._tick()
+                    node, root = self.canonicalize_node(node), self.find(class_id)
+                    if node in rebuilt and self.find(rebuilt[node]) != root:
+                        root = self.union(root, rebuilt[node])
                         changed = True
-                    new_hashcons[canon] = self.find(root)
-                self.hashcons = new_hashcons
+                    rebuilt[node] = self.find(root)
+                self.hashcons = rebuilt
+                if not changed:
+                    break
+            self.classes = {root: set() for root in self.classes}
+            for node, class_id in self.hashcons.items():
+                self.classes[self.find(class_id)].add(node)
 
-        def saturate_standard_algebra(self, max_iter: int = 8):
-            """Applies commutativity, associativity, and identity rules until saturation."""
+        def saturate_standard_algebra(self, max_iter=8):
+            EGraphEquivalenceOperator._limit(max_iter, "max_iter", 0, 16)
             for _ in range(max_iter):
-                unions = []
-                for node, class_id in list(self.hashcons.items()):
-                    op, children = node
-                    # Commutativity for '+' and '*'
-                    if op in ("+", "*") and len(children) == 2:
-                        swapped = self.add_node(op, (children[1], children[0]))
-                        unions.append((class_id, swapped))
-                    # Identity: x + 0 -> x, x * 1 -> x
-                    if op == "+" and len(children) == 2:
-                        for idx_x, idx_zero in ((0, 1), (1, 0)):
-                            for n in self.classes[self.find(children[idx_zero])]:
-                                if n[0] == "0" and len(n[1]) == 0:
-                                    unions.append((class_id, children[idx_x]))
-                    if op == "*" and len(children) == 2:
-                        for idx_x, idx_one in ((0, 1), (1, 0)):
-                            for n in self.classes[self.find(children[idx_one])]:
-                                if n[0] == "1" and len(n[1]) == 0:
-                                    unions.append((class_id, children[idx_x]))
-
                 changed = False
-                for id1, id2 in unions:
-                    if self.find(id1) != self.find(id2):
-                        self.union(id1, id2)
-                        changed = True
+                for node, class_id in list(self.hashcons.items()):
+                    self._tick()
+                    op, children = self.canonicalize_node(node)
+                    if op not in ("+", "*"):
+                        continue
+                    candidates = [self.add_node(op, (children[1], children[0]))]
+                    identity = "const:0" if op == "+" else "const:1"
+                    for child, other in ((children[0], children[1]), (children[1], children[0])):
+                        if (identity, ()) in self.classes[self.find(child)]:
+                            candidates.append(other)
+                    for candidate in candidates:
+                        if self.find(class_id) != self.find(candidate):
+                            self.union(class_id, candidate)
+                            changed = True
                 if changed:
                     self.rebuild()
                 else:
-                    break
+                    return True
+            return False
 
     @classmethod
-    def verify_algebraic_equivalence(cls, expr_a: Any, expr_b: Any, max_iter: int = 8) -> Dict[str, Any]:
-        """Proves algebraic equivalence by evaluating whether expr_a and expr_b share a root eclass."""
-        eg = cls.EGraph()
-        id_a = eg.add(expr_a)
-        id_b = eg.add(expr_b)
-        eg.saturate_standard_algebra(max_iter=max_iter)
-        root_a = eg.find(id_a)
-        root_b = eg.find(id_b)
-        equivalent = (root_a == root_b)
-        return {
-            "status": "PASS" if equivalent else "FAIL",
-            "assurance": "EGRAPH_EQUIVALENCE_CERTIFIED" if equivalent else "EGRAPH_DISTINCT_CLASSES",
-            "equivalent": equivalent,
-            "root_a": root_a,
-            "root_b": root_b,
-            "total_eclasses": len(eg.classes),
-            "total_enodes": len(eg.hashcons),
-        }
+    def _evaluate(cls, expr, values, graph):
+        from fractions import Fraction
+        graph._tick()
+        if isinstance(expr, Fraction):
+            return expr
+        if isinstance(expr, str):
+            return values[expr]
+        left, right = cls._evaluate(expr[1], values, graph), cls._evaluate(expr[2], values, graph)
+        numerator_bits = (max(abs(left.numerator).bit_length() + right.denominator.bit_length(),
+                              abs(right.numerator).bit_length() + left.denominator.bit_length()) + 1
+                          if expr[0] == "+" else abs(left.numerator).bit_length() + abs(right.numerator).bit_length())
+        denominator_bits = left.denominator.bit_length() + right.denominator.bit_length()
+        if max(numerator_bits, denominator_bits) > cls.MAX_VALUE_BITS:
+            raise cls.BudgetExhausted("Exact witness evaluation exceeds 4096 bits")
+        return left + right if expr[0] == "+" else left * right
+
+    @classmethod
+    def verify_algebraic_equivalence(cls, expr_a, expr_b, max_iter=8, *,
+                                     variables=(), domain=DOMAIN, max_nodes=1024, max_work=50000):
+        """Check a scoped rewrite connection or an exact point counterexample."""
+        from fractions import Fraction
+        import hashlib
+        import json
+        if domain != cls.DOMAIN:
+            raise ValueError("Only the rational_polynomials domain is supported")
+        variables = cls._variables(variables)
+        cls._limit(max_iter, "max_iter", 0, 16)
+        count = [0]
+        left = cls._normalize(expr_a, variables, count)
+        right = cls._normalize(expr_b, variables, count)
+
+        def encode(expr):
+            if isinstance(expr, Fraction):
+                return ["rational", str(expr)]
+            if isinstance(expr, str):
+                return ["symbol", expr]
+            return [expr[0], encode(expr[1]), encode(expr[2])]
+
+        binding = {"domain": domain, "variables": list(variables), "axioms": list(cls.AXIOMS),
+                   "expr_a": encode(left), "expr_b": encode(right)}
+        graph = cls.EGraph(variables, max_nodes, max_work)
+        result = {"status": "UNKNOWN", "assurance": "NONE", "equivalent": None,
+                  "domain": domain, "variables": list(variables), "axioms": list(cls.AXIOMS),
+                  "input_sha256": hashlib.sha256(json.dumps(binding, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+                  "limits": {"max_iter": max_iter, "max_nodes": max_nodes, "max_work": max_work},
+                  "saturated": False, "budget_exhausted": False, "certificate_status": "NOT_EMITTED",
+                  "application_status": "UNKNOWN"}
+        try:
+            id_a, id_b = graph._add(left), graph._add(right)
+            if graph.find(id_a) != graph.find(id_b):
+                result["saturated"] = graph.saturate_standard_algebra(max_iter)
+            result["root_a"], result["root_b"] = graph.find(id_a), graph.find(id_b)
+            if result["root_a"] == result["root_b"]:
+                result.update(status="PASS", assurance="BOUNDED_REWRITE_CHECK", equivalent=True,
+                              reason="Connected by supported identities, commutativity and congruence in the declared domain")
+            else:
+                assignments = [{name: Fraction(value) for name in variables} for value in (0, 1, 2, -1)]
+                assignments.extend({name: Fraction(1 if name == selected else 0) for name in variables}
+                                   for selected in variables)
+                for values in assignments:
+                    value_a, value_b = cls._evaluate(left, values, graph), cls._evaluate(right, values, graph)
+                    if value_a != value_b:
+                        result.update(status="FAIL", assurance="EXACT_RATIONAL_COUNTEREXAMPLE", equivalent=False,
+                                      reason="Exact values differ at a declared-domain assignment",
+                                      counterexample={"variables": {name: str(value) for name, value in values.items()},
+                                                      "expr_a": str(value_a), "expr_b": str(value_b)})
+                        break
+                else:
+                    result["reason"] = "No supported rewrite connection or exact counterexample found within limits"
+        except cls.BudgetExhausted as exc:
+            result.update(reason=str(exc), budget_exhausted=True)
+        result.update(total_eclasses=len(graph.classes), total_enodes=len(graph.hashcons), work_used=graph.work)
+        return result
+
+    @classmethod
+    def operator_self_test(cls):
+        positive = cls.verify_algebraic_equivalence(("*", "x", ("+", "y", 0)), ("*", "y", "x"),
+                                                   variables=("x", "y"))
+        negative = cls.verify_algebraic_equivalence(("+", "x", "y"), ("*", "x", "y"),
+                                                   variables=("x", "y"))
+        unresolved = cls.verify_algebraic_equivalence(("+", 1, 1), 2)
+        assert positive["status"] == "PASS" and positive["certificate_status"] == "NOT_EMITTED"
+        assert negative["status"] == "FAIL" and negative["counterexample"]
+        assert unresolved["status"] == "UNKNOWN" and unresolved["equivalent"] is None
+        return {"self_test_status": "PASS", "positive": positive,
+                "negative_status": negative["status"], "unresolved_status": unresolved["status"]}
 
     @staticmethod
-    def scaffold_code() -> str:
-        return _scaffold(EGraphEquivalenceOperator, _egraph_self_test)
+    def scaffold_code():
+        """Export this implementation and its positive/negative/unresolved checks."""
+        import ast
+        import inspect
+        source = inspect.getsource(EGraphEquivalenceOperator)
+        lines = source.splitlines()
+        method = next(node for node in ast.parse(source).body[0].body
+                      if isinstance(node, ast.FunctionDef) and node.name == "scaffold_code")
+        start = min([method.lineno] + [decorator.lineno for decorator in method.decorator_list]) - 1
+        del lines[start:method.end_lineno]
+        return "\n".join(lines) + '\n\noperator_self_test = EGraphEquivalenceOperator.operator_self_test\n\nif __name__ == "__main__":\n    import json\n    print(json.dumps(operator_self_test(), sort_keys=True, allow_nan=False))\n'
 
-
-# ---------------------------------------------------------------------------
 # Operator 6: LeanAxiomReviewOperator (lean_axiom_review)
 # ---------------------------------------------------------------------------
 
@@ -823,15 +969,16 @@ def _rational_self_test():
 
 def _egraph_self_test():
     report = EGraphEquivalenceOperator.verify_algebraic_equivalence(
-        ("*", "x", ("+", "y", "0")),
-        ("*", "y", "x"),
-    )
+        ("*", "x", ("+", "y", 0)), ("*", "y", "x"), variables=("x", "y"))
     negative = EGraphEquivalenceOperator.verify_algebraic_equivalence(
-        ("*", "x", "y"), ("+", "x", "z"),
-    )
-    assert report["status"] == "PASS" and report["equivalent"]
-    assert negative["status"] == "FAIL" and not negative["equivalent"]
-    return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
+        ("+", "x", "y"), ("*", "x", "y"), variables=("x", "y"))
+    unresolved = EGraphEquivalenceOperator.verify_algebraic_equivalence(
+        ("+", "x", ("+", "y", "z")), ("+", ("+", "x", "y"), "z"), variables=("x", "y", "z"))
+    assert report["status"] == "PASS" and report["certificate_status"] == "NOT_EMITTED"
+    assert negative["status"] == "FAIL" and negative["counterexample"]
+    assert unresolved["status"] == "UNKNOWN" and unresolved["equivalent"] is None
+    return {"self_test_status": "PASS", "positive": report,
+            "negative_status": negative["status"], "unresolved_status": unresolved["status"]}
 
 
 def _lean_axiom_self_test():
@@ -906,9 +1053,9 @@ OPERATORS = {
     "exact_symbolic_constraints": {"operator_id": "rational_interval_certificate", "title": "Rational Polynomial Interval Enclosure",
         "operator_class": RationalCertificateOperator, "primary_signal": "proof_bottleneck",
         "guarantee": "Sound rational whole-interval enclosure or exact witness; inconclusive is UNKNOWN", "self_test": _rational_self_test},
-    "egraph_equivalence_saturation": {"operator_id": "egraph_equivalence", "title": "Equivalence Saturation & E-Graph Congruence Rewriter",
+    "egraph_equivalence_saturation": {"operator_id": "egraph_equivalence", "title": "Bounded Rational-Polynomial Rewrite Example",
         "operator_class": EGraphEquivalenceOperator, "primary_signal": "proof_bottleneck",
-        "guarantee": "Confluence without phase-ordering loops in equational theories", "self_test": _egraph_self_test},
+        "guarantee": "Scoped supported rewrites or exact rational counterexample; otherwise UNKNOWN; no certificate emitted", "self_test": _egraph_self_test},
     "lean_axiom_review": {"operator_id": "lean_axiom_review", "title": "Lean 4 Axiom & Dependency Audit Operator",
         "operator_class": LeanAxiomReviewOperator, "primary_signal": "proof_bottleneck",
         "guarantee": "Exact-theorem input-report policy check; no Lean execution or constructivity verification", "self_test": _lean_axiom_self_test},

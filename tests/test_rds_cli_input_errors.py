@@ -36,9 +36,11 @@ class CLIInputErrorTests(unittest.TestCase):
         path.write_text(value if isinstance(value, str) else json.dumps(value), encoding="utf-8")
         return str(path)
 
-    def assertRejected(self, result, message):
+    def assertRejected(self, result, message, init=False):
         self.assertEqual(result.returncode, 1, result.stderr)
-        self.assertEqual(result.stderr, "[RDS-REJECT] " + message + "\n")
+        hint = ("\n[RDS-HINT] python -B examples/project-runner/prepare.py --root ./my-project\n"
+                if init else "\n")
+        self.assertEqual(result.stderr, "[RDS-REJECT] " + message + hint)
 
     def initialize(self):
         self.assertEqual(run_cli(self.root, "init", "--contract", str(self.root / "contract.json")).returncode, 0)
@@ -75,21 +77,21 @@ class CLIInputErrorTests(unittest.TestCase):
             ({**contract, "splits": {"development": {**split, "path": 7}}},
              "Contract split development path must be a non-empty path string"),
             ({k: v for k, v in contract.items() if k != "baseline_source"},
-             "Missing contract field: baseline_source"),
+             "Missing contract fields: baseline_source"),
             ({**contract, "baseline_source": ""}, "Contract baseline_source must be a non-empty path string"),
         ]
         for value, message in cases:
             with self.subTest(message=message):
                 result = run_cli(self.root, "init", "--contract", self.write("bad-contract.json", value))
-                self.assertRejected(result, message)
+                self.assertRejected(result, message, init=True)
                 self.assertFalse((self.root / ".rds").exists())
 
     def test_existing_contract_rejections_keep_their_messages(self):
         contract = example("contract.json")
         cases = [
-            ("[]", "Missing contract field: project_id"),
+            ("[]", "Missing contract fields: project_id, claim, primary_metric, budget, splits, baseline_source"),
             ([{"manipulation_verified": True}], "Self-signed verification fields are forbidden"),
-            ({k: v for k, v in contract.items() if k != "budget"}, "Missing contract field: budget"),
+            ({k: v for k, v in contract.items() if k != "budget"}, "Missing contract fields: budget"),
             ({**contract, "splits": {}}, "Register at least one data partition"),
             ({**contract, "splits": []}, "Register at least one data partition"),
             ({**contract, "splits": None}, "Register at least one data partition"),
@@ -101,7 +103,7 @@ class CLIInputErrorTests(unittest.TestCase):
         for value, message in cases:
             with self.subTest(message=message):
                 result = run_cli(self.root, "init", "--contract", self.write("bad-contract.json", value))
-                self.assertRejected(result, message)
+                self.assertRejected(result, message, init=True)
                 self.assertFalse((self.root / ".rds").exists())
 
     def test_malformed_hypothesis_and_plan_leave_the_ledger_unchanged(self):

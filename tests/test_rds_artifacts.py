@@ -2,6 +2,7 @@
 from copy import deepcopy
 import json
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -68,6 +69,32 @@ class ImportTests(unittest.TestCase):
         result = self.run_import(sources)
         self.assertEqual(result["facts"]["last_loss"]["source"]["locator"], "line:3:pointer:/loss")
         self.assertEqual(result["facts"]["loss"]["value"], 0.5)
+
+    def test_array_index_is_ascii_rfc6901_through_the_import_cli(self):
+        spellings = {"ascii": "3", "jsonl_ascii": "0", "arabic_indic": "٣", "fullwidth": "３",
+                     "devanagari": "३", "superscript": "³", "leading_zero": "03", "append": "-",
+                     "negative": "-1", "out_of_range": "4", "mixed": "1٣"}
+        facts = [{"id": k, "pointer": "/losses/" + v} for k, v in spellings.items() if k != "jsonl_ascii"]
+        sources = [self.source("metric.json", "metric", {"losses": [0.9, 0.7, 0.5, 0.25]}, facts),
+                   self.source("log.jsonl", "log", b'{"losses":[0.5]}\n',
+                               [{"id": "jsonl_ascii", "row": 1, "pointer": "/losses/0"},
+                                {"id": "jsonl_fullwidth", "row": 1, "pointer": "/losses/０"}], "jsonl")]
+        manifest = {"schema": "rds-artifact-manifest-v1", "decision": "choose", "sources": sources,
+                    "derived": [], "cost_bindings": []}
+        (self.base / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        proc = subprocess.run([sys.executable, "-B", str(ROOT / "scripts/rds_cli.py"), "--root", str(self.base),
+                               "artifacts", "import", "--manifest", str(self.base / "manifest.json")],
+                              cwd=ROOT, capture_output=True, encoding="utf-8", timeout=20)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        result = json.loads(proc.stdout)["facts"]
+        self.assertEqual((result["ascii"]["kind"], result["ascii"]["value"]), ("OBSERVED", 0.25))
+        self.assertEqual(result["ascii"]["source"]["locator"], "pointer:/losses/3")
+        self.assertEqual((result["jsonl_ascii"]["kind"], result["jsonl_ascii"]["value"]), ("OBSERVED", 0.5))
+        for fid in ("arabic_indic", "fullwidth", "devanagari", "superscript", "leading_zero", "append",
+                    "negative", "mixed", "jsonl_fullwidth"):
+            self.assertEqual((result[fid]["kind"], result[fid]["value"]), ("UNKNOWN", None), fid)
+            self.assertEqual(result[fid]["reason"], "invalid array index", fid)
+        self.assertEqual(result["out_of_range"]["kind"], "UNKNOWN")
 
     def test_issue19_file_hash_inventory_is_not_scalar_code_identity(self):
         record = {"source_sha256": {"model.py": "a" * 64}, "value": 1.0}
