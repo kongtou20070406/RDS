@@ -163,6 +163,8 @@ flowchart LR
 
 ## 多维适配器范围
 
+面向通用符号张量、E-Graph 与几何/无限维算子理论的研究和分阶段接入方案见[张量算子形式化路线](tensor-operator-formalization.zh-CN.md)。该方案仍是后续工作；当前 `tensor_identity` 仍只检查具体精确张量。
+
 以下数学 kind 已在当前 `main` 中注册，来源实现为 PR #2 `995e8eb`。受限模型导出是 Python API，不是另一种 `formal` CLI kind。使用所选版本的契约和限制；不能将标量 `hypothesis.formal` 字段强加给每个后端。
 
 | 适配器 | 声明模型与义务 | 解释边界 |
