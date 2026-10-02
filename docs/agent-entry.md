@@ -12,13 +12,15 @@ One call freezes inputs, constructs the contract/protocol/manifest, reserves the
 
 The command runs in `<source-directory>/.rds/exec/probe-001`, a frozen copy. Existing file arguments and static local Python imports are copied, including package initializers. Add implicit inputs with `--bind data=relative/file.json` (also `code`, `config`, `evaluator`). Dynamic imports, external packages, environment access and remote inputs are not completely discovered. Keep these limitations explicit; this trusted-code runner is not an OS sandbox. Non-Python/inline commands require an explicit code binding. Commands cannot invoke a shell.
 
-Use `--output outputs/result.json` to require an output in the job copy; its parent directories are created after runner validation. Read original stdout/stderr and declared outputs through the receipt's artifact paths. Omit `--name` to derive a stable name from the frozen request: an identical call reuses its receipt and changed inputs produce a new identity. Explicit names remain immutable. Failure/timeout logs and spent costs survive. Exit code 0 means operational completion; mathematical or policy success remains unknown.
+Use `--output outputs/result.json` to require an output file in the job copy; its parent directories are created after runner validation. Declare each required file, not its directory. Read original stdout/stderr and declared outputs through the receipt's artifact paths. Omit `--name` to derive a stable name from the frozen request: an identical call reuses its receipt and changed inputs produce a new identity. Explicit names remain immutable. Failure/timeout logs and spent costs survive. Exit code 0 records process completion; operational success also requires valid outputs and unchanged bindings. Mathematical or policy success remains unknown.
 
 For an existing local Python file, the shortest form is `python -B scripts/rds_cli.py exec -t 10 probe.py`. The entry supplies the current Python executable and infers the child boundary. Once the child starts, all its arguments remain untouched, including `--help` and `--root`. Use explicit `--` for commands whose boundary is unclear.
 
 ## Select before executing
 
 Maintain the semantic `context.json` and structured graph for the actual next decision. The tool supplies repetitive bookkeeping around these inputs; it cannot derive the right mathematical question from arbitrary prose.
+
+Decision scopes are dictionaries with at most 16 fields and 2048 serialized UTF-8 bytes. Keys are nonempty strings of at most 512 characters; values are JSON atoms: strings, finite numbers, booleans or null. Keep arrays, tables and nested objects in explicit bound inputs or source records, and use scalar identifiers in the scope. Validation identifies the invalid field without rewriting its contents.
 
 ```powershell
 python -B scripts/rds_cli.py --root <existing-ledger> advise --context context.json --graph graph.json --record next-choice --brief
@@ -78,6 +80,16 @@ For empirical comparisons, use the existing action `discrimination` fields: expl
 Optionally add the project's **existing** task acceptance predicates to `decision.goal_conditions`; for example `[{"fact":"quality_gain","op":"gte","value":0.05}]`, where both the metric and threshold come from the actual project protocol. Advisor evaluates the sourced current facts separately from procedural readiness. Missing evidence stays `UNKNOWN`; `FALSE` identifies an open goal bridge, and even `TRUE` remains `INPUT_REPORTED`. This review supplies neither execution permission nor a scientific certificate and does not block an authorized attempt to improve a currently failing goal. `advise --record` retains the review with the choice; `--brief` exposes its basis and a few warning kinds while the full record stays in CAS.
 
 Large provenance maps belong in their original source manifest. Use its digest and locator in a scoped context rather than repeating the full file map in every fact. Oversized loop input retains the same byte cap and now reports the actual size plus a repair hint; no facts are silently dropped or compressed into stronger evidence.
+
+For repeated declared file-hash maps, use the native compactor before submitting a new context:
+
+```powershell
+python -B scripts/rds_context_compact.py --input context.json --output-dir NEW_DIRECTORY
+```
+
+The output directory must be new. Only filename-to-SHA256 maps at `facts.*.binding.code_sha256` or `facts.*.bindings.code_sha256` are replaced by their canonical manifest digest; other fact data, sources and scopes remain intact. Identical maps share one complete `manifests/<digest>.json`. The directory retains the full original bytes in `source.json`, the new `context.json`, and `summary.json` with changed JSON pointers, manifest locators and measured facts bytes. For example, repeated 100-file maps can share one manifest rather than repeating all entries. Byte reduction is not a measured token saving.
+
+Input remains capped at 2 MiB, and compacted facts must still fit the engine's unchanged 262144-byte cap; an unrelated oversized context needs a scoped redesign. This records declared identity and changes representation, without verifying actual files, strengthening evidence or granting permission. The new representation changes the request fingerprint: review and record it as a new request, preserving earlier frozen contexts and records. Read the current task's needed manifests on demand.
 
 Before expensive execution, check the actual data/shape inventory and instrument the methods that really execute; inferred call counts remain derived counts. Require a nonvacuous wiring probe under its declared premises, rather than a universal nonzero-gradient assertion that can fail legitimately. On failure, preserve valid partial observations with their narrower scope and identify the first failed stage; launch success, terminal execution, evidence validity, manipulation and task acceptance are separate results.
 
@@ -148,6 +160,10 @@ This records caller-declared falsification with `RECORDED_INPUT_NOT_SCIENTIFIC_V
 ## Output and tolerant spelling
 
 New `exec`/`reject` commands return a compact digest by default; `--json` returns their full report. `advise`, `project status`, `status`, `formal verify` and `formal check` support `--brief`/`--digest`. Full JSON is retained in `.rds/cas/<sha256>.json`; original execution logs remain intact in the runner's artifact directory. Counts are local ledger counts, not proof of scientific use or autonomy.
+
+`project status --brief` reports current `run_states` counts and the last finished native `latest_receipt`, selected by `ended_at` rather than run ID ordering. The receipt's `run_status` and `exit_code` describe that finished attempt; live `RUNNING`/`RESERVED` work remains visible in the counts and does not become complete. With no finished native receipt, `latest_receipt` is absent. A nonempty recorded `stderr.bin` adds `latest_receipt.stderr_path`, an absolute locator built from its receipt's `cwd` and artifact path. Read that binary log as text when appropriate; there are no `stdout_tail`/`stderr_tail` fields, and the digest does not read or print raw logs. `RECORDED` means the full status JSON was preserved, not that execution succeeded or scientific acceptance was established.
+
+Nonempty receipt `errors` adds `latest_receipt.error_count` for the complete count and `latest_receipt.errors` containing only the first error, capped at 200 characters including a trailing `...` when truncated. These are recorded runner errors, not raw log text. An exit code of 0 can still yield `FAILED` when a declared output is missing or is a directory instead of a file. The full CAS record retains every original error. A receipt's `sha256` identifies that receipt, not the filename of the full status CAS JSON; use the digest's `record` path to locate the preserved full output.
 
 At meaningful advances or blockers, the agent gives one short factual line, for example `RDS｜选路✓→执行✓｜证明?｜<sha8>` followed by the concrete advance or next step when useful. Show only evidenced stages and an actual receipt/certificate/saved-record hash prefix; use `?` for unknown and `—` for inapplicable stages. The proof marker concerns the reported claim and its premises, not a process exit or a narrower lemma. Do not report every internal invocation or add display calls. Complete receipts remain available for audit; actual backend, assurance and application scope remain distinct.
 

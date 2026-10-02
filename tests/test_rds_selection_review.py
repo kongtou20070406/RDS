@@ -1,7 +1,9 @@
 """Research choice regressions from proxy success and a single supplied route."""
 from copy import deepcopy
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -9,7 +11,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from rds_advisor import RDSAdvisor, _json
-from rds_advisor_search import search_directions
+from rds_advisor_search import review_selection, search_directions
 from rds_quick import brief, choice
 
 
@@ -33,6 +35,11 @@ class SelectionReviewTests(unittest.TestCase):
         self.assertEqual(review['basis'], 'REVIEW_ONLY')
         self.assertEqual(review['candidates'][0]['basis'], 'PROCEDURE_ONLY')
         self.assertEqual({f['kind'] for f in review['flags']}, {'SINGLE_CONFIGURED_DIRECTION', 'RIVAL_PREDICTIONS_MISSING'})
+        self.assertEqual(review['next_move']['kind'], 'REVIEW_ALTERNATIVE')
+        self.assertEqual(review['next_move']['authorization'], 'UNCHANGED')
+        self.assertIn('Respect an explicitly chosen route', review['next_move']['prompt'])
+        self.assertEqual(review['next_move']['preserve_refs'],
+                         ['search.decision', 'context.budget', 'context.resources', 'context.method_constraints'])
         self.assertEqual((graph, context), original)
 
     def test_valid_proxy_does_not_close_a_failed_task_goal_or_change_permission(self):
@@ -49,6 +56,13 @@ class SelectionReviewTests(unittest.TestCase):
         self.assertEqual(record['scientific_support'], 'UNKNOWN')
         self.assertEqual(record['goal_conditions'], context['decision']['goal_conditions'])
         self.assertIn('GOAL_BRIDGE_OPEN', [f['kind'] for f in record['selection_review']['flags']])
+        move = record['selection_review']['next_move']
+        self.assertEqual(move['kind'], 'REFORMULATE')
+        self.assertEqual(move['basis'], 'INPUT_REVIEW_HEURISTIC_NOT_SCIENTIFIC_PROOF')
+        self.assertIn('not a capacity lower bound', move['reason'])
+        self.assertIn('counterfactual difference', move['prompt'])
+        self.assertEqual(record['scope'], context['decision']['scope'])
+        self.assertEqual(record['goal_revision'], context['decision']['goal_revision'])
 
     def test_missing_goal_source_remains_unknown(self):
         graph, context = fixture()
@@ -56,6 +70,7 @@ class SelectionReviewTests(unittest.TestCase):
         context['facts']['quality'] = {'value': True}
         review = search_directions(graph, context)['selection_review']
         self.assertEqual(review['goal']['status'], 'UNKNOWN')
+        self.assertEqual(review['next_move']['kind'], 'RESOLVE_PREMISE')
 
     def test_reported_goal_success_is_not_independent_evidence(self):
         graph, context = fixture()
@@ -66,6 +81,7 @@ class SelectionReviewTests(unittest.TestCase):
         self.assertEqual(review['goal']['assurance'], 'INPUT_REPORTED')
         self.assertNotIn('GOAL_BRIDGE_OPEN', [f['kind'] for f in review['flags']])
         self.assertEqual(review['basis'], 'REVIEW_ONLY')
+        self.assertNotIn('next_move', review)
 
     def paired(self, predictions):
         graph, context = fixture()
@@ -83,6 +99,79 @@ class SelectionReviewTests(unittest.TestCase):
         self.assertEqual(result['selection_review']['basis'], 'CONDITIONAL_COMPARISON')
         self.assertEqual(result['ranking']['pareto_front'], ['route:probe'])
         self.assertEqual(result['selection_review']['assurance'], 'INPUT_REPORTED_NOT_SCIENTIFIC_VERIFICATION')
+        self.assertNotIn('next_move', result['selection_review'])
+
+    def test_unknown_prerequisite_ranking_does_not_compare_ready_directions(self):
+        for include_ready in (False, True):
+            with self.subTest(include_ready=include_ready):
+                graph, context = self.paired({'bias': ['positive'], 'state-support': ['negative']})
+                for node in graph['nodes']:
+                    node['executable']['preconditions'] = [{'fact': 'gate', 'value': True}]
+                    query_cost = deepcopy(context['costs']['probe'])
+                    query_cost['value'] = 0
+                    context['costs'][f"query:{node['id']}:gate"] = query_cost
+                if include_ready:
+                    independent = deepcopy(graph['nodes'][0])
+                    independent['id'] = 'independent'
+                    independent['executable']['preconditions'] = []
+                    independent['executable']['action']['id'] = 'independent'
+                    graph['nodes'].append(independent)
+                    context['costs']['independent'] = deepcopy(context['costs']['probe'])
+                result = search_directions(graph, context)
+                self.assertEqual([c['status'] for c in result['candidates'][:2]], ['NEEDS_EVIDENCE'] * 2)
+                self.assertEqual(result['ranking']['dominance'][0]['better'], 'route:probe')
+                review = result['selection_review']
+                self.assertEqual(review['ready_graph_directions'], int(include_ready))
+                self.assertEqual(review['basis'], 'REVIEW_ONLY' if include_ready else 'NO_READY_DIRECTION')
+                self.assertEqual(review['authorization'], 'UNCHANGED')
+                if include_ready:
+                    self.assertNotIn('next_move', review)
+                else:
+                    self.assertEqual(review['next_move']['kind'], 'RESOLVE_PREMISE')
+
+    def test_ready_comparison_does_not_wait_for_unrelated_pending_or_blocked_routes(self):
+        graph, context = self.paired({'bias': ['positive'], 'state-support': ['negative']})
+        for identity, fact in (('pending', 'missing'), ('blocked', 'unavailable')):
+            extra = deepcopy(graph['nodes'][0])
+            extra['id'] = identity
+            extra['executable']['action']['id'] = identity
+            extra['executable']['preconditions'] = [{'fact': fact, 'value': True}]
+            graph['nodes'].append(extra)
+        context['facts']['unavailable'] = {'value': False, 'source': 'unrelated-prerequisite.json'}
+        search = search_directions(graph, context)
+        self.assertEqual([c['status'] for c in search['candidates']], ['READY', 'READY', 'NEEDS_EVIDENCE'])
+        self.assertEqual(search['blocked_candidates'][0]['status'], 'BLOCKED_PREREQUISITE')
+        self.assertEqual(search['selection_review']['basis'], 'CONDITIONAL_COMPARISON')
+        self.assertNotIn('next_move', search['selection_review'])
+
+    def test_ready_comparison_keeps_unsupported_alternative_warning_without_steering(self):
+        graph, context = self.paired({'bias': ['positive'], 'state-support': ['negative']})
+        extra = deepcopy(graph['nodes'][0])
+        extra['id'] = extra['executable']['action']['id'] = 'unsupported'
+        extra['executable']['action']['discrimination'].pop('source')
+        graph['nodes'].append(extra)
+        review = search_directions(graph, context)['selection_review']
+        self.assertEqual(review['ready_graph_directions'], 3)
+        self.assertEqual(review['basis'], 'CONDITIONAL_COMPARISON')
+        self.assertIn(('PREDICTION_PREMISES_UNRESOLVED', 'unsupported:unsupported'),
+                      [(flag['kind'], flag.get('candidate')) for flag in review['flags']])
+        self.assertNotIn('next_move', review)
+
+    def test_available_discriminator_does_not_request_another_for_ready_alternative(self):
+        for defect, expected in (('overlap', 'RIVAL_PREDICTIONS_OVERLAP'),
+                                 ('missing', 'RIVAL_PREDICTIONS_MISSING')):
+            with self.subTest(defect=defect):
+                graph, context = self.paired({'bias': ['positive'], 'state-support': ['negative']})
+                alternative = graph['nodes'][1]['executable']['action']
+                if defect == 'overlap':
+                    alternative['discrimination']['predictions']['state-support'] = ['positive']
+                else:
+                    alternative.pop('discrimination')
+                review = search_directions(graph, context)['selection_review']
+                self.assertEqual(review['ready_graph_directions'], 2)
+                self.assertEqual(review['basis'], 'REVIEW_ONLY')
+                self.assertIn(expected, [flag['kind'] for flag in review['flags']])
+                self.assertNotIn('next_move', review)
 
     def test_shared_pass_fail_predictions_do_not_distinguish_causes(self):
         graph, context = self.paired({'bias': ['positive', 'negative'], 'state-support': ['positive', 'negative']})
@@ -90,6 +179,19 @@ class SelectionReviewTests(unittest.TestCase):
         self.assertEqual(result['ranking']['dominance'], [])
         self.assertEqual(result['selection_review']['basis'], 'REVIEW_ONLY')
         self.assertTrue(all(r['basis'] == 'NONDISCRIMINATING' for r in result['selection_review']['candidates']))
+        self.assertEqual(result['selection_review']['next_move']['kind'], 'DESIGN_DISCRIMINATOR')
+        self.assertIn('Retain the existing rival hypotheses', result['selection_review']['next_move']['prompt'])
+        self.assertNotIn('changing an assumption', result['selection_review']['next_move']['prompt'])
+
+    def test_partial_rival_overlap_keeps_existing_distinction_and_requests_missing_one(self):
+        graph, context = self.paired({'bias': ['positive'], 'state-support': ['negative'],
+                                     'mixed': ['positive', 'negative']})
+        for node in graph['nodes']:
+            node['executable']['action']['competing_explanations'].append('mixed')
+        review = search_directions(graph, context)['selection_review']
+        self.assertEqual(review['next_move']['kind'], 'DESIGN_DISCRIMINATOR')
+        self.assertTrue(all(c['basis'] == 'CONDITIONAL_RIVAL_TEST' and c['distinguishing_pairs'] == 1
+                            and c['unresolved_pairs'] == 2 for c in review['candidates']))
 
     def test_local_predictions_do_not_transfer_when_application_premise_fails(self):
         graph, context = self.paired({'bias': ['positive'], 'state-support': ['negative']})
@@ -99,6 +201,7 @@ class SelectionReviewTests(unittest.TestCase):
         result = search_directions(graph, context)
         self.assertEqual(result['ranking']['dominance'], [])
         self.assertTrue(all(r['basis'] == 'PREDICTION_PREMISES_UNRESOLVED' for r in result['selection_review']['candidates']))
+        self.assertEqual(result['selection_review']['next_move']['kind'], 'RESOLVE_PREMISE')
 
     def test_single_theory_obligation_needs_no_artificial_experiment(self):
         graph, context = fixture()
@@ -109,12 +212,146 @@ class SelectionReviewTests(unittest.TestCase):
         review = search_directions(graph, context)['selection_review']
         self.assertEqual(review['basis'], 'SCOPED_OBLIGATION')
         self.assertEqual(review['flags'], [])
+        self.assertNotIn('next_move', review)
+
+    def test_ready_theory_obligation_does_not_hide_a_sourced_failed_goal(self):
+        graph, context = fixture()
+        action = graph['nodes'][0]['executable']['action']
+        action.update(kind='OBLIGATION_CHECK', target='L1', claim='x*x >= 0 for rational x',
+                      outcomes=[{'observation': label, 'next_decision': label} for label in ('verified', 'counterexample', 'unresolved')])
+        action.pop('competing_explanations')
+        context['decision']['goal_conditions'] = [{'fact': 'goal', 'value': True}]
+        context['facts']['goal'] = {'value': False, 'source': 'reported-goal.json'}
+        original = deepcopy((graph, context))
+        review = search_directions(graph, context)['selection_review']
+        self.assertEqual(review['basis'], 'SCOPED_OBLIGATION')
+        self.assertEqual(review['goal']['status'], 'FALSE')
+        self.assertEqual([flag['kind'] for flag in review['flags']], ['GOAL_BRIDGE_OPEN'])
+        self.assertEqual(review['next_move']['kind'], 'REFORMULATE')
+        self.assertEqual(review['next_move']['authorization'], 'UNCHANGED')
+        self.assertEqual((graph, context), original)
 
     def test_truncated_search_cannot_claim_global_best(self):
         graph, context = self.paired({'bias': ['positive'], 'state-support': ['negative']})
         review = search_directions(graph, context, max_candidates=1)['selection_review']
         self.assertIn('SEARCH_TRUNCATED', [f['kind'] for f in review['flags']])
         self.assertNotEqual(review['basis'], 'CONDITIONAL_COMPARISON')
+        self.assertEqual(review['next_move']['kind'], 'RESOLVE_PREMISE')
+
+    def test_actual_recorded_repeat_and_oscillation_request_reformulation_without_authority(self):
+        from test_rds_advisor import LedgerLoopTests
+        helper = LedgerLoopTests()
+        helper.setUp()
+        self.addCleanup(helper.doCleanups)
+        candidate = helper.search()['search']['candidates'][0]
+        saved = helper.record('rejected-once', candidate)
+        renamed = deepcopy(helper.graph)
+        renamed['nodes'][0]['executable']['action'].update(id='renamed', description='A supposedly new mechanism')
+        before = helper.store.snapshot()
+        repeated = helper.search(graph=renamed)['search']
+        self.assertEqual(repeated['candidates'], [])
+        self.assertEqual(repeated['blocked_candidates'][0]['loop_review']['checkpoint_sha256'], saved['sha256'])
+        self.assertEqual(repeated['selection_review']['next_move']['kind'], 'REFORMULATE')
+        self.assertIn('not semantic equivalence', repeated['selection_review']['next_move']['prompt'])
+        self.assertEqual(repeated['selection_review']['next_move']['authorization'], 'UNCHANGED')
+        self.assertEqual(helper.store.snapshot(), before)
+
+        for value, expected in ((None, 'RESOLVE_PREMISE'), (True, 'REFORMULATE')):
+            context = deepcopy(helper.context)
+            context['decision']['goal_conditions'] = [{'fact': 'goal', 'value': True}]
+            context['facts']['goal'] = {'value': value, 'source': 'reported-goal.json'}
+            result = helper.search(context=context)['search']
+            self.assertEqual(result['loop_review']['flags'][0]['kind'], 'REPEAT_REJECTED_ROUTE')
+            self.assertEqual(result['selection_review']['next_move']['kind'], expected)
+
+        changed = deepcopy(helper.graph)
+        changed['nodes'][0]['executable']['action']['intervention']['value'] = False
+        self.assertEqual(len(helper.search(graph=changed)['search']['candidates']), 1)
+        self.assertNotEqual(helper.search(graph=changed)['search']['selection_review']['next_move']['kind'], 'REFORMULATE')
+
+        helper.record('accepted-later', candidate, 'accepted')
+        other = deepcopy(candidate)
+        other['action']['intervention']['value'] = False
+        helper.record('other', other, 'accepted')
+        helper.record('returned', candidate, 'deferred')
+        result = helper.search()['search']
+        self.assertEqual(result['loop_review']['flags'][0]['kind'], 'DECISION_OSCILLATION')
+        self.assertEqual(result['loop_review']['flags'][0]['candidate_ids'], [candidate['id']])
+        self.assertEqual(result['selection_review']['next_move']['kind'], 'REFORMULATE')
+        self.assertEqual(len(result['candidates']), 1)
+
+    def test_filtered_rejected_route_does_not_reformulate_a_distinct_ready_route(self):
+        from test_rds_advisor import LedgerLoopTests
+        helper = LedgerLoopTests()
+        helper.setUp()
+        self.addCleanup(helper.doCleanups)
+        helper.record('rejected-once', helper.search()['search']['candidates'][0])
+        graph = deepcopy(helper.graph)
+        fresh = deepcopy(graph['nodes'][0])
+        fresh['id'] = fresh['executable']['action']['id'] = 'new-route'
+        fresh['executable']['action']['intervention']['value'] = False
+        graph['nodes'].append(fresh)
+        before = helper.store.snapshot()
+        result = helper.search(graph=graph)['search']
+        self.assertEqual([c['id'] for c in result['candidates']], ['new-route:new-route'])
+        self.assertEqual(result['candidates'][0]['status'], 'READY')
+        self.assertEqual(result['blocked_candidates'][0]['status'], 'BLOCKED_REJECTED_ROUTE')
+        self.assertEqual(result['loop_review']['flags'][0]['kind'], 'REPEAT_REJECTED_ROUTE')
+        self.assertEqual(result['selection_review']['next_move']['kind'], 'REVIEW_ALTERNATIVE')
+        self.assertEqual(result['selection_review']['authorization'], 'UNCHANGED')
+        self.assertEqual(helper.store.snapshot(), before)
+
+        context = deepcopy(helper.context)
+        context['decision']['goal_conditions'] = [{'fact': 'goal', 'value': True}]
+        context['facts']['goal'] = {'value': False, 'source': 'reported-goal.json'}
+        review = helper.search(context=context, graph=graph)['search']['selection_review']
+        self.assertEqual(review['next_move']['kind'], 'REFORMULATE')
+        self.assertIn('goal predicate failed', review['next_move']['reason'])
+
+    def test_recorded_oscillation_does_not_reformulate_a_distinct_ready_route(self):
+        from test_rds_advisor import LedgerLoopTests
+        from rds_advisor import _loop_route
+        helper = LedgerLoopTests()
+        helper.setUp()
+        self.addCleanup(helper.doCleanups)
+        first = helper.search()['search']['candidates'][0]
+        other = deepcopy(first)
+        other['action']['intervention']['value'] = False
+        helper.record('first', first, 'accepted')
+        helper.record('other', other, 'accepted')
+        helper.record('returned', first, 'deferred')
+        graph = deepcopy(helper.graph)
+        graph['nodes'][0]['executable']['action']['operation'] = 'independent-new-check'
+        before = helper.store.snapshot()
+        result = helper.search(graph=graph)['search']
+        self.assertEqual(len(result['candidates']), 1)
+        self.assertEqual(result['candidates'][0]['status'], 'READY')
+        flag = result['loop_review']['flags'][0]
+        self.assertEqual(flag['kind'], 'DECISION_OSCILLATION')
+        self.assertEqual(flag['candidate_ids'], [])
+        self.assertNotIn(_loop_route(result['candidates'][0]), flag['route_sha256'])
+        self.assertEqual(result['selection_review']['next_move']['kind'], 'REVIEW_ALTERNATIVE')
+        self.assertEqual(result['selection_review']['authorization'], 'UNCHANGED')
+        self.assertEqual(helper.store.snapshot(), before)
+
+    def test_declared_domain_signal_and_unknown_goal_remain_scoped_review(self):
+        graph, context = fixture()
+        result = search_directions(graph, context)
+        result['loop_review'] = {'authorization': 'UNCHANGED', 'status': 'REVIEW_REQUIRED', 'flags': [
+            {'kind': 'REPEAT_DECLARED_REJECTED_DOMAIN', 'candidate_id': 'route:probe', 'route_sha256': '1' * 64,
+             'checkpoint_id': 'rejected-domain', 'checkpoint_sha256': '2' * 64, 'witness_sha256': '3' * 64}]}
+        before = deepcopy(result)
+        self.assertEqual(review_selection(result, context)['next_move']['kind'], 'REFORMULATE')
+        self.assertEqual(result, before)
+        context['decision']['goal_conditions'] = [{'fact': 'quality', 'value': True}, {'fact': 'scope', 'value': True}]
+        context['facts']['quality'] = {'value': False, 'source': 'reported-terminal.json'}
+        review = review_selection(result, context)
+        self.assertEqual(review['goal']['status'], 'FALSE')
+        self.assertEqual(review['next_move']['kind'], 'RESOLVE_PREMISE')
+        result['loop_review']['flags'] = [{'kind': 'LOOP_HISTORY_REVIEW_ERROR', 'reason': 'Checkpoint integrity failure'}]
+        review = review_selection(result, context)
+        self.assertEqual(review['next_move']['kind'], 'RESOLVE_PREMISE')
+        self.assertIn('integrity', review['next_move']['reason'])
 
     def test_goal_predicates_are_nonempty_bounded_and_named(self):
         graph, context = fixture()
@@ -133,7 +370,38 @@ class SelectionReviewTests(unittest.TestCase):
             full = json.loads(Path(summary['record']).read_text(encoding='utf-8'))
         self.assertEqual(summary['selection_basis'], 'REVIEW_ONLY')
         self.assertIn('RIVAL_PREDICTIONS_MISSING', summary['flags'])
+        self.assertEqual(summary['next_move'], 'REVIEW_ALTERNATIVE')
+        self.assertNotIn('prompt', summary)
+        self.assertNotIn('reason', summary)
+        self.assertLess(len(json.dumps(summary)), 1024)
+        self.assertIn('smallest repair', full['recommendations'][0]['search']['selection_review']['next_move']['prompt'])
         self.assertEqual(full, advice)
+
+    def test_cli_brief_exposes_only_move_kind_and_preserves_full_prompt_in_cas(self):
+        graph, context = fixture()
+        context['budget'] = {'value': 5, 'resource': 'cpu', 'unit': 'seconds',
+                             'comparison_group': 'same-attempt', 'source': 'input-budget.json'}
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            for name, value in (('context.json', context), ('graph.json', graph)):
+                (root / name).write_text(json.dumps(value), encoding='utf-8')
+            completed = subprocess.run([sys.executable, '-B', str(ROOT / 'scripts/rds_cli.py'), '--root', str(root),
+                'advise', '--context', str(root / 'context.json'), '--graph', str(root / 'graph.json'), '--brief'],
+                capture_output=True, encoding='utf-8', timeout=15,
+                env={**os.environ, 'RDS_USAGE_DB': str(root / 'usage.sqlite3')})
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            summary = json.loads(completed.stdout)
+            full = json.loads(Path(summary['record']).read_text(encoding='utf-8'))
+            search = next(r['search'] for r in full['recommendations'] if r['type'] == 'EXECUTABLE_DIRECTION_SEARCH')
+            self.assertEqual(summary['next_move'], 'REVIEW_ALTERNATIVE')
+            self.assertLess(len(completed.stdout.encode('utf-8')), 1024)
+            self.assertNotIn('counterfactual', completed.stdout)
+            move = search['selection_review']['next_move']
+            self.assertIn('counterfactual', move['prompt'])
+            self.assertEqual(move['authorization'], 'UNCHANGED')
+            self.assertEqual(search['decision'], context['decision'])
+            self.assertEqual(json.loads((root / 'context.json').read_text()), context)
+            self.assertFalse((root / '.rds/project.sqlite3').exists())
 
     def test_oversized_context_has_exact_size_and_actionable_hint_without_mutation(self):
         facts = {'observation': {'value': 1, 'code_sha256': {'source': 'a' * 300}}}

@@ -1232,7 +1232,7 @@ def parser():
     quick.add_argument("--name", "--id", help="Optional stable identity; defaults to frozen-request hash")
     quick.add_argument("--timeout", "-t", "--time", "--timeout-seconds", type=float, default=60, help="Wall cap in seconds (default 60, max 3600)")
     quick.add_argument("--bind", action="append", default=[], help="Additional input: code|config|data|evaluator=relative/path")
-    quick.add_argument("--output", "-o", "--out", action="append", default=[], help="Required output path in the frozen job workspace")
+    quick.add_argument("--output", "-o", "--out", action="append", default=[], help="Required output file in the frozen job workspace; directories are not accepted")
     quick.add_argument("--guard", help="Frozen metric/milestone policy; FAIL/UNKNOWN blocks promotion, retains the run")
     quick.add_argument('--objective', help='Bind original rds-objective-v1 JSON; reuse a bound native objective by default')
     quick.add_argument("--background", action="store_true", help="Use the existing Windows Task Scheduler runner")

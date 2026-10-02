@@ -601,7 +601,9 @@ class ProjectStore:
             for relative in run["manifest"]["outpaths"]:
                 try:
                     path = self._path(relative, True, contract)
-                    require(path.is_file(), f"Missing output: {relative}")
+                    require(path.exists(), f"Missing output: {relative}")
+                    require(path.is_file(), f"Output is a directory; expected a file: {relative}"
+                            if path.is_dir() else f"Output is not a file: {relative}")
                     artifacts.append({"path": relative, "sha256": file_sha(path), "size": path.stat().st_size, "kind": "project_output"})
                 except (OSError, ValueError) as exc:
                     errors.append(str(exc))

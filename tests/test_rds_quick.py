@@ -251,6 +251,85 @@ class QuickTests(unittest.TestCase):
         self.assertEqual(report['receipt']['run_status'], 'FAILED')
         self.assertEqual(report['receipt']['assessment']['mechanism'], 'UNKNOWN')
         self.assertFalse((Path(report['job_root']) / '.rds/project.sqlite3').is_symlink())
+        status = self.call('project', 'status', '--brief', root=report['job_root'])
+        summary = json.loads(status.stdout)
+        self.assertIn('run_states', summary, status.stdout)
+        self.assertEqual(summary['status'], 'RECORDED')
+        self.assertEqual(summary['run_states'], {'FAILED': 1})
+        self.assertEqual((summary['runs'], summary['receipts']), (1, 1))
+        receipt = summary['latest_receipt']
+        self.assertEqual((receipt['run_id'], receipt['run_status'], receipt['exit_code']),
+                         (report['receipt']['run_id'], 'FAILED', 1))
+        stderr = Path(receipt['stderr_path'])
+        self.assertTrue(stderr.is_absolute())
+        self.assertIn('preserved failure', stderr.read_text(encoding='utf-8'))
+        raw = Path(summary['record']).read_bytes()
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), summary['sha256'])
+        full = json.loads(raw)
+        self.assertEqual(full['receipts'][0]['assessment'], {'task_gain': 'UNKNOWN', 'mechanism': 'UNKNOWN'})
+        self.assertNotIn('preserved failure', status.stdout)
+
+    def test_exit_zero_with_missing_output_exposes_receipt_errors_in_status(self):
+        self.script('print("PASS")\n')
+        result = self.job('missing-output', False, '--output', 'outputs/required.json')
+        self.assertEqual(result.returncode, 1)
+        report = json.loads(Path(json.loads(result.stdout)['record']).read_text(encoding='utf-8'))
+        receipt = report['receipt']
+        self.assertEqual((receipt['exit_code'], receipt['run_status']), (0, 'FAILED'))
+        self.assertTrue(any('Missing output:' in error for error in receipt['errors']))
+        self.assertEqual(receipt['assessment'], {'task_gain': 'UNKNOWN', 'mechanism': 'UNKNOWN'})
+        self.assertTrue(any(artifact['kind'] == 'stderr.bin' and artifact['size'] == 0
+                            for artifact in receipt['artifacts']))
+        stdout = next(artifact for artifact in receipt['artifacts'] if artifact['kind'] == 'stdout.bin')
+        self.assertEqual((Path(receipt['cwd']) / stdout['path']).read_text(encoding='utf-8').strip(), 'PASS')
+        status = self.call('project', 'status', '--brief', root=report['job_root'])
+        summary = json.loads(status.stdout)
+        latest = summary['latest_receipt']
+        self.assertIn('errors', latest, 'Actual project status --brief: ' + status.stdout)
+        self.assertEqual(latest['error_count'], len(receipt['errors']))
+        self.assertEqual(latest['errors'], receipt['errors'][:1])
+        self.assertEqual((latest['run_status'], latest['exit_code']), ('FAILED', 0))
+        self.assertNotIn('stderr_path', latest)
+        self.assertEqual(summary['status'], 'RECORDED')
+        self.assertEqual(summary['run_states'], {'FAILED': 1})
+
+    def test_project_brief_bounds_errors_and_preserves_full_cas(self):
+        from rds_quick import brief
+        errors = ['Missing output: ' + 'a' * 300, 'second error: ' + 'b' * 300]
+        value = {'runs': [{'status': 'FAILED'}], 'receipts': [
+            {'run_id': 'missing-output', 'run_status': 'FAILED', 'exit_code': 0,
+             'ended_at': 10.0, 'cwd': str(self.root), 'errors': errors}]}
+        summary = brief(self.root, value, 'test')
+        latest = summary['latest_receipt']
+        self.assertEqual(latest['error_count'], 2)
+        self.assertEqual(latest['errors'], [errors[0][:197] + '...'])
+        self.assertLessEqual(len(latest['errors'][0]), 200)
+        self.assertEqual(json.loads(Path(summary['record']).read_text(encoding='utf-8')), value)
+        self.assertEqual(value['receipts'][0]['errors'], errors)
+
+    def test_project_brief_distinguishes_live_states_and_latest_finished_receipt(self):
+        from rds_quick import brief
+        runs = [{'status': 'RUNNING', 'run_status': 'RUNNING'},
+                {'status': 'RESERVED', 'run_status': 'RESERVED'},
+                {'status': 'COMPLETED', 'run_status': 'SUCCEEDED'}]
+        value = {'runs': runs, 'receipts': []}
+        summary = brief(self.root, value, 'test')
+        self.assertEqual(summary['status'], 'RECORDED')
+        self.assertEqual(summary['run_states'], {'RUNNING': 1, 'RESERVED': 1, 'COMPLETED': 1})
+        self.assertNotIn('latest_receipt', summary)
+        # Snapshot receipt ordering is by run ID, not finishing time.
+        value['receipts'] = [
+            {'run_id': 'a-new', 'run_status': 'FAILED', 'exit_code': 7, 'ended_at': 20.0,
+             'cwd': str(self.root), 'errors': [],
+             'artifacts': [{'kind': 'stderr.bin', 'path': 'error.bin', 'size': 0}]},
+            {'run_id': 'z-old', 'run_status': 'SUCCEEDED', 'exit_code': 0, 'ended_at': 10.0,
+             'cwd': str(self.root), 'artifacts': []},
+            {'run_id': 'missing-time', 'cwd': str(self.root)},
+            {'run_id': 'missing-cwd', 'ended_at': 30.0}]
+        summary = brief(self.root, value, 'test')
+        self.assertEqual(summary['latest_receipt'], {'run_id': 'a-new', 'run_status': 'FAILED', 'exit_code': 7})
+        self.assertEqual(summary['run_states'], {'RUNNING': 1, 'RESERVED': 1, 'COMPLETED': 1})
+        self.assertNotIn('run_status', summary)
 
     def test_aliases_and_unique_prefixes_preserve_command_tail_and_values(self):
         from rds_cli import parser
@@ -323,6 +402,32 @@ class QuickTests(unittest.TestCase):
         bad = self.call('reject', '--route', 'unknown', '--reason', 'test', '--evidence', str(witness), root=self.ledger, ok=False)
         self.assertNotEqual(bad.returncode, 0)
         self.assertIn('No decision context', bad.stderr)
+
+    def test_two_field_array_scope_stops_before_launch_or_charge_and_atoms_still_execute(self):
+        self.initialize_ledger()
+        marker = self.root / 'scope-process-started'
+        self.script('from pathlib import Path\nPath(' + repr(str(marker)) + ').write_text("started")\n')
+        self.context['decision']['scope'] = {'N_range': [30, 40], 'purpose': 'synthetic scope regression'}
+        self.context_path.write_text(json.dumps(self.context), encoding='utf-8')
+        original = self.context_path.read_bytes()
+        before = ProjectStore(self.ledger).snapshot()['budget']
+        options = ['--context', str(self.context_path), '--graph', str(self.graph_path), '--ledger', str(self.ledger)]
+        bad = self.job('array-scope', False, *options)
+        self.assertNotEqual(bad.returncode, 0)
+        self.assertIn('scope/parameters field "N_range" must be a JSON atom; got array (list)', bad.stderr)
+        self.assertIn('structured original input', bad.stderr)
+        self.assertIn('explicit source binding', bad.stderr)
+        self.assertNotIn('at most 16', bad.stderr)
+        self.assertFalse(marker.exists())
+        self.assertFalse((self.root / '.rds/exec/array-scope').exists())
+        self.assertEqual(ProjectStore(self.ledger).snapshot()['budget'], before)
+        self.assertEqual(self.context_path.read_bytes(), original)
+        self.context['decision']['scope'] = {'N': 30, 'purpose': 'synthetic scope regression'}
+        self.context_path.write_text(json.dumps(self.context), encoding='utf-8')
+        good = json.loads(self.job('atomic-scope', True, *options).stdout)
+        self.assertEqual(good['run_status'], 'SUCCEEDED')
+        self.assertEqual(good['ledger_checkpoints'], 2)
+        self.assertEqual(marker.read_text(), 'started')
 
     def test_unresolved_method_scope_never_launches_or_charges_and_confirmation_is_recorded(self):
         self.initialize_ledger()

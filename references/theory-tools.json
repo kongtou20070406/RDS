@@ -1,0 +1,95 @@
+{
+  "schema": 1,
+  "available_on": "2026-10-01",
+  "source_policy": "Preloaded scope references checked 2026-10-01; no automatic update, installation, model call or backend execution. Retrieval does not establish applicability or scientific success.",
+  "cards": [
+    {
+      "id": "contraction_target_bias",
+      "title": "Contraction and target bias",
+      "tags": ["trajectory_degradation", "local_global_gap"],
+      "required_inputs": ["exact affine A and b", "declared target point", "norm threshold"],
+      "conditions": ["The exported update is exactly a finite rational affine map on the declared domain.", "The target and infinity norm are specified independently of observed convergence."],
+      "diagnostic": "Use affine_dynamics to check the induced infinity norm and target fixed-point residual separately. A contracting map may converge to a biased fixed point; failure of this norm bound does not imply divergence.",
+      "limitations": ["This bounded verifier does not certify arbitrary nonlinear or learned dynamics.", "Contraction is sufficient under its stated assumptions, not necessary for convergence or task utility."],
+      "capability": {"availability": "NATIVE_BOUNDED_ENTRYPOINT", "backend": "exact rational certificate replay", "entrypoint": "scripts/rds_dynamics_verify.py:verify; rds_cli.py formal verify kind=affine_dynamics", "prerequisites": ["supported schema and rational strings", "independent certificate replay"]},
+      "sources": ["https://github.com/kongtou20070406/RDS/blob/main/scripts/rds_dynamics_verify.py"]
+    },
+    {
+      "id": "local_jacobian",
+      "title": "Local spectrum and transient growth",
+      "tags": ["local_global_gap", "trajectory_degradation"],
+      "required_inputs": ["explicit square Jacobian", "point and map semantics"],
+      "conditions": ["A finite Jacobian of the specified discrete update is available with its evaluation point.", "For equilibrium stability reasoning, first verify the point is an equilibrium and check regularity assumptions."],
+      "diagnostic": "Compare spectral radius and largest singular value in the snapshot probe. A nonnormal matrix can amplify perturbations transiently despite spectral radius below one; seek a declared-domain bound when the local/global gap matters.",
+      "limitations": ["A local radius above one away from equilibrium does not establish a limit cycle or global divergence.", "The numeric snapshot does not certify stability, Jacobian correctness or task gain; continuous-time generators need different stability criteria."],
+      "capability": {"availability": "NATIVE_ENTRYPOINT_OPTIONAL_NUMPY", "backend": "numpy.linalg eigenvalues and SVD", "entrypoint": "scripts/rds_dynamics_probe.py:inspect_probe jacobian", "prerequisites": ["NumPy available in the execution environment", "finite bounded exported matrix and source scope"]},
+      "sources": ["https://numpy.org/doc/stable/reference/generated/numpy.linalg.eigvals.html", "https://numpy.org/doc/stable/reference/generated/numpy.linalg.svd.html"]
+    },
+    {
+      "id": "state_space_refinement",
+      "title": "State-space and horizon refinement",
+      "tags": ["step_sensitivity"],
+      "required_inputs": ["shared time horizon", "increasing step counts", "aligned output snapshots"],
+      "conditions": ["Compare a stated state-space or iterative update at the same horizon, input and initial condition.", "State the discretization rule and keep step count separate from model capacity."],
+      "diagnostic": "Use fixed-horizon refinement differences to decide whether numerical step sensitivity warrants a discretization study before an architecture change. A state-space formulation is a general route; Mamba is one selective state-space architecture, not the parent of every state-space model.",
+      "limitations": ["Finite refinement differences do not prove a continuum limit or resolution invariance.", "This card neither recommends Mamba automatically nor supplies a task-gain guarantee."],
+      "capability": {"availability": "NATIVE_BOUNDED_ENTRYPOINT", "backend": "standard-library snapshot differences", "entrypoint": "scripts/rds_dynamics_probe.py:inspect_probe refinement", "prerequisites": ["exported equal-dimensional snapshots", "explicit shared horizon and source scope"]},
+      "sources": ["https://arxiv.org/html/2312.00752v2"]
+    },
+    {
+      "id": "residual_subspace_havok",
+      "title": "Residual subspace and HAVOK",
+      "tags": ["structured_residual"],
+      "required_inputs": ["exported residual matrix", "sampling and delay scheme", "held-out trajectory"],
+      "conditions": ["Residuals use a declared alignment, scale and sample scope.", "A delay-coordinate/HAVOK study additionally needs a sampled time series and explicit embedding choices."],
+      "diagnostic": "First measure residual energy concentration with the snapshot SVD. If structure survives held-out samples, consider a separately budgeted PyDMD HAVOK study of delay coordinates and linear dynamics with forcing.",
+      "limitations": ["Residual rank or energy concentration does not identify minimal hidden-state dimension.", "HAVOK fitting is not implemented by the snapshot SVD and does not establish causality or a universal Koopman representation."],
+      "capability": {"availability": "NATIVE_PROBE_WITH_EXTERNAL_OPTIONAL_FIT", "backend": "NumPy SVD; external PyDMD HAVOK", "entrypoint": "scripts/rds_dynamics_probe.py:inspect_probe residual; external pydmd.HAVOK", "prerequisites": ["NumPy for the bounded probe", "separate PyDMD environment and authorized fit budget for HAVOK", "held-out validation"]},
+      "sources": ["https://github.com/PyDMD/PyDMD"]
+    },
+    {
+      "id": "exact_symbolic_constraints",
+      "title": "Exact proof and dimension constraints",
+      "tags": ["proof_bottleneck", "execution_mismatch"],
+      "required_inputs": ["supported exact statement", "tensor shapes or assumptions", "certificate to replay"],
+      "conditions": ["Express the obligation in an existing registered finite schema instead of treating a symbolic fit as proof.", "Separate tensor shape compatibility from physical units; physical dimensional analysis still needs an explicit domain specification."],
+      "diagnostic": "Use registered exact tensor identities/bounds, affine checks or supported rational obligations to find a concrete incompatibility or replayable certificate. Native Lean obligations require an available Lean backend for LEAN_KERNEL_CHECKED assurance.",
+      "limitations": ["Finite rational checks are not a general symbolic algebra system or Lean kernel proof.", "Shape compatibility is not physical dimensional consistency; unsupported claims remain UNKNOWN."],
+      "capability": {"availability": "NATIVE_BOUNDED_ENTRYPOINT", "backend": "registered exact certificates; optional native Lean", "entrypoint": "scripts/rds_verify.py:verify/check_certificate; rds_cli.py formal verify/check", "prerequisites": ["registered statement kind", "rational data and supported expression operations", "native Lean installation only for Lean kernel assurance"]},
+      "sources": ["https://github.com/kongtou20070406/RDS/blob/main/scripts/rds_verify.py", "https://github.com/kongtou20070406/RDS/blob/main/scripts/rds_tensor_verify.py"]
+    },
+    {
+      "id": "sparse_equation_discovery",
+      "title": "Sparse equation discovery",
+      "tags": ["equation_unknown"],
+      "required_inputs": ["sampled states and times", "candidate function library", "held-out dynamics"],
+      "conditions": ["A sparse representation in a specified function library is plausible.", "State sampling, differentiation/noise handling and train/validation separation before fitting."],
+      "diagnostic": "An authorized PySINDy fit can test which sparse candidate equations predict held-out dynamics within the chosen library; compare library and noise sensitivity rather than declaring the recovered equation a law.",
+      "limitations": ["Sparse identification depends on the library, derivative estimates, data excitation and regularization.", "A fitted equation is neither a causal identification result nor an exact proof."],
+      "capability": {"availability": "EXTERNAL_OPTIONAL", "backend": "PySINDy", "entrypoint": "external pysindy.SINDy", "prerequisites": ["separately provisioned PySINDy environment", "authorized fit budget", "data and held-out validation"]},
+      "sources": ["https://github.com/dynamicslab/pysindy"]
+    },
+    {
+      "id": "symbolic_regression",
+      "title": "Symbolic regression candidates",
+      "tags": ["equation_unknown"],
+      "required_inputs": ["features and target values", "operators and constraints", "held-out evaluation budget"],
+      "conditions": ["An interpretable expression is useful and operator/complexity constraints can be specified.", "Keep equation search and held-out evaluation distinct; encode domain or unit restrictions explicitly when needed."],
+      "diagnostic": "A separately authorized PySR search can supply expression candidates on a loss/complexity tradeoff for held-out testing or later exact verification.",
+      "limitations": ["Expression search does not prove uniqueness, causality or global validity.", "PySR uses Julia; its first import can install dependencies, and fitting can launch Julia workers. This selector never imports it or provisions an environment."],
+      "capability": {"availability": "EXTERNAL_OPTIONAL", "backend": "PySR with Julia SymbolicRegression.jl", "entrypoint": "external pysr.PySRRegressor", "prerequisites": ["separately provisioned PySR and Julia environment", "authorized bounded search", "held-out validation and explicit constraints"]},
+      "sources": ["https://github.com/astroautomata/PySR"]
+    },
+    {
+      "id": "structural_preflight",
+      "title": "Actual entrypoint and shape preflight",
+      "tags": ["execution_mismatch", "proof_bottleneck"],
+      "required_inputs": ["actual model and callable signatures", "split and input-shape inventory", "expected and observed entrypoint events"],
+      "conditions": ["Identify the actual model type and formal/sampler entrypoint rather than assuming another model's interface.", "Use representative split, channel, tile and batch shapes; declare expected call and hook counts before checking."],
+      "diagnostic": "Use inspect.signature(callable).bind(*args, **kwargs) to detect argument-interface mismatches, then a project-specific checker with bounded actual calls to compare shapes and expected/observed entrypoint events. For PyTorch, invoking the module and invoking forward directly differ in hook handling; count the events on the actual sampler path.",
+      "limitations": ["Signature binding checks arguments, not tensor shapes, values or scientific correctness.", "CPU checks do not establish CUDA behavior; exit zero does not establish output quality or task gain.", "RDS has no universal model/geometry checker and does not automatically execute the model or launch GPU jobs."],
+      "capability": {"availability": "PROJECT_CHECK_REQUIRED", "backend": "Python signature inspection and project-specific bounded calls", "entrypoint": "scripts/rds_cli.py exec -- <project-preflight>", "readiness_only": "scripts/rds_capabilities.py probes one selected environment capability, not project interfaces or input geometry", "prerequisites": ["project/domain adapter implementing explicit assertions and event counts", "representative split and shape inventory", "authorized execution budget and device scope; native RDS exec wrapper supplies receipts only"]},
+      "sources": ["https://docs.python.org/3/library/inspect.html#inspect.Signature.bind", "https://docs.pytorch.org/docs/stable/generated/torch.nn.Module.html#torch.nn.Module.forward", "https://docs.pytorch.org/docs/stable/generated/torch.nn.Module.html#torch.nn.Module.register_forward_hook"]
+    }
+  ]
+}

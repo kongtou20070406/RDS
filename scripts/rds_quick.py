@@ -3,6 +3,7 @@
 Completion supplies file identities and operational fields, never scientific facts.
 """
 import ast
+from collections import Counter
 from copy import deepcopy
 import hashlib
 import json
@@ -463,6 +464,8 @@ def brief(root, value, version, formal=False):
         if selection is not None:
             summary['selection_basis'] = selection['basis']
             flags += [f['kind'] for f in selection['flags']]
+            if 'next_move' in selection:
+                summary['next_move'] = selection['next_move']['kind']
             if 'goal' in selection:
                 summary['goal_input_status'] = selection['goal']['status']
         summary['flags'] = list(dict.fromkeys(flags))[:3]
@@ -478,6 +481,21 @@ def brief(root, value, version, formal=False):
     if isinstance(value.get('runs'), list):
         summary['runs'] = len(value['runs'])
         summary['receipts'] = len(value.get('receipts', []))
+        summary['run_states'] = dict(Counter(run.get('status', run.get('run_status', 'UNKNOWN')) for run in value['runs']))
+        latest = max((receipt for receipt in value.get('receipts', [])
+                      if isinstance(receipt, dict) and type(receipt.get('ended_at')) in (int, float)
+                      and isinstance(receipt.get('cwd'), str) and Path(receipt['cwd']).is_absolute()),
+                     key=lambda receipt: receipt['ended_at'], default=None)
+        if latest is not None:
+            summary['latest_receipt'] = {key: latest.get(key) for key in ('run_id', 'run_status', 'exit_code')}
+            if latest.get('errors'):
+                error = latest['errors'][0]
+                summary['latest_receipt']['error_count'] = len(latest['errors'])
+                summary['latest_receipt']['errors'] = [error[:197] + '...' if len(error) > 200 else error]
+            stderr = next((artifact for artifact in latest.get('artifacts', [])
+                           if artifact.get('kind') == 'stderr.bin' and artifact.get('size', 0) > 0), None)
+            if stderr is not None:
+                summary['latest_receipt']['stderr_path'] = str((Path(latest['cwd']) / stderr['path']).resolve())
     assurance = value.get('assurance') if formal else None
     formal_status = value.get('status', 'UNKNOWN') if formal and assurance in {'CERTIFICATE_CHECKED', 'LEAN_KERNEL_CHECKED'} else 'UNKNOWN'
     if formal:

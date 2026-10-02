@@ -23,7 +23,9 @@ if mode == "timeout": time.sleep(3)
 if mode == "nonzero": sys.exit(7)
 if mode.startswith("mutate-"):
     pathlib.Path(mode[7:]+".json").write_text('{"changed":true}')
-if mode != "missing":
+if mode == "directory":
+    pathlib.Path(output).mkdir()
+elif mode != "missing":
     rows = json.loads(pathlib.Path("data.json").read_text())
     pathlib.Path(output).write_text(json.dumps({"mean":sum(rows)/len(rows),"n":len(rows)}))
 '''
@@ -47,7 +49,7 @@ class ProjectTests(unittest.TestCase):
                                                   for role, (name, _) in files.items()],
                          "allowed_commands": [[sys.executable, "-B", "code.py", mode, f"outputs/{rid}.json"]
                                               for rid in ("r1", "r2", "r3")
-                                              for mode in ("ok", "missing", "nonzero", "timeout", "mutate-evaluator", "mutate-protocol")],
+                                              for mode in ("ok", "missing", "directory", "nonzero", "timeout", "mutate-evaluator", "mutate-protocol")],
                          "output_roots": ["outputs"], "budget": {"wall_seconds": 20, "cpu_seconds": 10, "gpu_seconds": 0}}
         self.store = ProjectStore(self.root)
         self.store.initialize(self.contract)
@@ -111,6 +113,19 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual(receipt["exit_code"], 0)
         self.assertEqual(receipt["run_status"], "FAILED")
         self.assertTrue(any("Missing output" in err for err in receipt["errors"]))
+
+    def test_exit_zero_directory_artifact_is_a_file_type_failure(self):
+        receipt = self.run_spec(self.spec(mode="directory"))
+        self.assertTrue((self.root / "outputs/r1.json").is_dir())
+        self.assertEqual((receipt["run_status"], receipt["exit_code"]), ("FAILED", 0))
+        self.assertEqual(receipt["assessment"], {"task_gain": "UNKNOWN", "mechanism": "UNKNOWN"})
+        self.assertFalse(any(artifact["kind"] == "project_output" for artifact in receipt["artifacts"]))
+        error = "Output is a directory; expected a file: outputs/r1.json"
+        self.assertEqual(receipt["errors"], [error])
+        from rds_quick import brief
+        summary = brief(self.root, self.store.snapshot(), "test")
+        self.assertEqual(summary["latest_receipt"]["errors"], [error])
+        self.assertEqual(summary["latest_receipt"]["error_count"], 1)
 
     def test_protocol_and_evaluator_drift_are_failures(self):
         for mode in ("mutate-evaluator", "mutate-protocol"):

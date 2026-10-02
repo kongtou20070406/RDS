@@ -766,6 +766,10 @@ class RDSAdvisor:
                 output["queries"] = [row for row in output["queries"] if row.get("id") in used]
 
         filter_search(search)
+        for flag in review["flags"]:
+            if flag["kind"] == "DECISION_OSCILLATION":
+                flag["candidate_ids"] = [c["id"] for c in search.get("candidates", [])
+                    if c.get("status") == "READY" and _loop_route(c) in flag["route_sha256"]]
         review["status"] = "REVIEW_REQUIRED" if review["flags"] else "RECORDED_HISTORY_REVIEWED"
         search["loop_review"] = review
         return review
@@ -837,7 +841,7 @@ def _json(value, cap=MAX_LOOP_BYTES):
     try:
         raw = json.dumps(value, ensure_ascii=False, sort_keys=True, allow_nan=False, separators=(",", ":"))
         size = len(raw.encode("utf-8"))
-        _require(size <= cap, f"Advisor loop JSON exceeds byte limit ({size} > {cap}); use a scoped context and shared manifest digest/source locator while retaining full originals")
+        _require(size <= cap, f"Advisor loop JSON exceeds byte limit ({size} > {cap}); use a scoped context and shared manifest digest/source locator while retaining full originals. For repeated code file-hash maps: scripts/rds_context_compact.py --input CONTEXT --output-dir NEW_DIRECTORY")
         strict_json(raw)
         return raw
     except (TypeError, RecursionError, UnicodeError, OverflowError) as exc:
@@ -845,7 +849,14 @@ def _json(value, cap=MAX_LOOP_BYTES):
 
 
 def _scope(value):
-    _require(isinstance(value, dict) and len(value) <= 16 and all(_text(key) and
-             (child is None or type(child) in (str, int, float, bool)) for key, child in value.items()),
-             "scope/parameters must have at most 16 JSON atomic fields")
+    _require(isinstance(value, dict), f"scope/parameters must be a JSON object (dict); got {type(value).__name__}")
+    _require(len(value) <= 16, f"scope/parameters has {len(value)} fields; at most 16 are allowed")
+    for key, child in value.items():
+        _require(_text(key), "scope/parameters field names must be non-empty strings of at most 512 characters")
+        if child is not None and type(child) not in (str, int, float, bool):
+            field = json.dumps(key[:80], ensure_ascii=True) + ("..." if len(key) > 80 else "")
+            kind = "array" if isinstance(child, list) else "object" if isinstance(child, dict) else None
+            actual = f"{kind} ({type(child).__name__})" if kind else type(child).__name__
+            raise ValueError(f"scope/parameters field {field} must be a JSON atom; got {actual}. "
+                "Keep the structured original input in a source file and reference it with an explicit source binding.")
     _json(value, 2048)
