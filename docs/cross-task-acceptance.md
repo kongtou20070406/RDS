@@ -8,6 +8,12 @@ then mathematics. They provide the first acceptance coverage, not a restriction
 to three domains. Other fields can use the same core with applicable optional
 adapters and declared acceptance predicates.
 
+This repository-wide boundary also applies to optional tools and examples: do
+not ship project-specific solutions, recipes or policies. Retain reusable
+parameterized methods and minimal public/synthetic failure cases. Existing
+project-specific executable material should be removed from shipped tool paths
+or replaced by such a reproducer; keep the original evidence privately.
+
 ## What the initial settings test together
 
 | Shared requirement | Deep-learning example | Software/tool example | Mathematics example |
