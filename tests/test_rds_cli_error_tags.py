@@ -31,6 +31,18 @@ class CLIErrorTagTests(unittest.TestCase):
             self.assertNotIn("[RDS-ERROR]", result.stderr)
             self.assertFalse((Path(raw) / ".rds").exists())
 
+    def test_malformed_user_specs_stay_rejections(self):
+        # Unvalidated user JSON reaches _main as KeyError/TypeError; the caller must repair it.
+        for content in ("5", "null", '{"budget": {}}'):
+            with self.subTest(content=content), tempfile.TemporaryDirectory() as raw:
+                contract = Path(raw) / "contract.json"
+                contract.write_text(content, encoding="utf-8")
+                result = run_cli(Path(raw) / "project", "init", "--contract", str(contract))
+                self.assertEqual(result.returncode, 1)
+                self.assertTrue(result.stderr.startswith("[RDS-REJECT] "), result.stderr)
+                self.assertNotIn("[RDS-ERROR]", result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+
     def test_corrupt_state_database_is_reported_as_error_not_rejection(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
@@ -50,8 +62,8 @@ class CLIErrorTagTests(unittest.TestCase):
         cases = [
             (ValueError("synthetic gate refusal"), "[RDS-REJECT] synthetic gate refusal"),
             (FileNotFoundError("synthetic missing input"), "[RDS-REJECT] synthetic missing input"),
-            (KeyError("missing_field"), "[RDS-ERROR] KeyError: 'missing_field'"),
-            (TypeError("synthetic bug"), "[RDS-ERROR] TypeError: synthetic bug"),
+            (KeyError("missing_field"), "[RDS-REJECT] 'missing_field'"),
+            (TypeError("synthetic shape"), "[RDS-REJECT] synthetic shape"),
             (RecursionError("synthetic depth"), "[RDS-REJECT] synthetic depth"),
             (SyntaxError("synthetic syntax"), "[RDS-REJECT] synthetic syntax"),
             (ImportError("synthetic dependency"), "[RDS-ERROR] ImportError: synthetic dependency"),
