@@ -7,7 +7,7 @@ import os
 import sys
 import time
 
-CAPABILITIES = ('python_exact', 'sympy_exact', 'mpmath_iv', 'torch_cpu')
+CAPABILITIES = ('python_exact', 'sympy_exact', 'mpmath_iv', 'torch_cpu', 'rust_native')
 
 
 def probe(capability):
@@ -20,6 +20,19 @@ def probe(capability):
     try:
         if capability == 'python_exact':
             valid = Fraction(1, 3) + Fraction(1, 6) == Fraction(1, 2)
+        elif capability == 'rust_native':
+            import rds_accelerator as accelerator
+            acc_info = accelerator.get_accelerator_status()
+            report.update(
+                backend=acc_info['backend'],
+                native_loaded=acc_info['native_library_loaded'],
+                cargo_available=acc_info['cargo_available']
+            )
+            valid = (acc_info['status'] == 'AVAILABLE')
+            if not valid:
+                report.update(status='UNAVAILABLE', error='Neither compiled native library nor cargo toolchain detected')
+                report['wall_seconds'] = round(time.perf_counter() - started, 6)
+                return report
         else:
             name = {'sympy_exact': 'sympy', 'mpmath_iv': 'mpmath', 'torch_cpu': 'torch'}[capability]
             module = importlib.import_module(name)

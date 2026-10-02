@@ -102,6 +102,19 @@
       "sources": ["https://docs.python.org/3/library/inspect.html#inspect.Signature.bind", "https://docs.pytorch.org/docs/stable/generated/torch.nn.Module.html#torch.nn.Module.forward", "https://docs.pytorch.org/docs/stable/generated/torch.nn.Module.html#torch.nn.Module.register_forward_hook"],
       "runnable_operator": "AVAILABLE",
       "operator_id": "structural_preflight"
+    },
+    {
+      "id": "egraph_equivalence_saturation",
+      "title": "Equivalence saturation and e-graph term rewriting",
+      "tags": ["proof_bottleneck", "equation_unknown"],
+      "required_inputs": ["term expressions", "equational rewrite rules", "iteration threshold"],
+      "conditions": ["Equational theories with non-directional rewrite rules (such as commutativity and associativity).", "Saturation uses bounded iteration and e-node limits before extraction."],
+      "diagnostic": "Use equality saturation via E-Graphs (egglog/egg) to discover algebraically equivalent canonical expressions without phase-ordering divergence. Traditional rewriting cycles under AC-rules, whereas e-graphs compactly represent exponentially many equivalent terms.",
+      "limitations": ["Equivalence saturation is incomplete if iteration or term node limits are exhausted.", "An algebraic term equivalence does not establish physical dimensional validity or empirical task gain."],
+      "capability": {"availability": "EXTERNAL_OPTIONAL", "backend": "Rust egglog or native E-Graph operator", "entrypoint": "scripts/rds_operators.py:EGraphEquivalenceOperator; external egglog", "prerequisites": ["Python egglog package or native Rust egg engine", "equational rewrite rule set"]},
+      "sources": ["https://github.com/egraphs-good/egglog", "https://arxiv.org/abs/2102.04944"],
+      "runnable_operator": "AVAILABLE",
+      "operator_id": "egraph_equivalence"
     }
   ]
 }

@@ -13,6 +13,7 @@ from copy import deepcopy
 import hashlib
 import json
 from pathlib import Path
+from rds_accelerator import compute_hypergraph_closure
 
 ASSURANCE = "INPUT_REPORTED_DEPENDENCY_ANALYSIS_NOT_PROOF"
 DEFAULT_LIMITS = {"max_nodes": 256, "max_hyperedges": 512,
@@ -134,21 +135,8 @@ def audit_sources(spec, base_dir=None):
 def analyze_hypergraph(spec):
     """Least declared closure and complete minimal missing-evidence sets, or UNKNOWN."""
     nodes, edges, goals, limits = _validate(spec)
-    closure = {ident for ident, node in nodes.items() if node["status"] == "SUPPORTED"}
-    derivations, conflicts = {}, set()
-    changed = True
-    while changed:
-        changed = False
-        for edge in edges:
-            if edge["status"] != "SUPPORTED" or not set(edge["premises"]) <= closure:
-                continue
-            head = edge["conclusion"]
-            if nodes[head]["status"] == "CONTRADICTED":
-                conflicts.add(edge["id"])
-            elif head not in closure:
-                closure.add(head)
-                derivations[head] = edge["id"]
-                changed = True
+    initial_supported = {ident for ident, node in nodes.items() if node["status"] == "SUPPORTED"}
+    closure, derivations, conflicts = compute_hypergraph_closure(list(nodes.values()), edges, initial_supported)
 
     relevant_nodes, relevant_edges = set(goals), set()
     changed = True

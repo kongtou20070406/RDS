@@ -138,14 +138,35 @@ class OperatorUnitTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ops.RationalCertificateOperator.certify_interval_bound([1], (2, 1), (0, 1))
 
+    def test_egraph_equivalence_operator(self):
+        # Algebraic equivalence under commutativity and identity
+        res = ops.EGraphEquivalenceOperator.verify_algebraic_equivalence(
+            ("*", "x", ("+", "y", "0")),
+            ("*", "y", "x")
+        )
+        self.assertEqual(res["status"], "PASS")
+        self.assertEqual(res["assurance"], "EGRAPH_EQUIVALENCE_CERTIFIED")
+        self.assertTrue(res["equivalent"])
+        self.assertEqual(res["root_a"], res["root_b"])
+
+        # Non-equivalent terms remain distinct
+        res_distinct = ops.EGraphEquivalenceOperator.verify_algebraic_equivalence(
+            ("+", "x", "y"),
+            ("*", "x", "y")
+        )
+        self.assertEqual(res_distinct["status"], "FAIL")
+        self.assertEqual(res_distinct["assurance"], "EGRAPH_DISTINCT_CLASSES")
+        self.assertFalse(res_distinct["equivalent"])
+
     def test_registry_and_scaffolding(self):
         available = ops.list_available_operators()
-        self.assertEqual(len(available), 4)
+        self.assertEqual(len(available), 5)
         card_ids = [item["card_id"] for item in available]
         self.assertIn("state_space_refinement", card_ids)
         self.assertIn("contraction_target_bias", card_ids)
         self.assertIn("structural_preflight", card_ids)
         self.assertIn("exact_symbolic_constraints", card_ids)
+        self.assertIn("egraph_equivalence_saturation", card_ids)
 
         for card_id in card_ids:
             scaffold = ops.get_operator_scaffold(card_id)
