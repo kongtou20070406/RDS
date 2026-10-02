@@ -53,7 +53,7 @@ MATH_AFFIRM = {'portable': [predicate('independent_checker_result', 'eq', 'accep
 
 
 class TripleAffirmativeCLITests(unittest.TestCase):
-    def advise(self, ctx, goal_fact, observed=None, declared=None, *extra, expect=0):
+    def advise(self, ctx, goal_fact, observed=None, declared=None, *extra, expect=0, aliases=None, derived=None):
         """Run the real `advise` entry; `observed` values are imported from a hash-bound metric file."""
         with tempfile.TemporaryDirectory() as raw:
             project = Path(raw)
@@ -63,7 +63,8 @@ class TripleAffirmativeCLITests(unittest.TestCase):
                 (project / 'metrics.json').write_bytes(metric)
                 sources.append({'id': 'metrics', 'kind': 'metric', 'path': 'metrics.json', 'format': 'json',
                                 'expected_sha256': digest(metric), 'binding': BINDING,
-                                'facts': [{'id': k, 'pointer': '/' + k} for k in observed]})
+                                'facts': [{'id': k, 'pointer': '/' + k} for k in observed] +
+                                         [{'id': k, 'pointer': '/' + v} for k, v in (aliases or {}).items()]})
             if declared:
                 config = json.dumps(declared).encode('utf-8')
                 (project / 'config.json').write_bytes(config)
@@ -74,8 +75,8 @@ class TripleAffirmativeCLITests(unittest.TestCase):
             (project / 'graph.json').write_text(json.dumps(route(goal_fact)), encoding='utf-8')
             args = ['--research-context', str(project / 'context.json'), '--graph', str(project / 'graph.json')]
             if sources:
-                (project / 'manifest.json').write_text(json.dumps({'schema': 'rds-artifact-manifest-v1', 'sources': sources}),
-                                                       encoding='utf-8')
+                (project / 'manifest.json').write_text(json.dumps({'schema': 'rds-artifact-manifest-v1', 'sources': sources,
+                                                                   'derived': derived or []}), encoding='utf-8')
                 args += ['--artifacts', str(project / 'manifest.json')]
             proc = subprocess.run([sys.executable, '-B', str(ROOT / 'scripts/rds_cli.py'), '--root', str(project),
                                    'advise', *args, *extra],
@@ -134,8 +135,9 @@ class TripleAffirmativeCLITests(unittest.TestCase):
         values = {'heldout_error': 0.05, 'clean_root_replay_error': 0.06, 'worst_declared_cohort_error': 0.4}
         review = self.advise(context(DL_GOAL, DL_AFFIRM), 'heldout_error', values)
         self.assertOpen(review, ['APPLICABLE'], 'FALSE', 'REFORMULATE')
-        self.assertIn('APPLICABLE', review['next_move']['reason'])
-        self.assertIn('not an impossibility result', review['next_move']['reason'])
+        self.assertEqual(review['next_move']['reason'],
+                         'The found result fails the declared APPLICABLE affirmative; this is a scoped gap, '
+                         'not an impossibility result or a causal diagnosis.')
 
     # Software/tool development
     def test_software_missing_other_platform_run_keeps_portability_unknown(self):
@@ -145,12 +147,42 @@ class TripleAffirmativeCLITests(unittest.TestCase):
         row = review['goal']['triple_affirmative']['portable']['conditions'][0]
         self.assertEqual((row['truth'], row['affirms']), ('UNKNOWN', 'UNKNOWN'))
 
-    def test_software_failing_and_unknown_affirmatives_report_failure_first(self):
+    def test_software_unresolved_affirmative_comes_before_a_failed_one(self):
+        # As in the existing next move, UNKNOWN evidence is resolved before a reported failure is acted on.
         values = {'suite_failures': 0, 'declared_interfaces_failing': 2}
         review = self.advise(context(SW_GOAL, SW_AFFIRM), 'suite_failures', values)
-        self.assertOpen(review, ['PORTABLE', 'APPLICABLE'], 'FALSE', 'REFORMULATE')
-        self.assertIn('APPLICABLE', review['next_move']['reason'])
-        self.assertNotIn('PORTABLE', review['next_move']['reason'])
+        self.assertOpen(review, ['PORTABLE', 'APPLICABLE'], 'FALSE', 'RESOLVE_PREMISE')
+        self.assertNotIn('found result fails', review['next_move']['reason'])
+        values['other_platform_suite_failures'] = 0
+        review = self.advise(context(SW_GOAL, SW_AFFIRM), 'suite_failures', values)
+        self.assertOpen(review, ['APPLICABLE'], 'FALSE', 'REFORMULATE')
+
+    def test_typed_goal_with_failed_portability_is_not_called_a_found_result(self):
+        facts = {'heldout_error': {'value': 0.05, 'source': 'synthetic-notes.txt'}}
+        values = {'clean_root_replay_error': 0.5, 'worst_declared_cohort_error': 0.09}
+        review = self.advise(context(DL_GOAL, DL_AFFIRM, facts), 'heldout_error', values)
+        self.assertOpen(review, ['FOUND', 'PORTABLE'], 'FALSE', 'RESOLVE_PREMISE')
+        self.assertEqual(review['next_move']['reason'],
+                         'The goal predicates compare TRUE, but FOUND is not affirmed by unreused importer-read or '
+                         'program-derived evidence; resolve it first. PORTABLE already failed and stays open.')
+
+    def test_typed_or_configured_failure_refutes_but_never_affirms(self):
+        # Like a typed failing goal predicate, a typed failing affirmative is a reported failure.
+        values = {'heldout_error': 0.05, 'worst_declared_cohort_error': 0.09}
+        facts = {'clean_root_replay_error': {'value': 0.5, 'source': 'synthetic-notes.txt'}}
+        review = self.advise(context(DL_GOAL, DL_AFFIRM, facts), 'heldout_error', values)
+        self.assertOpen(review, ['PORTABLE'], 'FALSE', 'REFORMULATE')
+        self.assertEqual(review['next_move']['reason'],
+                         'The found result fails the declared PORTABLE affirmative; this is a scoped gap, '
+                         'not an impossibility result or a causal diagnosis.')
+        review = self.advise(context(DL_GOAL, DL_AFFIRM), 'heldout_error', values, {'clean_root_replay_error': 0.5})
+        self.assertOpen(review, ['PORTABLE'], 'FALSE', 'REFORMULATE')
+        facts['clean_root_replay_error']['value'] = 0.06
+        review = self.advise(context(DL_GOAL, DL_AFFIRM, facts), 'heldout_error', values)
+        self.assertOpen(review, ['PORTABLE'], 'UNKNOWN', 'RESOLVE_PREMISE')
+        self.assertEqual(review['next_move']['reason'],
+                         'The goal predicates compare TRUE, but PORTABLE is not affirmed by unreused importer-read or '
+                         'program-derived evidence; resolve it first.')
 
     # Mathematics
     def test_mathematics_bounded_check_is_not_a_for_all_result(self):
@@ -173,13 +205,49 @@ class TripleAffirmativeCLITests(unittest.TestCase):
                   'applicable': [predicate('worst_declared_cohort_error', 'lte', 0.1)]}
         values = {'heldout_error': 0.05, 'worst_declared_cohort_error': 0.09}
         review = self.advise(context(DL_GOAL, affirm), 'heldout_error', values)
-        self.assertOpen(review, ['PORTABLE'], 'UNKNOWN', 'RESOLVE_PREMISE')
+        self.assertOpen(review, ['FOUND', 'PORTABLE'], 'UNKNOWN', 'RESOLVE_PREMISE')
         row = review['goal']['triple_affirmative']['portable']['conditions'][0]
         self.assertIn('reuses the evidence', row['affirmation_reason'])
+        self.assertIn('reuses the evidence', review['goal']['triple_affirmative']['found']['conditions'][0]['affirmation_reason'])
         # Shared between portable and applicable is also reuse, in both directions.
         affirm = {'portable': [predicate('shared_check', 'eq', 0)], 'applicable': [predicate('shared_check', 'eq', 0)]}
         review = self.advise(context(DL_GOAL, affirm), 'heldout_error', {'heldout_error': 0.05, 'shared_check': 0})
         self.assertOpen(review, ['PORTABLE', 'APPLICABLE'], 'UNKNOWN', 'RESOLVE_PREMISE')
+
+    def test_renamed_reading_of_the_same_bytes_is_reuse(self):
+        # Two fact names selecting the same located value in the same hash-bound file are one measurement.
+        values = {'heldout_error': 0.05}
+        review = self.advise(context(DL_GOAL, DL_AFFIRM), 'heldout_error', values,
+                             aliases={'clean_root_replay_error': 'heldout_error', 'worst_declared_cohort_error': 'heldout_error'})
+        self.assertOpen(review, ['FOUND', 'PORTABLE', 'APPLICABLE'], 'UNKNOWN', 'RESOLVE_PREMISE')
+        for name in ('found', 'portable', 'applicable'):
+            row = review['goal']['triple_affirmative'][name]['conditions'][0]
+            self.assertEqual((row['truth'], row['evidence_status']), ('TRUE', 'ARTIFACT_OBSERVED'))
+            self.assertIn('reuses the evidence', row['affirmation_reason'])
+
+    def test_derivation_from_the_goal_measurement_is_reuse(self):
+        values = {'heldout_error': 0.05, 'worst_declared_cohort_error': 0.09}
+        derived = [{'id': 'clean_root_replay_error', 'method': 'mean', 'input_fact_ids': ['heldout_error']}]
+        review = self.advise(context(DL_GOAL, DL_AFFIRM), 'heldout_error', values, derived=derived)
+        self.assertOpen(review, ['FOUND', 'PORTABLE'], 'UNKNOWN', 'RESOLVE_PREMISE')
+        row = review['goal']['triple_affirmative']['portable']['conditions'][0]
+        self.assertEqual(row['evidence_status'], 'PROGRAM_DERIVED')
+        self.assertIn('reuses the evidence', row['affirmation_reason'])
+        # A derivation from its own independent reading still affirms.
+        values['replay_reading'] = 0.06
+        derived = [{'id': 'clean_root_replay_error', 'method': 'mean', 'input_fact_ids': ['replay_reading']}]
+        review = self.advise(context(DL_GOAL, DL_AFFIRM), 'heldout_error', values, derived=derived)
+        self.assertEqual(review['goal']['triple_affirmative']['status'], 'TRUE')
+        # Once the researcher disputes that input, the derivation built on it no longer affirms.
+        for dispute in ({'value': 0.9, 'source': 'synthetic-notes.txt'},
+                        {'value': 0.06, 'source': 'synthetic-notes.txt', 'reliable': False}):
+            with self.subTest(dispute=dispute):
+                review = self.advise(context(DL_GOAL, DL_AFFIRM, {'replay_reading': dispute}), 'heldout_error',
+                                     values, derived=derived)
+                self.assertOpen(review, ['PORTABLE'], 'UNKNOWN', 'RESOLVE_PREMISE')
+                row = review['goal']['triple_affirmative']['portable']['conditions'][0]
+                self.assertEqual((row['truth'], row['evidence_status']), ('TRUE', 'PROGRAM_DERIVED'))
+                self.assertIn('no longer importer-read evidence', row['affirmation_reason'])
 
     def test_open_goal_keeps_its_existing_move_and_reports_found_false(self):
         values = {'heldout_error': 0.3, 'clean_root_replay_error': 0.06, 'worst_declared_cohort_error': 0.09}
@@ -221,8 +289,9 @@ class TripleAffirmativeCLITests(unittest.TestCase):
         ctx = context(DL_GOAL, DL_AFFIRM, facts)
         search = {'candidates': [], 'loop_review': {'flags': [{'kind': 'LOOP_HISTORY_REVIEW_ERROR'}]}}
         review = review_selection(search, ctx, _dependency=lambda: None)
-        self.assertEqual(review['flags'][0]['kind'], 'TRIPLE_AFFIRMATIVE_OPEN')
+        self.assertIn('TRIPLE_AFFIRMATIVE_OPEN', [f['kind'] for f in review['flags']])
         self.assertEqual(review['next_move']['kind'], 'RESOLVE_PREMISE')
+        self.assertEqual(review['next_move']['reason'], 'Recorded history integrity is unresolved; inspect the existing loop review.')
         self.assertNotIn('affirmatives', review['next_move'])
 
     def test_repeated_review_is_identical_and_brief_shows_the_open_affirmative(self):
