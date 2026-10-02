@@ -1,9 +1,10 @@
-"""Retrieve preloaded, conditional theory tool cards; never execute their backends."""
+"""Retrieve preloaded, conditional theory tool cards; emit and test runnable operators."""
 import argparse
 import hashlib
 import json
 from pathlib import Path
 import re
+import rds_operators as operators
 
 CATALOGUE = Path(__file__).resolve().parents[1] / "references" / "theory-tools.json"
 MAX_BYTES = 20 * 1024
@@ -50,7 +51,8 @@ def shortlist(signals, limit=3):
     matches = [(index, card, sorted(requested.intersection(card["tags"]))) for index, card in enumerate(cards)]
     matches = sorted((item for item in matches if item[2]), key=lambda item: (-len(item[2]), item[0]))[:limit]
     result["cards"] = [{"id": card["id"], "title": card["title"], "reason": "Matched: " + ", ".join(tags),
-                        "matched_tags": tags, "required_inputs": card["required_inputs"], "locator": _locator(index)}
+                        "matched_tags": tags, "required_inputs": card["required_inputs"], "locator": _locator(index),
+                        "runnable_operator": card.get("runnable_operator", "NOT_AVAILABLE")}
                        for index, card, tags in matches]
     result["unmatched_signal_count"] = len(requested - SIGNALS)
     return result
@@ -65,17 +67,55 @@ def get_card(card_id):
     raise ValueError("Unknown theory card id: " + card_id)
 
 
+def list_operators():
+    return operators.list_available_operators()
+
+
+def scaffold_operator(card_id, out_path=None):
+    require(isinstance(card_id, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", card_id), "Invalid theory card id")
+    code = operators.get_operator_scaffold(card_id)
+    if out_path is not None:
+        require(isinstance(out_path, (str, Path)) and str(out_path), "Output path must be nonempty")
+        out_file = Path(out_path)
+        with out_file.open("x", encoding="utf-8") as handle:
+            handle.write(code)
+        return {"status": "WRITTEN", "card_id": card_id, "path": str(out_file.resolve()),
+                "size_bytes": len(code.encode("utf-8"))}
+    return {"status": "OK", "card_id": card_id, "scaffold": code}
+
+
+def test_operator(card_id):
+    require(isinstance(card_id, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", card_id), "Invalid theory card id")
+    return operators.test_operator(card_id)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--signals", nargs="+")
     mode.add_argument("--id")
+    mode.add_argument("--list-operators", action="store_true")
+    mode.add_argument("--scaffold")
+    mode.add_argument("--test-operator")
     parser.add_argument("--limit", type=int, default=3)
+    parser.add_argument("--out", help="Create a new output file; requires --scaffold")
     args = parser.parse_args()
     try:
         require(1 <= args.limit <= 5, "Limit must be an integer in 1..5")
-        result = get_card(args.id) if args.id else shortlist(args.signals, args.limit)
+        require(args.out is None or args.scaffold is not None, "--out requires --scaffold")
+        if args.list_operators:
+            result = {"status": "OK", "operators": list_operators()}
+        elif args.scaffold is not None:
+            result = scaffold_operator(args.scaffold, args.out)
+        elif args.test_operator is not None:
+            result = test_operator(args.test_operator)
+        elif args.id is not None:
+            result = get_card(args.id)
+        else:
+            result = shortlist(args.signals, args.limit)
         print(json.dumps(result, sort_keys=True, separators=(",", ":"), allow_nan=False))
+        if args.test_operator is not None:
+            return {"PASS": 0, "FAIL": 1, "UNKNOWN": 2}.get(result["test_result"]["status"], 2)
         return 0
     except (ValueError, TypeError, KeyError, OSError) as exc:
         print(json.dumps({"status": "INVALID_INPUT", "reason": str(exc)}))
