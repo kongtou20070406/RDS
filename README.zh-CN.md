@@ -147,7 +147,7 @@ python -B scripts/rds_cli.py --root ./my-project project status
 
 `scripts/rds_verify.py` 提供有限声明式陈述、已注册的领域规则和独立证书检查。其有限战术接口借鉴了 Lean 风格的证明工作流；它不是通用的 Lean 或 Mathlib 证明器。
 
-- **可信规则注册表** — 注册了 12 条原子数学规则，覆盖有理数标量阈值、仿射动力学、适用范围明确的矩阵谱检查、支持的 Linear/ReLU 性质、具体张量，以及原生 Lean 封闭有理数证明义务。有限定理模块组合这些陈述。该注册表与包含 23 个节点的方法论判断图谱彼此独立。
+- **可信规则注册表** — 注册了 15 条原子数学规则，覆盖有理数标量阈值、仿射动力学、适用范围明确的矩阵谱检查、支持的 Linear/ReLU 性质、具体张量、精确单位圆盘几何覆盖，以及原生 Lean 证明义务（封闭有理数关系与一项范围明确的统计义务）。有限定理模块组合这些陈述。该注册表与包含 23 个节点的方法论判断图谱彼此独立。
 - **有限战术分派器** — `LeanFormalEngine().verify(spec, tactics)` 接受 `rule`、`gershgorin`、`spectral_radius`、`scale_invariance`、`interval` 和 `lean4`。战术选择兼容的已注册检查；不支持或无法确定的输入返回 `UNKNOWN`。
 - **原生 Lean 4 适配器** — 配置原生 Lean 可执行程序后，固定模板的封闭有理数 `eq`、`lt` 或 `le` 证明义务，经原生复检及空公理审计后获得 `LEAN_KERNEL_CHECKED`。它不接受任意 Lean 源码或用户战术。
 
@@ -235,6 +235,19 @@ scripts/rds_adversary.py         RSI 对抗性变体与评测候选方案（组�
 benchmark/                       历史决策包与红队基准
 tests/                           完整回归测试套件
 ```
+
+---
+
+## Star 趋势
+
+<a href="https://www.star-history.com/#kongtou20070406/research-direction-selector&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=kongtou20070406/research-direction-selector&type=Date&theme=dark">
+    <img alt="Star 趋势" src="https://api.star-history.com/svg?repos=kongtou20070406/research-direction-selector&type=Date" width="600">
+  </picture>
+</a>
+
+该图表由公开的 Star History 服务加载，仅反映 GitHub star 随时间的变化，不含科研含义。
 
 ---
 
