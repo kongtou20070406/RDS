@@ -930,7 +930,9 @@ class StopPolicyAndMaintenanceTests(unittest.TestCase):
                     self.contract_with(maintenance_allowance=allowance)
 
     def test_campaign_deadline_stops_hang_and_preserves_partial_stdout(self):
-        store = self.contract_with(stop_policy={"schema": 1, "wall_seconds": 0.3,
+        # The deadline starts at reservation; allow Windows process startup and scheduling
+        # before asserting that deadline cleanup preserves the child's flushed output.
+        store = self.contract_with(stop_policy={"schema": 1, "wall_seconds": 5,
                                                 "progress": {"window_seconds": 3600, "min_bytes": 0}})
         receipt = self.run_spec(self.spec(timeout=15))
         self.assertEqual(receipt["run_status"], "FAILED")
