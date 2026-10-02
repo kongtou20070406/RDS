@@ -2,6 +2,8 @@
 
 ## 5.8.0 — 2026-10-01
 
+- Surface bounded, identity-matched protocol rejection reasons at prospective choice/exec entry. Preserve available-route selection, original evidence, pre-dispatch refusals and budget semantics; discarded alternatives do not authorize or replace an action.
+
 - Add an advisory research-choice review that distinguishes a single supplied procedure from conditional rival comparison, exposes absent/overlapping predictions, unresolved application premises and truncated searches, and optionally reviews the project's sourced goal predicates independently of readiness. Retain the review in scoped choices and compact digests; keep theory obligations, authorization and scientific verdicts intact.
 - Report actual oversized-context bytes and a scoped-manifest repair hint without weakening limits or silently dropping evidence. Add regressions for local proxy success with failed task quality and prediction-scope transfer failures.
 - Support scoped `OBLIGATION_CHECK` actions with verified/counterexample/unresolved branches, alongside existing empirical comparisons. Bind direction-search source changes in execution identity; readiness and process success remain separate from proof.

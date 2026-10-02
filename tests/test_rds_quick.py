@@ -1,5 +1,6 @@
 """Public CLI acceptance for low-friction entry, ambiguity and preserved evidence."""
 from contextlib import closing
+import copy
 import hashlib
 import json
 import os
@@ -94,6 +95,120 @@ class QuickTests(unittest.TestCase):
         self.assertNotEqual(failed.returncode, 0)
         self.assertEqual(ProjectStore(self.ledger).snapshot()['budget'], before)
         self.assertFalse((self.root / '.rds/exec/missing-proof-premise').exists())
+
+    def test_discarded_obligation_cli_explains_missing_outcome_before_any_job_or_ledger_write(self):
+        self.initialize_ledger()
+        action = self.graph['nodes'][0]['executable']['action']
+        action.update(kind='OBLIGATION_CHECK', claim='Synthetic scoped claim.',
+            outcomes=[{'observation': label, 'next_decision': 'review ' + label}
+                      for label in ('verified', 'unresolved')])
+        action.pop('competing_explanations')
+        self.graph_path.write_text(json.dumps(self.graph), encoding='utf-8')
+        inputs = {p: p.read_bytes() for p in (self.context_path, self.graph_path, self.root / 'probe.py')}
+        before = ProjectStore(self.ledger).snapshot()
+        with closing(sqlite3.connect(self.ledger / '.rds/project.sqlite3')) as db:
+            ledger_before = list(db.iterdump())
+        for index, selected in enumerate(('route:inspect-x', 'inspect-x', None)):
+            with self.subTest(selected=selected):
+                name = 'missing-outcome-' + str(index)
+                options = ['--context', str(self.context_path), '--graph', str(self.graph_path), '--ledger', str(self.ledger)]
+                if selected is not None:
+                    options += ['--choose', selected]
+                failed = self.job(name, False, *options)
+                self.assertNotEqual(failed.returncode, 0)
+                self.assertIn('obligation outcomes must distinguish verified, counterexample and unresolved', failed.stderr)
+                self.assertNotIn('missing, pruned or ambiguous', failed.stderr)
+                self.assertFalse((self.root / '.rds/exec' / name).exists())
+                self.assertEqual(ProjectStore(self.ledger).snapshot(), before)
+        with closing(sqlite3.connect(self.ledger / '.rds/project.sqlite3')) as db:
+            self.assertEqual(list(db.iterdump()), ledger_before)
+        self.assertTrue(all(p.read_bytes() == raw for p, raw in inputs.items()))
+
+    def test_discarded_diagnostics_use_exact_identity_and_do_not_overshadow_ready_choice(self):
+        from rds_advisor_search import search_directions
+        from rds_quick import choice
+        self.initialize_ledger()
+        invalid = self.graph['nodes'][0]
+        invalid['executable']['action']['required_observables'] = []
+        ready = copy.deepcopy(invalid)
+        ready['id'] = 'healthy'
+        ready['executable']['action']['required_observables'] = ['x']
+        self.graph['nodes'].append(ready)
+        advice = {'recommendations': [{'type': 'EXECUTABLE_DIRECTION_SEARCH',
+            'search': search_directions(self.graph, self.context)}]}
+        original = copy.deepcopy((advice, self.context))
+        for selected in ('healthy:inspect-x', 'inspect-x', None):
+            self.assertEqual(choice(advice, self.context, selected)['candidate']['id'], 'healthy:inspect-x')
+        with self.assertRaisesRegex(ValueError, 'Selected candidate was discarded.*missing required observables'):
+            choice(advice, self.context, 'route:inspect-x')
+        for selected in ('nonexistent', 'route', 'route:inspect', 'inspect'):
+            with self.subTest(selected=selected), self.assertRaisesRegex(ValueError, 'missing, pruned or ambiguous candidate') as error:
+                choice(advice, self.context, selected)
+            self.assertNotIn('missing required observables', str(error.exception))
+        self.assertEqual((advice, self.context), original)
+
+    def test_choice_ambiguity_does_not_attribute_one_discarded_reason(self):
+        from rds_advisor_search import search_directions
+        from rds_quick import choice
+        self.initialize_ledger()
+        other = copy.deepcopy(self.graph['nodes'][0])
+        other['id'] = 'other'
+        self.graph['nodes'].append(other)
+        invalid = copy.deepcopy(other)
+        invalid['id'] = 'invalid'
+        invalid['executable']['action']['required_observables'] = []
+        self.graph['nodes'].append(invalid)
+        def advice():
+            return {'recommendations': [{'type': 'EXECUTABLE_DIRECTION_SEARCH',
+                'search': search_directions(self.graph, self.context)}]}
+        with self.assertRaisesRegex(ValueError, 'ambiguous candidate') as error:
+            choice(advice(), self.context, 'inspect-x')
+        self.assertNotIn('missing required observables', str(error.exception))
+        self.graph['nodes'][0]['executable']['action']['outcomes'] = []
+        self.graph['nodes'][1]['executable']['action']['required_observables'] = []
+        with self.assertRaisesRegex(ValueError, 'ambiguous candidate') as error:
+            choice(advice(), self.context, 'inspect-x')
+        self.assertNotIn('no outcome', str(error.exception))
+        with self.assertRaisesRegex(ValueError, 'no outcome can distinguish next decisions'):
+            choice(advice(), self.context, 'route:inspect-x')
+
+    def test_discard_hints_escape_and_bound_text_while_cas_preserves_original_reasons(self):
+        from rds_quick import cas_json, choice
+        context = {'decision': {'id': 'd', 'goal_revision': 'g', 'scope': {'domain': 'synthetic'}}}
+        identity = 'rule:\x1b\n\r\t\x00\x7f\u202e' + 'i' * 1000
+        reason = 'invalid\x1b\n\r\t\x00\x7f\u202e' + 'r' * 10000
+        discarded = [{'id': identity, 'action_id': 'a', 'reason': reason}]
+        discarded += [{'id': 'extra-' + str(i), 'reason': 'extra reason'} for i in range(9)]
+        advice = {'recommendations': [{'type': 'EXECUTABLE_DIRECTION_SEARCH',
+            'search': {'candidates': [], 'discarded_candidates': discarded}}]}
+        original = copy.deepcopy(advice)
+        with self.assertRaisesRegex(ValueError, 'Selected candidate was discarded') as error:
+            choice(advice, context, identity)
+        text = str(error.exception)
+        self.assertLess(len(text), 500)
+        self.assertTrue(all(ord(char) >= 32 and ord(char) != 127 for char in text))
+        self.assertNotIn('\u202e', text)
+        self.assertIn('\\u001b', text)
+        with self.assertRaisesRegex(ValueError, 'No READY candidate') as error:
+            choice(advice, context)
+        self.assertLess(len(str(error.exception)), 1100)
+        self.assertIn('7 more discarded actions', str(error.exception))
+        self.assertNotIn('extra-2', str(error.exception))
+        self.assertEqual(advice, original)
+        ref = cas_json(self.root, advice)
+        self.assertEqual(json.loads(Path(ref['path']).read_text(encoding='utf-8')), original)
+
+    def test_missing_action_identity_is_not_guessed_from_rule_prefix(self):
+        from rds_advisor_search import search_directions
+        from rds_quick import choice
+        self.initialize_ledger()
+        self.graph['nodes'][0]['executable']['action'] = None
+        advice = {'recommendations': [{'type': 'EXECUTABLE_DIRECTION_SEARCH',
+            'search': search_directions(self.graph, self.context)}]}
+        with self.assertRaisesRegex(ValueError, 'missing, pruned or ambiguous candidate'):
+            choice(advice, self.context, 'route:inspect-x')
+        with self.assertRaisesRegex(ValueError, 'No READY candidate.*missing action identity'):
+            choice(advice, self.context)
 
     def test_one_call_completes_identity_preserves_output_and_never_claims_scientific_pass(self):
         self.script()
