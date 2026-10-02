@@ -1529,6 +1529,20 @@ def parser():
     return p
 
 
+L3_LEDGER_COMMANDS = frozenset({"init", "hypothesis", "gate", "plan", "run", "data", "decide",
+                                "branch", "artifacts", "meta"})
+
+
+def _project_ledger_message(root):
+    """True split naming for L3 commands in a root that holds only a project ledger (#76)."""
+    ledger = Path(root).resolve() / ".rds" / "project.sqlite3"
+    if not ledger.is_file():
+        return None
+    return ("L3 kernel not initialized in this root (project ledger found; L3 commands need "
+            "`init --contract`). This root's recorded project state is intact; use "
+            "`python -B scripts/rds_cli.py project next` for the campaign's next step")
+
+
 def _main():
     try:
         args = parser().parse_args()
@@ -1545,6 +1559,18 @@ def _main():
             print("[RDS-USAGE] " + str(exc), file=sys.stderr)
             return 1
     rds = RDSState(args.root)
+    if args.command in L3_LEDGER_COMMANDS and not rds.db_path.exists():
+        message = _project_ledger_message(args.root)
+    elif (args.command == "checkpoint" and args.action == "save"
+          and args.kind == "reference" and not rds.db_path.exists()):
+        # A reference save reads the L3 snapshot; a project save must stay reachable.
+        message = _project_ledger_message(args.root)
+    else:
+        message = None
+    if message:
+        print("[RDS-REJECT] " + message, file=sys.stderr)
+        print("[RDS-HINT] python -B scripts/rds_cli.py --root \"" + str(args.root) + "\" project next", file=sys.stderr)
+        return 1
     try:
         if args.command == "history":
             from rds_obelisk import history_command
