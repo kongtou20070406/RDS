@@ -2,6 +2,8 @@
 
 ## 5.8.0 — Unreleased
 
+- Allow project contracts to freeze an opt-in attempt limit. Project and quick execution compare bound requests within the owning ledger, refuse duplicate or exhausted routes before new reservation/charge, and observe verified existing attempts. Renames do not reset the policy; failed attempts and interrupted charged child creation retain their cost and require reconciliation.
+
 - Add on-demand bilingual research-record handoff prompts for private RSI review. Preserve decision-time evidence, raw failures, missing dependencies and scoped original goals without a new packaging CLI, state store or automatic adoption.
 
 - Reduce repeated dependency work within one Advisor operation and replace repeated closure/relevance scans with ordered event propagation and reverse adjacency. Preserve first derivation witnesses, complete blocker/truncation results, candidate re-review after history filtering and fresh checks at later operations. Prefer the existing brief output in the Skill, retaining full records on disk instead of adding another output mode.
