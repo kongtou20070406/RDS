@@ -55,6 +55,8 @@ and `dependency_map`. Its `action` binds the exact authorized `argv`, `target`
 and `goal_contribution`; registration must match all three. Include
 `completion_standard` among the map's goals.
 No arbitrary textual objective, absent binding or stale revision is accepted.
+The bound repair command cannot omit its maintenance declaration or substitute
+a different authorized command to escape the cumulative allowance.
 
 A maintenance manifest adds this declaration, for example for an unresolved
 `config_health` node linked to the original completion predicate:

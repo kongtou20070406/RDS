@@ -874,6 +874,7 @@ class StopPolicyAndMaintenanceTests(unittest.TestCase):
         context = {'objective_binding': {'question_id': goal['question_id'], 'goal_revision': 'stale' if stale else '1',
                                          'sha256': record['asset']['sha256']}, 'scope': goal['scope'], 'dependency_map': graph}
         declaration = self.spec(timeout=0.4, maintenance=True)['maintenance']
+        contract['allowed_commands'].append([sys.executable, '-B', 'code.py', 'ordinary'])
         context['action'] = {'argv': [sys.executable, '-B', 'code.py'], 'target': 'config_health',
                              'goal_contribution': declaration['goal_contribution']}
         path = self.root / 'maintenance-context.json'
@@ -1013,6 +1014,7 @@ class StopPolicyAndMaintenanceTests(unittest.TestCase):
             self.store.register(self.spec("r3", maintenance=True))
         # Scientific runs are unaffected by the exhausted maintenance allowance.
         scientific = self.spec("r4", timeout=0.25)
+        scientific['argv'].append('ordinary')
         scientific["resource_estimates"]["wall_seconds"] = 0.45
         scientific["outpaths"] = []
         store.register(scientific)
@@ -1046,6 +1048,17 @@ class StopPolicyAndMaintenanceTests(unittest.TestCase):
         before = store.snapshot()
         with self.assertRaisesRegex(ValueError, 'wall_seconds total'):
             store.register(self.spec(timeout=0.4, maintenance=True))
+        self.assertEqual(store.snapshot(), before)
+
+    def test_repair_command_cannot_omit_maintenance_or_substitute_another_command(self):
+        store = self.contract_with(maintenance_allowance={'schema': 1, 'wall_seconds': 5, 'max_uses': 4})
+        before = store.snapshot()
+        with self.assertRaisesRegex(ValueError, 'requires a maintenance declaration'):
+            store.register(self.spec(timeout=0.4))
+        bad = self.spec(timeout=0.4, maintenance=True)
+        bad['argv'].append('ordinary')
+        with self.assertRaisesRegex(ValueError, 'bound repair action'):
+            store.register(bad)
         self.assertEqual(store.snapshot(), before)
 
     def test_side_task_and_mismatched_action_are_refused_atomically(self):

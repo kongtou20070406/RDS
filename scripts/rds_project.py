@@ -544,6 +544,9 @@ class ProjectStore:
             require(spec["argv"] in contract["allowed_commands"], "Command is not authorized")
             bindings, errors = self._bindings(contract)
             require(not errors, "; ".join(errors))
+            if 'maintenance_allowance' in contract and 'maintenance' not in spec:
+                require(spec['argv'] != self._maintenance_context(contract)['action'].get('argv'),
+                        'Bound repair command requires a maintenance declaration')
             estimates = spec.get("resource_estimates")
             require(isinstance(estimates, dict) and set(estimates) == set(contract["budget"]), "Resource estimates must match budget dimensions")
             estimates = {key: number(value, f"estimate.{key}") for key, value in estimates.items()}
