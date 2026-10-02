@@ -338,9 +338,13 @@ def _next_move(review, search):
                   for c in search.get("candidates", []))
     blocked = any(c.get("status") in {"BLOCKED_PREREQUISITE", "BLOCKED_METHOD", "BLOCKED_BUDGET"}
                   for c in search.get("blocked_candidates", []))
+    goal_rejections = next((f for f in history_flags if f.get("kind") == "GOAL_ROUTES_REJECTED"), None)
+    # A new variant after rejections recorded for the same goal; an unmeasured current scope does not erase them.
+    goal_history = (goal_rejections is not None and bool(ready_ids.intersection(goal_rejections.get("candidate_ids", [])))
+                    and not supported_route and goal.get("status") in {UNKNOWN, FALSE})
     if "LOOP_HISTORY_REVIEW_ERROR" in loop_flags:
         kind, reason = "RESOLVE_PREMISE", "Recorded history integrity is unresolved; inspect the existing loop review."
-    elif goal.get("status") == UNKNOWN or any(c["truth"] == UNKNOWN for c in goal.get("conditions", [])):
+    elif (goal.get("status") == UNKNOWN or any(c["truth"] == UNKNOWN for c in goal.get("conditions", []))) and not goal_history:
         kind, reason = "RESOLVE_PREMISE", "The original goal has unresolved evidence; no scientific failure is established."
     elif ("PREDICTION_PREMISES_UNRESOLVED" in flags and not supported_route) or (not ready_ids and (pending or blocked)):
         kind, reason = "RESOLVE_PREMISE", "Resolve the affected evidence, prediction scope, method or budget conditions first."
@@ -356,6 +360,11 @@ def _next_move(review, search):
         return None
     elif "RIVAL_PREDICTIONS_OVERLAP" in flags and not supported_route:
         kind, reason = "DESIGN_DISCRIMINATOR", "Supported same-scope prediction sets overlap; seek a distinguishing observation."
+    elif goal_history:
+        kind, reason = "REFORMULATE", (
+            f"The ready action changes only parameters of {goal_rejections['rejected_routes']} route(s) recorded as rejected "
+            "for this goal revision and acceptance predicates; compare a changed premise, representation or method with the smallest repair. "
+            "Recorded rejections are scoped choices, not a capacity bound or a guilty premise.")
     elif goal.get("status") == FALSE:
         kind, reason = "REFORMULATE", "The reported goal predicate failed; this is a scoped gap, not a capacity lower bound or a causal diagnosis."
     elif {"SINGLE_CONFIGURED_DIRECTION", "RIVAL_PREDICTIONS_MISSING"} <= flags and not supported_route:

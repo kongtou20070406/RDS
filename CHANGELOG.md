@@ -2,6 +2,8 @@
 
 ## 5.8.0 — Unreleased
 
+- Keep rejections recorded for the same goal visible across renamed questions. Identical `goal_conditions` (any order) and `goal_revision` now share the existing scoped ledger review: an unchanged rejected route stays blocked, and a ready candidate that changes only the parameters of a rejected route receives `GOAL_ROUTES_REJECTED` and a `REFORMULATE` next move comparing a changed premise with the smallest repair. First unmeasured attempts, changed operations or interventions, scoped obligation checks, rival tests and different goal predicates keep their previous review. Only exact rejected routes are blocked; a changed scope reopens review as before. Another question's malformed record reports `GOAL_HISTORY_SKIPPED` and leaves only the current question's history in use; declared domains, oscillation review and separate project roots are unchanged.
+
 - Expose a bounded local tool shortlist in `rsi list`, with exact-name lookup, callable entries and historical registration explicitly separated from fresh reuse checks. Route the Skill from a concrete capability gap to scoped practice, actual application and retained local reuse without loading the full catalogue.
 
 - Add on-demand bilingual research-record handoff prompts for private RSI review. Preserve decision-time evidence, raw failures, missing dependencies and scoped original goals without a new packaging CLI, state store or automatic adoption.
