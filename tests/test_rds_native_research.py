@@ -204,6 +204,71 @@ class NativeResearchTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'refutation'):
             tools.register(self.root, 'compare-v1', checked['id'])
         self.assertTrue(Path(registered['module']).is_file())
+        listed = self.cli('rsi', 'list', '--name', 'compare-v1')
+        self.assertEqual(listed.returncode, 0, listed.stderr)
+        summary = json.loads(listed.stdout)
+        self.assertTrue(summary['tools'][0]['recorded_registration'])
+        self.assertFalse(summary['reuse_checked'])
+        blocked = self.cli('rsi', 'use', '--name', 'compare-v1')
+        self.assertNotEqual(blocked.returncode, 0)
+        self.assertIn('refutation', blocked.stderr)
+
+    def test_empty_and_missing_named_catalogues_are_explicit(self):
+        for args in ((), ('--name', 'missing-v1')):
+            with self.subTest(args=args):
+                result = self.cli('rsi', 'list', *args)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                summary = json.loads(result.stdout)
+                self.assertEqual(summary['tools'], [])
+                self.assertEqual(summary['tool_count'], 0)
+                self.assertEqual(summary['omitted_tools'], 0)
+                self.assertFalse(summary['reuse_checked'])
+        invalid = self.cli('rsi', 'list', '--name', '../outside')
+        self.assertNotEqual(invalid.returncode, 0)
+
+    def test_catalogue_digest_exposes_bounded_entries_and_exact_lookup(self):
+        source = self.write('source.py', SOURCE)
+        for name in ('echo', 'delta', 'charlie', 'bravo', 'alpha'):
+            tools.extract(self.root, source, 'decide', name)
+        source.unlink()
+        listed = self.cli('rsi', 'list')
+        self.assertEqual(listed.returncode, 0, listed.stderr)
+        summary = json.loads(listed.stdout)
+        self.assertEqual(summary['tool_count'], 5)
+        self.assertEqual(summary['omitted_tools'], 2)
+        self.assertFalse(summary['reuse_checked'])
+        self.assertEqual([row['name'] for row in summary['tools']], ['alpha', 'bravo', 'charlie'])
+        self.assertTrue(all(row['entry'] == 'decide' and not row['recorded_registration']
+                            for row in summary['tools']))
+        full = json.loads(Path(summary['record']).read_text(encoding='utf-8'))
+        self.assertEqual(len(full['tools']), 5)
+        self.assertFalse((self.root / 'MUST_NOT_EXECUTE').exists())
+        for mode in ((), ('--json',)):
+            selected = self.cli('rsi', 'list', '--name', 'echo', *mode)
+            self.assertEqual(selected.returncode, 0, selected.stderr)
+            result = json.loads(selected.stdout)
+            if mode:
+                self.assertEqual([row['data']['name'] for row in result['tools']], ['echo'])
+            else:
+                self.assertEqual(result['tools'], [{'name': 'echo', 'entry': 'decide',
+                                                   'recorded_registration': False}])
+                self.assertEqual(result['omitted_tools'], 0)
+        partial = self.cli('rsi', 'list', '--name', 'ech')
+        self.assertEqual(partial.returncode, 0, partial.stderr)
+        self.assertEqual(json.loads(partial.stdout)['tool_count'], 0)
+
+    def test_long_entry_is_not_dumped_or_silently_truncated_in_digest(self):
+        entry = 'f' * 4096
+        source = self.write('long.py', f'def {entry}(x): return x\n')
+        tools.extract(self.root, source, entry, 'long-entry')
+        result = self.cli('rsi', 'list')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertLess(len(result.stdout), 1500)
+        summary = json.loads(result.stdout)
+        self.assertIsNone(summary['tools'][0]['entry'])
+        self.assertTrue(summary['tools'][0]['entry_omitted'])
+        full = json.loads(Path(summary['record']).read_text(encoding='utf-8'))
+        self.assertEqual(full['tools'][0]['data']['entry'], entry)
 
     def test_tool_cli_and_export_are_native_and_compact(self):
         cases = self.write('cases.json', json.dumps(CASES))
@@ -216,6 +281,17 @@ class NativeResearchTests(unittest.TestCase):
         identity = json.loads(checked.stdout)['id']
         registered = self.cli('rsi', 'register', '--name', 'compare-v1', '--validation', identity)
         self.assertEqual(registered.returncode, 0, registered.stderr)
+        listed = self.cli('rsi', 'list', '--name', 'compare-v1')
+        self.assertEqual(listed.returncode, 0, listed.stderr)
+        summary = json.loads(listed.stdout)
+        self.assertEqual(summary['tool_count'], 1)
+        self.assertEqual(summary['tools'], [{'name': 'compare-v1', 'entry': 'decide',
+                                           'recorded_registration': True}])
+        self.assertFalse(summary['reuse_checked'])
+        full = self.cli('rsi', 'list', '--name', 'compare-v1', '--json')
+        self.assertEqual(full.returncode, 0, full.stderr)
+        self.assertEqual({row['kind'] for row in json.loads(full.stdout)['tools']},
+                         {'tool', 'tool-validation', 'tool-adoption'})
         exported = self.cli('rsi', 'use', '--name', 'compare-v1', '--output', 'compare.py')
         self.assertEqual(exported.returncode, 0, exported.stderr)
         self.assertTrue(runpy.run_path(str(self.root / 'compare.py'))['decide'](1, 3))

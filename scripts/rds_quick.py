@@ -586,6 +586,21 @@ def brief(root, value, version, formal=False):
     for key in ('id', 'name', 'source_sha256', 'module', 'assurance'):
         if key in value:
             summary[key] = value[key]
+    if value.get('status') == 'LOCAL_CATALOG' and isinstance(value.get('tools'), list):
+        registered = {row['data']['name'] for row in value['tools'] if row['kind'] == 'tool-adoption'}
+        candidates = sorted((row['data'] for row in value['tools'] if row['kind'] == 'tool'),
+                            key=lambda item: item['name'])
+        summary['tool_count'] = len(candidates)
+        summary['omitted_tools'] = max(0, len(candidates) - 3)
+        summary['reuse_checked'] = False
+        summary['tools'] = []
+        for item in candidates[:3]:
+            entry = item['entry']
+            row = {'name': item['name'], 'entry': entry if len(entry) <= 128 else None,
+                   'recorded_registration': item['name'] in registered}
+            if len(entry) > 128:
+                row['entry_omitted'] = True
+            summary['tools'].append(row)
     if 'affected' in value:
         summary['affected_count'] = len(value['affected'])
     if 'recommendations' in value:

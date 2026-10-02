@@ -3,6 +3,7 @@
 ## 5.8.0 — Unreleased
 
 - Allow project contracts to freeze an opt-in attempt limit. Project and quick execution compare bound requests within the owning ledger, refuse duplicate or exhausted routes before new reservation/charge, and observe verified existing attempts. Renames do not reset the policy; failed attempts and interrupted charged child creation retain their cost and require reconciliation.
+- Expose a bounded local tool shortlist in `rsi list`, with exact-name lookup, callable entries and historical registration explicitly separated from fresh reuse checks. Route the Skill from a concrete capability gap to scoped practice, actual application and retained local reuse without loading the full catalogue.
 
 - Add on-demand bilingual research-record handoff prompts for private RSI review. Preserve decision-time evidence, raw failures, missing dependencies and scoped original goals without a new packaging CLI, state store or automatic adoption.
 
