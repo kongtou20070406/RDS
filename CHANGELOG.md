@@ -2,7 +2,7 @@
 
 ## 5.8.0 — Unreleased
 
-- Link Advisor's goal-evidence discriminator guidance only to ready rival checks that directly target an unresolved goal predicate or have a valid existing declared contribution path to it. Keep unrelated exploratory candidates available, name uncovered obligations, preserve invalid/missing-link fallback and describe declared links without claiming the rival outcome resolves the goal. (#99)
+- Make the growing-output stop-policy acceptance fixture synchronize real flushed writes with controller observations, rather than assuming child startup and scheduling fit a 0.2-second window. Keep the actual window/minimum, clocks, process, success assertions and stalled-stream stop unchanged. Add silent-first-output termination coverage and print receipt/retained-stream/attempt-budget diagnostics on progress assertion failures. Historical CI failures without receipts still have an unconfirmed exact trigger.
 - Render `project next` and the next step in `project status --brief` with literal root/ID arguments for PowerShell on Windows and POSIX shells elsewhere. Spaces, quotes and shell metacharacters no longer split or expand paths; `--id=` preserves accepted IDs beginning with a hyphen. Quote template slots consistently. Next-step selection, permissions, attempts, receipts and budgets are unchanged.
 - Authorize a root-level file output at the quick `exec` entry by declaring the exact file, instead of inferring the filename as a directory root and rejecting it before dispatch. Directory roots keep strict containment; traversal, input overwrite and the shared path guards are unchanged.
 - Ground receipt-bound evidence per project: `receipt_audit.grounded_receipts` now reports `(project_root, sha256)` pairs and every closure/repair check compares the pair, so a receipt grounded in one project's ledger can no longer support a same-sha256 binding declared under another project — that binding stays fail-closed in `receipt_blocked_node_ids` with its repair obligation.
@@ -91,6 +91,8 @@
 - Track rule-replay input exposure in the project's existing RSI records. An optional `confirmation_campaign` rejects reuse of exposed heldout payloads by a different frozen evaluation, including case/campaign relabeling; failed and timed-out grading retain exposure. Frozen-pair replay, finite regression acceptance and rollback remain available. Add a scoped RSI evolution guide for decision rules, verifier capabilities and research policies. This guard does not attest independent sealing or scientific-policy gains.
 
 These compatible feature additions use the MINOR increment under `docs/versioning.md`. CLI and Skill versions are aligned to 5.8.0; 5.7.0 ledgers remain readable while changed execution bindings still require review or a new contract.
+
+- Link Advisor's goal-evidence discriminator guidance only to ready rival checks that directly target an unresolved goal predicate or have a valid existing declared contribution path to it. Keep unrelated exploratory candidates available, name uncovered obligations, preserve invalid/missing-link fallback and describe declared links without claiming the rival outcome resolves the goal. (#99)
 
 ## 5.7.0 — 2026-10-01
 

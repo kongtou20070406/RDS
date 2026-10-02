@@ -30,6 +30,8 @@ bytes, not research progress. Silent file/database work can trigger it and
 meaningless logging can satisfy it. Configure it only when that signal is
 appropriate. It supplies no scientific forecast or proof of feasibility.
 
+The time before the first observed output can also trip the growth condition; a child that eventually prints is not guaranteed to satisfy every earlier window. Software acceptance separates synchronized observed-growth success from actual silent/stalled-child termination, preserving the frozen 0.2-second/10-byte fixture policy. Progress-test assertion failures include the receipt, retained stream text and live attempt/budget snapshot; an older failure that omitted these fields does not establish its exact stop reason.
+
 The controller terminates only its owned process tree, records
 `CAMPAIGN_DEADLINE` or `PROGRESS_NO_GROWTH`, retains partial logs and settles
 costs into a FAILED receipt with UNKNOWN scientific assessment. A worker

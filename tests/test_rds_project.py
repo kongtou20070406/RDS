@@ -9,6 +9,7 @@ import sys
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -951,16 +952,16 @@ class StopPolicyAndMaintenanceTests(unittest.TestCase):
                                                 "progress": {"window_seconds": 0.2, "min_bytes": 10}})
         started = time.monotonic()
         receipt = self.run_spec(self.spec(timeout=15))
-        self.assertEqual(receipt["run_status"], "FAILED")
-        self.assertEqual(receipt["stop_reason"], "PROGRESS_NO_GROWTH")
+        evidence = self.progress_evidence(receipt)
+        self.assertEqual(receipt["run_status"], "FAILED", evidence)
+        self.assertEqual(receipt.get("stop_reason"), "PROGRESS_NO_GROWTH", evidence)
         self.assertGreater(time.monotonic() - started, 0.2)
         self.assertLess(receipt["resources"]["wall_seconds"]["measured"], 15)
         self.assertTrue(any("Stop policy: PROGRESS_NO_GROWTH" in error for error in receipt["errors"]))
 
-    def test_progress_window_with_growth_completes_normally(self):
-        # A stream that keeps growing is never stopped despite min_bytes.
-        (self.root / "code.py").write_text('import sys, time\nfor _ in range(6):\n    print("x" * 64, flush=True)\n'
-                                           '    time.sleep(0.08)\n', encoding="utf-8")
+    def bind_progress_code(self, source):
+        """Keep the original code/protocol identities valid in synthetic fixtures."""
+        (self.root / "code.py").write_text(source, encoding="utf-8")
         protocol = json.loads((self.root / "protocol.json").read_text(encoding="utf-8"))
         protocol["code_sha256"] = file_sha(self.root / "code.py")
         (self.root / "protocol.json").write_text(json.dumps(protocol), encoding="utf-8")
@@ -969,11 +970,124 @@ class StopPolicyAndMaintenanceTests(unittest.TestCase):
                 binding["sha256"] = file_sha(self.root / "code.py")
             if binding["role"] == "protocol":
                 binding["sha256"] = file_sha(self.root / "protocol.json")
+
+    def progress_evidence(self, receipt):
+        streams = {kind: (self.root / ".rds/project-artifacts/r1" / (kind + ".bin")).read_bytes().decode(
+                            'utf-8', errors='backslashreplace')[:2048]
+                   for kind in ('stdout', 'stderr')
+                   if (self.root / ".rds/project-artifacts/r1" / (kind + ".bin")).is_file()}
+        return canonical({'receipt': receipt, 'streams': streams, 'snapshot': self.store.snapshot()})
+
+    def test_progress_window_with_growth_completes_normally(self):
+        # The requirement is observed byte growth, not a sub-0.2s startup/scheduling SLA.
+        # Use a real child and real monotonic clock, but synchronize each sampled write.
+        # No stop predicate, threshold, output observation or success result is mocked.
+        self.bind_progress_code('from pathlib import Path\nimport time\nfor i in range(6):\n'
+                                '    while not Path(f"permit-{i}").exists(): time.sleep(0.002)\n'
+                                '    print("x" * 64, flush=True)\n'
+                                '    Path(f"ack-{i}").touch()\n')
+        (self.root / 'permit-0').touch()
         store = self.contract_with(stop_policy={"schema": 1, "wall_seconds": 30,
                                                 "progress": {"window_seconds": 0.2, "min_bytes": 10}})
-        receipt = self.run_spec(self.spec(timeout=5))
-        self.assertEqual(receipt["run_status"], "SUCCEEDED")
-        self.assertNotIn("stop_reason", receipt)
+        real_popen = subprocess.Popen
+        child, steps = [], []
+
+        def wait_for_ack(index):
+            deadline = time.monotonic() + 4
+            while not (self.root / f'ack-{index}').is_file():
+                self.assertIsNone(child[0].poll(), 'Synthetic progress child exited before its write')
+                self.assertLess(time.monotonic(), deadline, 'Synthetic progress child did not acknowledge its write')
+                time.sleep(0.002)
+
+        def spawn(*args, **kwargs):
+            # The private diagnostic reproduced premature no-growth with slow launch.
+            # Ensure the success fixture supplies first evidence before its first sample.
+            time.sleep(0.3)
+            process = real_popen(*args, **kwargs)
+            child.append(process)
+            wait_for_ack(0)
+            return process
+
+        def advance_stream(interval):
+            time.sleep(interval)  # real polling intervals; the run spans a full window
+            index = len(steps) + 1
+            if index < 6:
+                (self.root / f'permit-{index}').touch()
+                wait_for_ack(index)
+                steps.append(index)
+            else:
+                child[0].wait(timeout=4)
+
+        clock = SimpleNamespace(monotonic=time.monotonic, time=time.time, sleep=advance_stream)
+        try:
+            with patch('rds_project.subprocess.Popen', side_effect=spawn), patch('rds_project.time', clock):
+                receipt = self.run_spec(self.spec(timeout=5))
+        finally:
+            for process in child:
+                if process.poll() is None:
+                    process.kill()
+                process.wait(timeout=4)
+        evidence = self.progress_evidence(receipt)
+        self.assertEqual(receipt["run_status"], "SUCCEEDED", evidence)
+        self.assertNotIn("stop_reason", receipt, evidence)
+        self.assertEqual(steps, [1, 2, 3, 4, 5], evidence)
+        output = (self.root / '.rds/project-artifacts/r1/stdout.bin').read_bytes().splitlines()
+        self.assertEqual(output, [b'x' * 64] * 6, evidence)
+        self.assertGreaterEqual(receipt['resources']['wall_seconds']['measured'], 0.2, evidence)
+        self.assertEqual(store.recover('r1')['sha256'], receipt['sha256'])
+        self.assertEqual(store.snapshot()['budget']['cpu_seconds']['charged_estimate'], 1)
+
+    def test_progress_delayed_first_output_is_no_growth_not_a_guaranteed_success(self):
+        # This is the falsifier for the old timing assumption: eventually printing
+        # does not satisfy a frozen 0.2s no-growth policy during a silent interval.
+        self.bind_progress_code('import time\ntime.sleep(30)\nprint("late", flush=True)\n')
+        store = self.contract_with(stop_policy={"schema": 1, "wall_seconds": 30,
+                                                "progress": {"window_seconds": 0.2, "min_bytes": 10}})
+        receipt = self.run_spec(self.spec(timeout=15))
+        evidence = self.progress_evidence(receipt)
+        self.assertEqual(receipt['run_status'], 'FAILED', evidence)
+        self.assertEqual(receipt.get('stop_reason'), 'PROGRESS_NO_GROWTH', evidence)
+        self.assertFalse(receipt['timeout'], evidence)
+        self.assertEqual((self.root / '.rds/project-artifacts/r1/stdout.bin').read_bytes(), b'', evidence)
+        self.assertEqual(store.snapshot()['budget']['cpu_seconds']['charged_estimate'], 1, evidence)
+        self.assertGreater(receipt['resources']['wall_seconds']['measured'], 0, evidence)
+        self.assertEqual(store.recover('r1')['sha256'], receipt['sha256'], evidence)
+
+    def test_progress_stalled_after_observed_growth_retains_output_and_charge(self):
+        self.bind_progress_code('from pathlib import Path\nimport time\n'
+                                'print("x" * 64, flush=True)\nPath("ack-0").touch()\ntime.sleep(30)\n')
+        store = self.contract_with(stop_policy={"schema": 1, "wall_seconds": 30,
+                                                "progress": {"window_seconds": 0.2, "min_bytes": 10}})
+        real_popen = subprocess.Popen
+        child = []
+
+        def spawn(*args, **kwargs):
+            process = real_popen(*args, **kwargs)
+            child.append(process)
+            deadline = time.monotonic() + 4
+            while not (self.root / 'ack-0').is_file():
+                self.assertIsNone(process.poll(), 'Synthetic stalled child exited before its write')
+                self.assertLess(time.monotonic(), deadline, 'Synthetic stalled child did not acknowledge its write')
+                time.sleep(0.002)
+            return process
+
+        try:
+            with patch('rds_project.subprocess.Popen', side_effect=spawn):
+                receipt = self.run_spec(self.spec(timeout=15))
+        finally:
+            for process in child:
+                if process.poll() is None:
+                    process.kill()
+                process.wait(timeout=4)
+        evidence = self.progress_evidence(receipt)
+        self.assertEqual(receipt['run_status'], 'FAILED', evidence)
+        self.assertEqual(receipt.get('stop_reason'), 'PROGRESS_NO_GROWTH', evidence)
+        self.assertFalse(receipt['timeout'], evidence)
+        self.assertEqual((self.root / '.rds/project-artifacts/r1/stdout.bin').read_bytes().splitlines(),
+                         [b'x' * 64], evidence)
+        self.assertEqual(store.snapshot()['budget']['cpu_seconds']['charged_estimate'], 1, evidence)
+        self.assertEqual(store.snapshot()['budget']['cpu_seconds']['reserved'], 0, evidence)
+        self.assertEqual(store.recover('r1')['sha256'], receipt['sha256'], evidence)
 
     def test_no_stop_policy_leaves_execution_unchanged(self):
         # Hang still runs to its own manifest timeout; regression guard.
