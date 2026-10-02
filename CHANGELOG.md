@@ -2,6 +2,8 @@
 
 ## 5.8.0 — Unreleased
 
+- Add optional Rust ABI v2 hypergraph closure with ordered witnesses and contradiction parity, verified in compiled Windows/Linux CI and falling back to Python when unavailable. Add a bounded rational-polynomial rewrite example; unresolved equivalence remains UNKNOWN and no independent certificate is claimed.
+
 - Add frozen project stops with a ledger-wide campaign deadline and an optional retained-log growth watchdog. Preserve partial output, original failures and settled costs. Bind maintenance to the native objective and a ready original-goal dependency, with atomic cumulative wall/use allowances retained across failures and recovery; zero allowance refuses maintenance. Quick/theory child routes refuse these policies pending their integration. Maintenance receipts keep scientific assessments UNKNOWN; this project consumer does not close the 5.8 umbrella.
 - Serialize CLI usage schema initialization and writes in one bounded transaction with a ten-second lock wait. Preserve existing journal modes, full concurrent counts and original command behavior on persistent storage failure.
 - Name the field to repair when `init`, `hypothesis add`, `plan create` or `gate check` receives malformed JSON, for example `Missing contract budget field: limits` instead of `'limits'`. A non-object contract, split or plan no longer crashes with a traceback. An unknown `--id` for `plan cancel`, `run execute` or `run recover` reports `Unknown plan ID: <id>`. Accepted shapes, existing checks and messages, the `[RDS-REJECT]` tag and exit 1 are unchanged, and rejected input still creates no ledger and changes no state.

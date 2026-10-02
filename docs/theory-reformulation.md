@@ -151,3 +151,9 @@ CLI 默认只打印简短估计与各部分状态；`--output probe.json` 保存
 | 连续若干变体没有改变判断 | 保留共享失败证据，按新信息选择预载工具与一个决定性检查；没有新 scope/证据时不重新包装同一尝试 |
 
 GPU 实验启动前须使用项目实际配置的 runner 做 preflight，核对容量、占用与可执行工作，再走原授权/预算准入。原档案的“空闲”描述不代替当前检查，入口与参数从现有配置读取。公共文档不复制私人路径或原始指标。
+
+## 有界代数重写示例
+
+`python -B scripts/rds_theory_tools.py --test-operator egraph_equivalence_saturation` 检查显式声明变量的有理多项式表达式。示例只实现二元加法/乘法的交换律、加零和乘一；未连通且没有精确反例时保持 UNKNOWN，达到节点、工作或迭代预算时也不判不等。PASS 的 assurance 是 `BOUNDED_REWRITE_CHECK`，没有独立证书，不能据此声明原研究目标完成。
+
+`--scaffold egraph_equivalence_saturation --out rewrite_example.py` 导出相同实现与正例、反例、未决例自测；拒绝覆盖已有文件。导出后必须绑定自己的表达式、变量和适用域。这个标准库示例没有安装 Rust egg/egglog。超图 Rust 后端的实际构建、兼容回退和测量范围见[原生加速](native-acceleration.md)。

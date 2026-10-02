@@ -136,7 +136,7 @@ def _supported_closure(nodes, edges):
     """Declared closure with the original scan-order first derivation witnesses."""
     closure = {ident for ident, node in nodes.items() if node["status"] == "SUPPORTED"}
     derivations, conflicts, pending = {}, set(), []
-    # Forward-ordered graphs finish in one scan, without a dependency index.
+    # Forward-ordered graphs finish in one scan, then one bounded heap pass.
     for i, edge in enumerate(edges):
         head = edge["conclusion"]
         if edge["status"] != "SUPPORTED" or head in closure:

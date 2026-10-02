@@ -3,6 +3,23 @@ on: [push, pull_request]
 permissions:
   contents: read
 jobs:
+  native:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: cargo test --offline --manifest-path native/rds_accelerator/Cargo.toml
+      - run: cargo build --offline --release --manifest-path native/rds_accelerator/Cargo.toml
+      - name: Require compiled parity across declared labels
+        env:
+          RDS_REQUIRE_NATIVE: '1'
+        run: python -B -m unittest discover -s tests -p test_rds_accelerator.py -v
+      - run: python -B benchmark/hypergraph_bench.py
   test:
     strategy:
       matrix:

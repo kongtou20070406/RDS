@@ -142,21 +142,29 @@ class OperatorUnitTests(unittest.TestCase):
     def test_egraph_equivalence_operator(self):
         # Algebraic equivalence under commutativity and identity
         res = ops.EGraphEquivalenceOperator.verify_algebraic_equivalence(
-            ("*", "x", ("+", "y", "0")),
-            ("*", "y", "x")
+            ("*", "x", ("+", "y", 0)),
+            ("*", "y", "x"), variables=("x", "y")
         )
         self.assertEqual(res["status"], "PASS")
-        self.assertEqual(res["assurance"], "EGRAPH_EQUIVALENCE_CERTIFIED")
+        self.assertEqual(res["assurance"], "BOUNDED_REWRITE_CHECK")
+        self.assertEqual(res["domain"], "rational_polynomials")
+        self.assertEqual(res["certificate_status"], "NOT_EMITTED")
+        self.assertEqual(res["application_status"], "UNKNOWN")
         self.assertTrue(res["equivalent"])
         self.assertEqual(res["root_a"], res["root_b"])
 
-        # Non-equivalent terms remain distinct
+        # Non-equivalent terms settle by exact rational counterexample
         res_distinct = ops.EGraphEquivalenceOperator.verify_algebraic_equivalence(
             ("+", "x", "y"),
-            ("*", "x", "y")
+            ("*", "x", "y"), variables=("x", "y")
         )
         self.assertEqual(res_distinct["status"], "FAIL")
-        self.assertEqual(res_distinct["assurance"], "EGRAPH_DISTINCT_CLASSES")
+        self.assertEqual(res_distinct["assurance"], "EXACT_RATIONAL_COUNTEREXAMPLE")
+        witness = res_distinct["counterexample"]
+        x, y = (Fraction(witness["variables"][name]) for name in ("x", "y"))
+        self.assertEqual(Fraction(witness["expr_a"]), x + y)
+        self.assertEqual(Fraction(witness["expr_b"]), x * y)
+        self.assertNotEqual(x + y, x * y)
         self.assertFalse(res_distinct["equivalent"])
 
     def test_lean_axiom_review_operator(self):
