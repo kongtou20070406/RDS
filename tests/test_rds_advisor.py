@@ -13,6 +13,7 @@ from unittest.mock import Mock, patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from rds_advisor import RDSAdvisor
+from rds_advisor_search import review_selection
 
 
 class AdvisorTests(unittest.TestCase):
@@ -129,7 +130,8 @@ class AdvisorTests(unittest.TestCase):
         search = {"candidates": [{"action": {"question": "Does the rival explanation predict a different observation?"}}],
                   "limitations": ["Sources remain INPUT_REPORTED"]}
         callback = Mock(return_value=search)
-        with patch.dict(sys.modules, {"rds_advisor_search": SimpleNamespace(search_directions=callback)}):
+        with patch.dict(sys.modules, {"rds_advisor_search": SimpleNamespace(
+                search_directions=callback, review_selection=review_selection)}):
             self.advisor.recommend_next_directions({}, graph)
             callback.assert_not_called()
             reports = self.advisor.recommend_next_directions(state, graph)
@@ -138,6 +140,7 @@ class AdvisorTests(unittest.TestCase):
         self.structured(report)
         self.assertEqual(report["limitations"], search["limitations"])
         self.assertEqual(report["minimal_test"], [search["candidates"][0]["action"]])
+        self.assertEqual(report["search"]["selection_review"]["basis"], "NO_READY_DIRECTION")
         self.assertEqual((state, graph), before)
 
     def test_ingestion_is_anchored_unreviewed_and_idempotent(self):
