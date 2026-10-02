@@ -65,6 +65,7 @@ Apply and persist research preferences only with explicit opt-in. [Optional pref
 | Graph gaps / Advisor advancement | [Frontier](docs/advisor-frontier.md) or [advancement protocol](docs/advisor-advancement.md). Proposed nodes/ASTs need independent evidence. |
 | Broaden a stalled formulation / select a theoretical tool | [Theory reformulation](docs/theory-reformulation.md): bounded tool lookup, compact mappings and deciding checks; labels are optional and alternatives are not containment. |
 | Improve RDS itself / accumulate tools | [RSI evolution](docs/rsi-evolution.md): distinguish rule, capability and policy adoption; preserve input exposure and frozen parents, and do not call a reused curriculum independent confirmation. |
+| Package research records for RDS improvement | [Record handoff](docs/research-record-handoff.md): copyable prompts for a scoped private evidence bundle; reuse original decisions and failures, disclose omissions, and return only the archive locator and a short digest. |
 | Bind a mathematical objective / retain assets / reuse a local function | [Native research](docs/native-research.md): immutable original bytes, declared dependency review and `rsi extract/validate/register/use`; hashes and finite cases do not prove mathematics. |
 
 Runner, Lean and RSI remain optional capabilities with their gates intact. Advisor and rule lint are heuristic; rule adoption needs bound evaluation. Software or historical-fixture success is not research-policy gain.

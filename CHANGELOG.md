@@ -2,6 +2,8 @@
 
 ## 5.8.0 — Unreleased
 
+- Add on-demand bilingual research-record handoff prompts for private RSI review. Preserve decision-time evidence, raw failures, missing dependencies and scoped original goals without a new packaging CLI, state store or automatic adoption.
+
 - Reduce repeated dependency work within one Advisor operation and replace repeated closure/relevance scans with ordered event propagation and reverse adjacency. Preserve first derivation witnesses, complete blocker/truncation results, candidate re-review after history filtering and fresh checks at later operations. Prefer the existing brief output in the Skill, retaining full records on disk instead of adding another output mode.
 
 - Keep per-file source/dataset hash inventories as receipt metadata rather than scalar code/data identities. Preserve explicit aggregate identities, compatible scalar aliases and genuine identity conflicts during artifact import and control comparison.
