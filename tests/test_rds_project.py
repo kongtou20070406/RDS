@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import shutil
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import threading
@@ -808,6 +809,430 @@ class ProjectTests(unittest.TestCase):
             with self.assertRaises(NotImplementedError):
                 self.store.execute("r1", background=True)
         self.assertIsNone(self.store.snapshot()["runs"][0]["attempt_id"])
+
+
+HANG_SCRIPT = '''import sys, time
+print("started", flush=True)
+time.sleep(30)
+'''
+
+
+class StopPolicyAndMaintenanceTests(unittest.TestCase):
+    """Stop policy and maintenance allowance; partial output and honest costs."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="rds stop ")
+        self.root = Path(self.tmp.name)
+        files = {"code": ("code.py", HANG_SCRIPT), "config": ("config.json", "{}"),
+                 "data": ("data.json", "[1]"), "evaluator": ("evaluator.json", "{}")}
+        for name, content in files.values():
+            (self.root / name).write_text(content, encoding="utf-8")
+        protocol = {"code_sha256": file_sha(self.root / "code.py"), "config_sha256": file_sha(self.root / "config.json"),
+                    "data_sha256": file_sha(self.root / "data.json"), "data_split": "development-only",
+                    "init": "none", "seed": 0, "checkpoint": "none", "schedule": "one calculation",
+                    "sample_work": {"rows": 1}, "numeric_protocol": "Python float"}
+        (self.root / "protocol.json").write_text(json.dumps(protocol), encoding="utf-8")
+        files["protocol"] = ("protocol.json", "")
+        self.contract = {"schema": 1, "bindings": [{"role": role, "path": name, "sha256": file_sha(self.root / name)}
+                                                  for role, (name, _) in files.items()],
+                         "allowed_commands": [[sys.executable, "-B", "code.py"] for _ in ("r1", "r2", "r3")],
+                         "output_roots": ["outputs"], "budget": {"wall_seconds": 20, "cpu_seconds": 10, "gpu_seconds": 0}}
+        self.store = ProjectStore(self.root)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def contract_with(self, stop_policy=None, maintenance_allowance=None):
+        contract = json.loads(canonical(self.contract))
+        if stop_policy is not None:
+            contract["stop_policy"] = stop_policy
+        if maintenance_allowance is not None:
+            contract['maintenance_allowance'] = {**maintenance_allowance}
+            if set(maintenance_allowance) == {'schema', 'wall_seconds', 'max_uses'}:
+                self.bind_maintenance(contract)
+        self.store.initialize(contract)
+        return self.store
+
+    def bind_maintenance(self, contract, *, supported=False, unrelated=False, stale=False, truncated=False):
+        from rds_math import bind_objective
+        goal = {'schema': 'rds-objective-v1', 'question_id': 'maintenance-goal', 'goal_revision': '1',
+                'scope': {'task': 'synthetic-fixture'}, 'statement': 'Complete the original task',
+                'domain': 'synthetic software inputs', 'quantifier_order': ['all fixture inputs'], 'assumptions': [],
+                'evidence_standard': 'retained evidence', 'completion_standard': 'the original obligation is met'}
+        record = bind_objective(self.root, canonical(goal).encode('utf-8'))
+        graph = {'schema': 1, 'nodes': [
+            {'id': 'config_health', 'status': 'SUPPORTED' if supported else 'UNKNOWN', 'source': 'synthetic blocker'},
+            {'id': 'side_task', 'status': 'UNKNOWN', 'source': 'unrelated maintenance'},
+            {'id': 'completion_standard', 'status': 'UNKNOWN', 'source': 'original goal'}],
+            'hyperedges': [{'id': 'repair_closes', 'premises': ['side_task' if unrelated else 'config_health'],
+                           'conclusion': 'completion_standard', 'status': 'SUPPORTED', 'source': 'declared implication'}],
+            'goals': ['completion_standard']}
+        if truncated:
+            graph['limits'] = {'max_blocker_sets': 1}
+            graph['hyperedges'].append({'id': 'alternate', 'premises': ['side_task'],
+                                       'conclusion': 'completion_standard', 'status': 'SUPPORTED', 'source': 'alternative'})
+        context = {'objective_binding': {'question_id': goal['question_id'], 'goal_revision': 'stale' if stale else '1',
+                                         'sha256': record['asset']['sha256']}, 'scope': goal['scope'], 'dependency_map': graph}
+        declaration = self.spec(timeout=0.4, maintenance=True)['maintenance']
+        contract['allowed_commands'].append([sys.executable, '-B', 'code.py', 'ordinary'])
+        context['action'] = {'argv': [sys.executable, '-B', 'code.py'], 'target': 'config_health',
+                             'goal_contribution': declaration['goal_contribution']}
+        path = self.root / 'maintenance-context.json'
+        path.write_text(canonical(context), encoding='utf-8')
+        ref = {'path': path.name, 'sha256': file_sha(path)}
+        contract['bindings'].append({'role': 'config', **ref})
+        contract['objective_sha256'] = record['asset']['sha256']
+        contract['maintenance_allowance']['context'] = ref
+        protocol = json.loads((self.root / 'protocol.json').read_text(encoding='utf-8'))
+        protocol['config_sha256'] = ProjectStore._role_sha(contract, 'config')
+        (self.root / 'protocol.json').write_text(canonical(protocol), encoding='utf-8')
+        next(b for b in contract['bindings'] if b['role'] == 'protocol')['sha256'] = file_sha(self.root / 'protocol.json')
+
+    def spec(self, rid="r1", timeout=15, maintenance=False):
+        spec = {"schema": 1, "id": rid, "arm": "tool", "control_id": None,
+                "protocol": {"path": "protocol.json", "sha256": file_sha(self.root / "protocol.json")},
+                "argv": [sys.executable, "-B", "code.py"],
+                "outpaths": [], "resource_estimates": {"wall_seconds": timeout + 0.2, "cpu_seconds": 1, "gpu_seconds": 0},
+                "timeout_seconds": timeout}
+        if maintenance:
+            spec["maintenance"] = {"reason": "MAINTENANCE", "blocker": "node:config_health",
+                                   "affected_obligation": "config_health",
+                                   "repair": "check config reader", "acceptance": "code.py exits 0 with retained evidence",
+                                   'goal_contribution': {'target': 'completion_standard',
+                                                         'path': ['config_health', 'completion_standard'],
+                                                         'source': 'synthetic fixture obligation'}}
+        return spec
+
+    def run_spec(self, spec):
+        self.store.register(spec)
+        return self.store.execute(spec["id"])
+
+    def test_malformed_stop_policy_and_allowance_rejected_at_initialize(self):
+        cases = [
+            {"schema": 1, "wall_seconds": 10},
+            {"schema": 1, "wall_seconds": 10, "progress": {}, "extra": 1},
+            {"schema": "1", "wall_seconds": 10, "progress": {"window_seconds": 1, "min_bytes": 0}},
+            {"schema": 1, "wall_seconds": 0, "progress": {"window_seconds": 1, "min_bytes": 0}},
+            {"schema": 1, "wall_seconds": -5, "progress": {"window_seconds": 1, "min_bytes": 0}},
+            {"schema": 1, "wall_seconds": 10, "progress": {"window_seconds": 1, "min_bytes": -1}},
+            {"schema": 1, "wall_seconds": 10, "progress": {"window_seconds": 1, "min_bytes": 1.5}},
+        ]
+        for policy in cases:
+            with self.subTest(policy=policy):
+                with self.assertRaises(ValueError):
+                    self.contract_with(stop_policy=policy)
+        for allowance in ({"schema": 1, "wall_seconds": 5}, {"schema": 1, "max_uses": 2},
+                          {"schema": 1, "wall_seconds": 5, "max_uses": 0}, {"schema": 1, "wall_seconds": 5, "max_uses": 65},
+                          {"schema": 1, "wall_seconds": -1, "max_uses": 2}, {"schema": 1, "wall_seconds": 5, "max_uses": True},
+                          {"schema": 1, "wall_seconds": 5, "max_uses": 2.5}):
+            with self.subTest(allowance=allowance):
+                with self.assertRaises(ValueError):
+                    self.contract_with(maintenance_allowance=allowance)
+
+    def test_campaign_deadline_stops_hang_and_preserves_partial_stdout(self):
+        store = self.contract_with(stop_policy={"schema": 1, "wall_seconds": 0.3,
+                                                "progress": {"window_seconds": 3600, "min_bytes": 0}})
+        receipt = self.run_spec(self.spec(timeout=15))
+        self.assertEqual(receipt["run_status"], "FAILED")
+        self.assertEqual(receipt["stop_reason"], "CAMPAIGN_DEADLINE")
+        self.assertFalse(receipt["timeout"])
+        self.assertTrue(any("Stop policy: CAMPAIGN_DEADLINE" in error for error in receipt["errors"]))
+        stdout = next(artifact for artifact in receipt["artifacts"] if artifact["kind"] == "stdout.bin")
+        self.assertGreater(stdout["size"], 0)
+        self.assertLess(receipt["resources"]["wall_seconds"]["measured"], 15)
+        self.assertEqual(store.snapshot()["budget"]["cpu_seconds"]["charged_estimate"], 1)
+        with self.assertRaises(ValueError):
+            self.store.execute("r1")
+
+    def test_progress_no_growth_stops_hang_after_window(self):
+        store = self.contract_with(stop_policy={"schema": 1, "wall_seconds": 30,
+                                                "progress": {"window_seconds": 0.2, "min_bytes": 10}})
+        started = time.monotonic()
+        receipt = self.run_spec(self.spec(timeout=15))
+        self.assertEqual(receipt["run_status"], "FAILED")
+        self.assertEqual(receipt["stop_reason"], "PROGRESS_NO_GROWTH")
+        self.assertGreater(time.monotonic() - started, 0.2)
+        self.assertLess(receipt["resources"]["wall_seconds"]["measured"], 15)
+        self.assertTrue(any("Stop policy: PROGRESS_NO_GROWTH" in error for error in receipt["errors"]))
+
+    def test_progress_window_with_growth_completes_normally(self):
+        # A stream that keeps growing is never stopped despite min_bytes.
+        (self.root / "code.py").write_text('import sys, time\nfor _ in range(6):\n    print("x" * 64, flush=True)\n'
+                                           '    time.sleep(0.08)\n', encoding="utf-8")
+        protocol = json.loads((self.root / "protocol.json").read_text(encoding="utf-8"))
+        protocol["code_sha256"] = file_sha(self.root / "code.py")
+        (self.root / "protocol.json").write_text(json.dumps(protocol), encoding="utf-8")
+        for binding in self.contract["bindings"]:
+            if binding["role"] == "code":
+                binding["sha256"] = file_sha(self.root / "code.py")
+            if binding["role"] == "protocol":
+                binding["sha256"] = file_sha(self.root / "protocol.json")
+        store = self.contract_with(stop_policy={"schema": 1, "wall_seconds": 30,
+                                                "progress": {"window_seconds": 0.2, "min_bytes": 10}})
+        receipt = self.run_spec(self.spec(timeout=5))
+        self.assertEqual(receipt["run_status"], "SUCCEEDED")
+        self.assertNotIn("stop_reason", receipt)
+
+    def test_no_stop_policy_leaves_execution_unchanged(self):
+        # Hang still runs to its own manifest timeout; regression guard.
+        self.contract_with()
+        receipt = self.run_spec(self.spec(timeout=0.25))
+        self.assertEqual(receipt["run_status"], "FAILED")
+        self.assertTrue(receipt["timeout"])
+        self.assertNotIn("stop_reason", receipt)
+
+    def test_maintenance_run_requires_allowance_and_complete_declaration(self):
+        self.contract_with()
+        with self.assertRaisesRegex(ValueError, "maintenance_allowance"):
+            self.store.register(self.spec(maintenance=True))
+        # A run without the frozen allowance cannot even carry the field.
+        with self.assertRaisesRegex(ValueError, "maintenance_allowance"):
+            self.store.register(self.spec("r5", maintenance=True))
+        for field, value, message in [('goal_contribution', None, 'must be an object'),
+                                      ('reason', 'EXPERIMENT', 'reason must be MAINTENANCE'),
+                                      ('acceptance', '  ', 'nonempty strings')]:
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, message):
+                bad = self.spec(maintenance=True)
+                bad['maintenance'][field] = value
+                self.store.register(bad)
+        with self.assertRaisesRegex(ValueError, 'maintenance must declare'):
+            bad = self.spec(maintenance=True)
+            del bad['maintenance']['acceptance']
+            self.store.register(bad)
+
+    def test_maintenance_allowance_admits_declared_runs_and_is_exhausted(self):
+        store = self.contract_with(maintenance_allowance={"schema": 1, "wall_seconds": 16, "max_uses": 2})
+        first = self.run_spec(self.spec("r1", timeout=0.25, maintenance=True))
+        self.assertEqual(first["run_status"], "FAILED")
+        self.assertEqual(first["timeout"], True)
+        self.assertEqual(first["maintenance"], True)
+        self.assertEqual(first["assessment"], {"task_gain": "UNKNOWN", "mechanism": "UNKNOWN", "purpose": "MAINTENANCE"})
+        self.run_spec(self.spec("r2", timeout=0.25, maintenance=True))
+        events = store.snapshot()
+        self.assertEqual(len([run for run in events["runs"]]), 2)
+        with self.assertRaisesRegex(ValueError, "Maintenance allowance is exhausted"):
+            self.store.register(self.spec("r3", maintenance=True))
+        # Scientific runs are unaffected by the exhausted maintenance allowance.
+        scientific = self.spec("r4", timeout=0.25)
+        scientific['argv'].append('ordinary')
+        scientific["resource_estimates"]["wall_seconds"] = 0.45
+        scientific["outpaths"] = []
+        store.register(scientific)
+        self.assertEqual(store.execute("r4")["run_status"], "FAILED")
+
+    def test_maintenance_wall_estimate_is_capped_by_allowance(self):
+        self.contract_with(maintenance_allowance={"schema": 1, "wall_seconds": 1, "max_uses": 1})
+        with self.assertRaisesRegex(ValueError, "exceeds the frozen maintenance_allowance"):
+            self.store.register(self.spec(timeout=5, maintenance=True))
+        self.assertEqual(self.store.snapshot()["runs"], [])
+        self.assertEqual(self.store.snapshot()["budget"]["cpu_seconds"]["reserved"], 0)
+
+
+    def test_maintenance_total_cap_preserves_failed_cost_and_rejects_rename(self):
+        store = self.contract_with(maintenance_allowance={'schema': 1, 'wall_seconds': 1, 'max_uses': 4})
+        before = store.snapshot()
+        bad = self.spec(timeout=0.4, maintenance=True)
+        bad['maintenance']['blocker'] = 'node:invented'
+        with self.assertRaisesRegex(ValueError, 'current ready'):
+            store.register(bad)
+        self.assertEqual(store.snapshot(), before)
+        self.run_spec(self.spec(timeout=0.4, maintenance=True))
+        retained = store.snapshot()
+        self.assertEqual(store.recover('r1')['assessment']['task_gain'], 'UNKNOWN')
+        with self.assertRaisesRegex(ValueError, 'wall_seconds total'):
+            ProjectStore(self.root).register(self.spec('renamed', timeout=0.4, maintenance=True))
+        self.assertEqual(store.snapshot(), retained)
+
+    def test_zero_maintenance_cap_disables_admission(self):
+        store = self.contract_with(maintenance_allowance={'schema': 1, 'wall_seconds': 0, 'max_uses': 4})
+        before = store.snapshot()
+        with self.assertRaisesRegex(ValueError, 'wall_seconds total'):
+            store.register(self.spec(timeout=0.4, maintenance=True))
+        self.assertEqual(store.snapshot(), before)
+
+    def test_repair_command_cannot_omit_maintenance_or_substitute_another_command(self):
+        store = self.contract_with(maintenance_allowance={'schema': 1, 'wall_seconds': 5, 'max_uses': 4})
+        before = store.snapshot()
+        with self.assertRaisesRegex(ValueError, 'requires a maintenance declaration'):
+            store.register(self.spec(timeout=0.4))
+        bad = self.spec(timeout=0.4, maintenance=True)
+        bad['argv'].append('ordinary')
+        with self.assertRaisesRegex(ValueError, 'bound repair action'):
+            store.register(bad)
+        self.assertEqual(store.snapshot(), before)
+
+    def test_side_task_and_mismatched_action_are_refused_atomically(self):
+        store = self.contract_with(maintenance_allowance={'schema': 1, 'wall_seconds': 5, 'max_uses': 4})
+        before = store.snapshot()
+        for field, value in [('affected_obligation', 'side_task'),
+                             ('goal_contribution', {'target': 'side_task', 'path': ['config_health', 'side_task'], 'source': 'x'}),
+                             ('goal_contribution', {'target': 'completion_standard', 'path': ['side_task', 'completion_standard'], 'source': 'x'}),
+                             ('goal_contribution', {'target': 'completion_standard', 'path': ['config_health', 'invented', 'completion_standard'], 'source': 'x'})]:
+            with self.subTest(field=field, value=value):
+                spec = self.spec(timeout=0.4, maintenance=True)
+                spec['maintenance'][field] = value
+                with self.assertRaisesRegex(ValueError, 'original-goal'):
+                    store.register(spec)
+                self.assertEqual(store.snapshot(), before)
+
+    def test_completed_and_unrelated_graph_obligations_are_refused(self):
+        for option in ('supported', 'unrelated', 'truncated'):
+            with self.subTest(option=option), tempfile.TemporaryDirectory() as folder:
+                for name in ('code.py', 'config.json', 'data.json', 'evaluator.json', 'protocol.json'):
+                    shutil.copyfile(self.root / name, Path(folder) / name)
+                original_root = self.root
+                self.root = Path(folder)
+                try:
+                    contract = json.loads(canonical(self.contract))
+                    contract['maintenance_allowance'] = {'schema': 1, 'wall_seconds': 5, 'max_uses': 4}
+                    self.bind_maintenance(contract, **{option: True})
+                    store = ProjectStore(self.root)
+                    store.initialize(contract)
+                    before = store.snapshot()
+                    with self.assertRaises(ValueError):
+                        store.register(self.spec(timeout=0.4, maintenance=True))
+                    self.assertEqual(store.snapshot(), before)
+                finally:
+                    self.root = original_root
+
+    def test_stale_objective_context_is_refused_before_contract_init(self):
+        contract = json.loads(canonical(self.contract))
+        contract['maintenance_allowance'] = {'schema': 1, 'wall_seconds': 5, 'max_uses': 4}
+        self.bind_maintenance(contract, stale=True)
+        with self.assertRaisesRegex(ValueError, 'frozen objective'):
+            self.store.initialize(contract)
+        with self.store._db(True) as db:
+            self.assertIsNone(db.execute("SELECT 1 FROM sqlite_master WHERE name='contract'").fetchone())
+
+    def test_changed_context_refused_before_launch_and_keeps_reservation(self):
+        store = self.contract_with(maintenance_allowance={'schema': 1, 'wall_seconds': 5, 'max_uses': 4})
+        store.register(self.spec(timeout=0.4, maintenance=True))
+        (self.root / 'maintenance-context.json').write_text('{}', encoding='utf-8')
+        before = store.snapshot()
+        with patch('rds_project.subprocess.Popen') as launch, self.assertRaisesRegex(ValueError, 'binding changed'):
+            ProjectStore(self.root).execute('r1')
+        launch.assert_not_called()
+        self.assertEqual(store.snapshot(), before)
+
+    def test_deadline_survives_rename_reopen_and_recovery(self):
+        store = self.contract_with(stop_policy={'schema': 1, 'wall_seconds': 20,
+                                                'progress': {'window_seconds': 10, 'min_bytes': 0}})
+        with patch('rds_project.time.time', return_value=1000):
+            store.register(self.spec(timeout=0.4))
+            store.register(self.spec('queued', timeout=0.4))
+        before = store.snapshot()
+        with patch('rds_project.time.time', return_value=1021), patch('rds_project.subprocess.Popen') as launch:
+            self.assertEqual(store.recover('r1')['status'], 'RESERVED')
+            with self.assertRaisesRegex(ValueError, 'CAMPAIGN_DEADLINE'):
+                ProjectStore(self.root).register(self.spec('renamed', timeout=0.4))
+            with self.assertRaisesRegex(ValueError, 'CAMPAIGN_DEADLINE'):
+                ProjectStore(self.root).execute('queued')
+        launch.assert_not_called()
+        self.assertEqual(store.snapshot(), before)
+
+    def test_queued_worker_records_prestart_deadline_and_terminal_receipt(self):
+        store = self.contract_with(stop_policy={'schema': 1, 'wall_seconds': 20,
+                                                'progress': {'window_seconds': 10, 'min_bytes': 0}})
+        with patch('rds_project.time.time', return_value=1000):
+            store.register(self.spec(timeout=0.4))
+        with store._db() as db:
+            run = store._run(db, 'r1')
+            run['attempt_id'] = 'queued-attempt'
+            store._save(db, run)
+        with patch('rds_project.time.time', return_value=1021), patch('rds_project.subprocess.Popen') as launch:
+            receipt = store._execute_claim('r1', 'queued-attempt')
+        launch.assert_not_called()
+        self.assertEqual(receipt['stop_reason'], 'CAMPAIGN_DEADLINE')
+        self.assertEqual(receipt['run_status'], 'FAILED')
+        self.assertEqual(store.snapshot()['budget']['wall_seconds']['reserved'], 0)
+        self.assertEqual(store.recover('r1'), receipt)
+
+    def test_concurrent_maintenance_admission_obeys_total_cap(self):
+        from concurrent.futures import ThreadPoolExecutor
+        store = self.contract_with(maintenance_allowance={'schema': 1, 'wall_seconds': 1, 'max_uses': 4})
+        def reserve(rid):
+            try:
+                ProjectStore(self.root).register(self.spec(rid, timeout=0.4, maintenance=True))
+                return 'RESERVED'
+            except ValueError as exc:
+                return str(exc)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(reserve, ('r1', 'r2')))
+        self.assertEqual(results.count('RESERVED'), 1, results)
+        self.assertEqual(len(store.snapshot()['runs']), 1)
+        self.assertAlmostEqual(store.snapshot()['budget']['wall_seconds']['reserved'], 0.6)
+
+    def test_late_maintenance_overrun_blocks_reserved_start_and_new_admission(self):
+        store = self.contract_with(maintenance_allowance={'schema': 1, 'wall_seconds': 1.2, 'max_uses': 4})
+        store.register(self.spec('r1', timeout=0.4, maintenance=True))
+        store.register(self.spec('r2', timeout=0.4, maintenance=True))
+        with store._db() as db:
+            run = store._run(db, 'r1')
+            run['attempt_id'] = 'overrun'
+            store._save(db, run)
+        store._finish('r1', 'overrun', 'FAILED', 1, 0.8, True, ['retained synthetic overrun'])
+        before = store.snapshot()
+        with patch('rds_project.subprocess.Popen') as launch, self.assertRaisesRegex(ValueError, 'exhausted before start'):
+            store.execute('r2')
+        launch.assert_not_called()
+        with self.assertRaisesRegex(ValueError, 'wall_seconds total'):
+            store.register(self.spec('r3', timeout=0.1, maintenance=True))
+        self.assertEqual(store.snapshot(), before)
+
+    def test_quick_and_theory_routes_cannot_discard_configured_policy(self):
+        store = self.contract_with(stop_policy={'schema': 1, 'wall_seconds': 20,
+                                                'progress': {'window_seconds': 10, 'min_bytes': 0}})
+        before = store.snapshot()
+        with self.assertRaisesRegex(ValueError, 'cannot bypass'):
+            with store.theory_allowance(self.spec(timeout=0.4), {}, {'wall_seconds': 1, 'cpu_seconds': 1, 'gpu_seconds': 0}):
+                self.fail('Policy bypassed')
+        result = subprocess.run([sys.executable, '-B', str(Path(__file__).resolve().parents[1] / 'scripts/rds_cli.py'),
+                                '--root', str(self.root), 'exec', '--name', 'bypass', '--timeout', '0.4', '--', 'code.py'],
+                                capture_output=True, text=True, timeout=30,
+                                env={**os.environ, 'RDS_USAGE_DB': str(self.root / 'usage.sqlite3')})
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn('cannot bypass', result.stderr)
+        self.assertEqual(store.snapshot(), before)
+        self.assertFalse((self.root / '.rds' / 'jobs').exists())
+
+    def test_actual_cli_maintenance_refusal_changes_no_state(self):
+        store = self.contract_with(maintenance_allowance={'schema': 1, 'wall_seconds': 1, 'max_uses': 4})
+        before = store.snapshot()
+        bad = self.spec(timeout=0.4, maintenance=True)
+        bad['maintenance']['blocker'] = 'node:nonexistent'
+        path = self.root / 'bad-manifest.json'
+        path.write_text(canonical(bad), encoding='utf-8')
+        result = subprocess.run([sys.executable, '-B', str(Path(__file__).resolve().parents[1] / 'scripts/rds_cli.py'),
+                                 '--root', str(self.root), 'project', 'create', '--manifest', str(path)],
+                                capture_output=True, text=True, timeout=30,
+                                env={**os.environ, 'RDS_USAGE_DB': str(self.root / 'usage.sqlite3')})
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn('[RDS-REJECT]', result.stderr)
+        self.assertIn('current ready', result.stderr)
+        self.assertEqual(store.snapshot(), before)
+
+    def test_execution_policy_observes_valid_maintenance_receipt_after_deadline(self):
+        (self.root / 'code.py').write_text('print("synthetic repair check", flush=True)\n', encoding='utf-8')
+        protocol = json.loads((self.root / 'protocol.json').read_text(encoding='utf-8'))
+        protocol['code_sha256'] = file_sha(self.root / 'code.py')
+        (self.root / 'protocol.json').write_text(canonical(protocol), encoding='utf-8')
+        for binding in self.contract['bindings']:
+            if binding['role'] in {'code', 'protocol'}:
+                binding['sha256'] = file_sha(self.root / binding['path'])
+        self.contract['execution_policy'] = {'schema': 1, 'max_attempts': 2}
+        store = self.contract_with(stop_policy={'schema': 1, 'wall_seconds': 30,
+                                               'progress': {'window_seconds': 10, 'min_bytes': 0}},
+                                   maintenance_allowance={'schema': 1, 'wall_seconds': 5, 'max_uses': 4})
+        receipt = self.run_spec(self.spec(timeout=2, maintenance=True))
+        self.assertEqual(receipt['run_status'], 'SUCCEEDED')
+        before = store.snapshot()
+        with patch('rds_project.time.time', return_value=time.time() + 31), patch('rds_project.subprocess.Popen') as launch:
+            observed = ProjectStore(self.root).execute('r1')
+        launch.assert_not_called()
+        self.assertFalse(observed['execution_started'])
+        self.assertEqual(observed['sha256'], receipt['sha256'])
+        self.assertEqual(observed['assessment'], {'task_gain': 'UNKNOWN', 'mechanism': 'UNKNOWN', 'purpose': 'MAINTENANCE'})
+        self.assertEqual(store.snapshot(), before)
 
 
 if __name__ == "__main__":

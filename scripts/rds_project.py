@@ -80,14 +80,23 @@ def number(value, name, positive=False):
     return float(value)
 
 
-def load_json(path):
+def load_json(path, *, max_bytes=None, expected_sha256=None):
     def pairs(items):
         result = {}
         for key, value in items:
             require(key not in result, f"Duplicate JSON key: {key}")
             result[key] = value
         return result
-    return json.loads(Path(path).read_text(encoding="utf-8"), object_pairs_hook=pairs,
+    if max_bytes is None and expected_sha256 is None:
+        source = Path(path).read_text(encoding='utf-8')
+    else:
+        with Path(path).open('rb') as stream:
+            raw = stream.read(max_bytes + 1) if max_bytes is not None else stream.read()
+        require(max_bytes is None or len(raw) <= max_bytes, 'Maintenance context exceeds byte limit')
+        require(expected_sha256 is None or hashlib.sha256(raw).hexdigest() == expected_sha256,
+                'Maintenance context binding changed')
+        source = raw.decode('utf-8')
+    return json.loads(source, object_pairs_hook=pairs,
                       parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
 
 
@@ -218,9 +227,86 @@ class ProjectStore:
                     f"Insufficient {resource} budget before start")
         contract = self._contract(db)
         claims = self._output_claims(db)
+        self._campaign_deadline(db, contract)
+        if 'maintenance' in run['manifest']:
+            self._maintenance_review(contract, run['manifest']['maintenance'], run['manifest']['argv'])
+            _, used = self._maintenance_spend(db)
+            require(used <= contract['maintenance_allowance']['wall_seconds'] + 1e-9,
+                    'Maintenance wall allowance exhausted before start')
         for path in run["manifest"]["outpaths"]:
             key = self._output_key(self._path(path, True, contract))
             require(claims.get(key) == {run["id"]}, "Output is not exclusively claimed by this run")
+
+    @staticmethod
+    def _campaign_deadline(db, contract, *, admit=False):
+        """One immutable deadline per owning ledger, including idle/recovery time."""
+        if 'stop_policy' not in contract:
+            return None
+        row = db.execute("SELECT body FROM events WHERE json_extract(body,'$.kind')='CAMPAIGN_STARTED' ORDER BY id LIMIT 1").fetchone()
+        if row is None:
+            require(admit, 'Stop policy: campaign admission is missing')
+            event = {'kind': 'CAMPAIGN_STARTED', 'contract_sha256': digest(contract), 'started_at': time.time()}
+            db.execute('INSERT INTO events(body) VALUES (?)', (canonical(event),))
+        else:
+            event = json.loads(row['body'])
+            require(event['contract_sha256'] == digest(contract), 'Stop policy: campaign binding differs')
+        deadline = event['started_at'] + contract['stop_policy']['wall_seconds']
+        require(time.time() < deadline, 'Stop policy: CAMPAIGN_DEADLINE')
+        return deadline
+
+    def _maintenance_context(self, contract):
+        from rds_math import check_context
+        require('objective_sha256' in contract, 'Maintenance requires a frozen native objective')
+        ref = contract['maintenance_allowance']['context']
+        require(isinstance(ref, dict) and set(ref) == {'path', 'sha256'}, 'Maintenance context requires path and sha256')
+        require(any(b['role'] == 'config' and b['path'] == ref['path'] and b['sha256'] == ref['sha256']
+                    for b in contract['bindings']), 'Maintenance context must be a frozen config binding')
+        path = self._path(ref['path'])
+        context = load_json(path, max_bytes=128 * 1024, expected_sha256=ref['sha256'])
+        binding = check_context(self.root, context)
+        require(binding and context.get('objective_binding') == binding
+                and binding['sha256'] == contract['objective_sha256'], 'Maintenance objective binding differs')
+        require(isinstance(context.get('action'), dict), 'Maintenance context requires a bound repair action')
+        return context
+
+    def _maintenance_review(self, contract, maintenance, argv):
+        from rds_advisor_search import _dependency_review, _goal_contribution
+        require('maintenance_allowance' in contract, 'Maintenance runs require a contract maintenance_allowance')
+        context = self._maintenance_context(contract)
+        action = context['action']
+        require(action.get('argv') == argv and action.get('target') == maintenance['affected_obligation']
+                and action.get('goal_contribution') == maintenance['goal_contribution'],
+                'Maintenance command and original-goal target differ from the bound repair action')
+        dependency = _dependency_review(context)
+        require(dependency is not None and dependency['status'] == 'ANALYZED',
+                'Maintenance requires a complete dependency review')
+        contribution = _goal_contribution(action, context, dependency)
+        mapped = (contribution or {}).get('graph_path', {})
+        goal = mapped.get('goal_review', {})
+        require(maintenance['goal_contribution'].get('target') == 'completion_standard'
+                and mapped.get('status') == 'DECLARED_CONNECTED_PATH'
+                and goal.get('blocker_sets_complete') is True and goal.get('status') != 'DECLARED_SUPPORTED',
+                'Maintenance must address an unresolved original-goal obligation')
+        token = mapped['start_token']
+        require(token == maintenance['blocker'] and token in {r['token'] for r in dependency['ready_obligations']}
+                and any(token in missing for missing in goal['minimal_missing_evidence_sets'])
+                and not (set(contribution['path'][1:-1]) & set(dependency['declared_supported_closure'])),
+                'Maintenance blocker must be a current ready original-goal obligation')
+        return {'objective_binding': context['objective_binding'], 'context_sha256': digest(context),
+                'dependency_map_sha256': dependency['input_sha256'], 'contribution': contribution,
+                'assurance': 'INPUT_REPORTED_GRAPH_PATH_NOT_PROOF'}
+
+    @staticmethod
+    def _maintenance_spend(db):
+        prior = [json.loads(row['body']) for row in db.execute("SELECT body FROM events WHERE json_extract(body,'$.kind')='MAINTENANCE_USE'")]
+        used = 0.0
+        for event in prior:
+            receipt = db.execute('SELECT body FROM receipts WHERE run_id=?', (event['run_id'],)).fetchone()
+            run = db.execute('SELECT body FROM runs WHERE id=?', (event['run_id'],)).fetchone()
+            resource = json.loads(receipt['body'])['resources']['wall_seconds'] if receipt else {}
+            observed = json.loads(run['body']).get('observed_wall_seconds', 0.0) if run else 0.0
+            used += max(event['wall_seconds'], observed, resource.get('measured') or 0.0, resource.get('charged_estimate') or 0.0)
+        return len(prior), used
 
     @contextmanager
     def _db(self, readonly=False):
@@ -282,7 +368,28 @@ class ProjectStore:
     def initialize(self, contract):
         require(isinstance(contract, dict) and type(contract.get("schema")) is int
                 and contract["schema"] == 1, "Project contract schema must be 1")
-        require(set(contract) <= {"schema", "bindings", "allowed_commands", "output_roots", "budget", "description", "objective_sha256", "execution_policy"}, "Unknown contract fields")
+        require(set(contract) <= {"schema", "bindings", "allowed_commands", "output_roots", "budget", "description",
+                                  "objective_sha256", "execution_policy", "stop_policy", "maintenance_allowance"}, "Unknown contract fields")
+        if "stop_policy" in contract:
+            policy = contract["stop_policy"]
+            require(isinstance(policy, dict) and set(policy) == {"schema", "wall_seconds", "progress"},
+                    "stop_policy must define schema, wall_seconds and progress")
+            require(type(policy["schema"]) is int and policy["schema"] == 1, "stop_policy schema must be 1")
+            number(policy["wall_seconds"], "stop_policy.wall_seconds", True)
+            progress = policy["progress"]
+            require(isinstance(progress, dict) and set(progress) == {"window_seconds", "min_bytes"},
+                    "stop_policy.progress must define window_seconds and min_bytes")
+            number(progress["window_seconds"], "stop_policy.progress.window_seconds", True)
+            require(type(progress["min_bytes"]) is int and not isinstance(progress["min_bytes"], bool)
+                    and progress["min_bytes"] >= 0, "stop_policy.progress.min_bytes must be a nonnegative integer")
+        if "maintenance_allowance" in contract:
+            allowance = contract["maintenance_allowance"]
+            require(isinstance(allowance, dict) and set(allowance) == {"schema", "wall_seconds", "max_uses", "context"},
+                    "maintenance_allowance must define schema, wall_seconds, max_uses and context")
+            require(type(allowance["schema"]) is int and allowance["schema"] == 1, "maintenance_allowance schema must be 1")
+            number(allowance["wall_seconds"], "maintenance_allowance.wall_seconds")
+            require(type(allowance["max_uses"]) is int and not isinstance(allowance["max_uses"], bool)
+                    and 1 <= allowance["max_uses"] <= 64, "maintenance_allowance.max_uses must be an integer in 1..64")
         if 'execution_policy' in contract:
             policy = contract['execution_policy']
             require(isinstance(policy, dict) and set(policy) == {'schema', 'max_attempts'}
@@ -308,6 +415,8 @@ class ProjectStore:
             binding_roles.add((path, b["role"]))
             roles.add(b["role"])
         require(ROLES <= roles, "code/config/data/evaluator/protocol bindings required")
+        if 'maintenance_allowance' in contract:
+            self._maintenance_context(contract)
         commands = contract.get("allowed_commands")
         require(isinstance(commands, list) and commands, "Allowed argv commands required")
         for argv in commands:
@@ -368,6 +477,8 @@ class ProjectStore:
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             contract = self._contract(db)
+            require('stop_policy' not in contract and 'maintenance_allowance' not in contract,
+                    'Configured stop/maintenance policies require project create/execute; theory allowance cannot bypass them')
             require(db.execute("SELECT 1 FROM runs WHERE id=?", (run_id,)).fetchone() is None, "Run ID already exists")
             require(db.execute("SELECT 1 FROM events WHERE json_extract(body,'$.kind')='THEORY_ALLOWANCE' "
                                "AND json_extract(body,'$.run_id')=? AND json_extract(body,'$.manifest_sha256')=? "
@@ -416,7 +527,8 @@ class ProjectStore:
     def register(self, spec, *, executor_sha256=None):
         require(isinstance(spec, dict) and type(spec.get("schema")) is int
                 and spec["schema"] == 1, "Run manifest schema must be 1")
-        require(set(spec) <= {"schema", "id", "arm", "control_id", "protocol", "argv", "outpaths", "resource_estimates", "timeout_seconds", "description"}, "Unknown manifest fields; handwritten verification is not accepted")
+        require(set(spec) <= {"schema", "id", "arm", "control_id", "protocol", "argv", "outpaths", "resource_estimates",
+                              "timeout_seconds", "description", "maintenance"}, "Unknown manifest fields; handwritten verification is not accepted")
         run_id = spec.get("id", "")
         require(isinstance(run_id, str) and 1 <= len(run_id) <= 80 and all(c.isalnum() or c in "-_" for c in run_id), "Invalid run ID")
         require(spec.get("arm") in {"control", "treatment", "tool"}, "Invalid arm")
@@ -424,11 +536,24 @@ class ProjectStore:
         require(spec["arm"] != "treatment" or spec.get("control_id"), "Treatment requires a control ID")
         timeout = number(spec.get("timeout_seconds"), "timeout_seconds", True)
         executor = self._command(spec.get("argv"))
+        if "maintenance" in spec:
+            maintenance = spec["maintenance"]
+            require(isinstance(maintenance, dict)
+                    and set(maintenance) == {"reason", "blocker", "affected_obligation", "repair", "acceptance", "goal_contribution"},
+                    "maintenance must declare reason, blocker, affected_obligation, repair, acceptance and goal_contribution")
+            require(maintenance.get("reason") == "MAINTENANCE", "Maintenance reason must be MAINTENANCE")
+            require(all(isinstance(maintenance[key], str) and maintenance[key].strip() and len(maintenance[key]) <= 2048
+                        for key in ("blocker", "affected_obligation", "repair", "acceptance")),
+                    "Maintenance blocker, affected_obligation, repair and acceptance must be nonempty strings")
+            require(isinstance(maintenance['goal_contribution'], dict), 'Maintenance goal_contribution must be an object')
         with self._db() as db:
             contract = self._contract(db)
             require(spec["argv"] in contract["allowed_commands"], "Command is not authorized")
             bindings, errors = self._bindings(contract)
             require(not errors, "; ".join(errors))
+            if 'maintenance_allowance' in contract and 'maintenance' not in spec:
+                require(spec['argv'] != self._maintenance_context(contract)['action'].get('argv'),
+                        'Bound repair command requires a maintenance declaration')
             estimates = spec.get("resource_estimates")
             require(isinstance(estimates, dict) and set(estimates) == set(contract["budget"]), "Resource estimates must match budget dimensions")
             estimates = {key: number(value, f"estimate.{key}") for key, value in estimates.items()}
@@ -470,6 +595,17 @@ class ProjectStore:
                         'Execution policy: unchanged route reached max_attempts; retained failures are not a scientific impossibility claim')
             if spec.get("control_id"):
                 require(db.execute("SELECT 1 FROM runs WHERE id=?", (spec["control_id"],)).fetchone() is not None, "Unknown control ID")
+            if "maintenance" in spec:
+                run['maintenance_review'] = self._maintenance_review(contract, spec['maintenance'], spec['argv'])
+                uses, used = self._maintenance_spend(db)
+                require(uses < contract['maintenance_allowance']['max_uses'], 'Maintenance allowance is exhausted')
+                cap = contract['maintenance_allowance']['wall_seconds']
+                require(cap > 0 and used + estimates['wall_seconds'] <= cap + 1e-9,
+                        'Maintenance wall estimate exceeds the frozen maintenance_allowance.wall_seconds total')
+                db.execute("INSERT INTO events(body) VALUES (?)",
+                           (canonical({"kind": "MAINTENANCE_USE", "run_id": run_id,
+                                       "manifest_sha256": digest(spec), 'wall_seconds': estimates['wall_seconds'],
+                                       'review': run['maintenance_review'], **spec["maintenance"]}),))
             for resource, amount in estimates.items():
                 row = db.execute("SELECT * FROM budget WHERE resource=?", (resource,)).fetchone()
                 require(row["spent"] + row["charged"] + row["reserved"] + amount <= row["cap"] + 1e-9, f"Insufficient {resource} budget")
@@ -478,6 +614,7 @@ class ProjectStore:
                 key = self._output_key(path)
                 require(key not in claims, "Output is already claimed by another run")
                 db.execute("INSERT INTO output_claims VALUES (?,?)", (key, run_id))
+            self._campaign_deadline(db, contract, admit=True)
             for resource, amount in estimates.items():
                 db.execute("UPDATE budget SET reserved=reserved+? WHERE resource=?", (amount, resource))
             db.execute("INSERT INTO runs VALUES (?,?,?)", (run_id, "RESERVED", canonical(run)))
@@ -565,16 +702,27 @@ class ProjectStore:
 
     def _execute_claim(self, run_id, attempt_id):
         attempt_start = time.monotonic()
+        admission_error = None
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             run = self._run(db, run_id)
             require(run["status"] == "RESERVED" and run["attempt_id"] == attempt_id, "Run cannot be started twice")
-            self._check_start(db, run)
-            run.update(status="RUNNING", worker_pid=os.getpid(), started_at=time.time())
-            if run["scheduler"]:
-                run["scheduler"]["status"] = "RUNNING"
-            self._save(db, run)
+            try:
+                self._check_start(db, run)
+            except ValueError as exc:
+                if 'stop_policy' not in self._contract(db) and 'maintenance' not in run['manifest']:
+                    raise
+                admission_error = str(exc)
+            if admission_error is None:
+                run.update(status="RUNNING", worker_pid=os.getpid(), started_at=time.time())
+                if run["scheduler"]:
+                    run["scheduler"]["status"] = "RUNNING"
+                self._save(db, run)
             contract = self._contract(db)
+        if admission_error is not None:
+            return self._finish(run_id, attempt_id, 'FAILED', None, time.monotonic() - attempt_start,
+                                False, [admission_error], stop_reason='CAMPAIGN_DEADLINE'
+                                if admission_error == 'Stop policy: CAMPAIGN_DEADLINE' else None)
         before, errors = self._bindings(contract)
         with self._db() as db:
             current = self._run(db, run_id)
@@ -602,8 +750,13 @@ class ProjectStore:
         process = job = None
         started = False
         timeout = False
+        stop_reason = None
         exit_code = None
-        status = "FAILED"
+        progress = contract.get("stop_policy", {}).get("progress")
+        policy_deadline = None
+        stream_bytes = [(work / "stdout.bin").stat().st_size if (work / "stdout.bin").exists() else 0,
+                        (work / "stderr.bin").stat().st_size if (work / "stderr.bin").exists() else 0]
+        samples = [(start, sum(stream_bytes))]
         try:
             with (work / "stdout.bin").open("xb") as out, (work / "stderr.bin").open("xb") as err:
                 flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
@@ -614,6 +767,9 @@ class ProjectStore:
                     require(current["status"] == "RUNNING" and current["attempt_id"] == attempt_id
                             and current["pid"] is None, "Run cannot be started twice")
                     self._check_start(db, current)
+                    deadline = self._campaign_deadline(db, contract)
+                    if deadline is not None:
+                        policy_deadline = time.monotonic() + max(0.0, deadline - time.time())
                     process = subprocess.Popen(argv, cwd=self.root, shell=False, stdin=subprocess.DEVNULL,
                                                stdout=out, stderr=err, creationflags=flags, start_new_session=os.name != "nt")
                     started = True
@@ -630,11 +786,33 @@ class ProjectStore:
                         timeout = True
                         job.stop()
                         break
+                    now = time.monotonic()
+                    if policy_deadline is not None and now >= policy_deadline:
+                        stop_reason = "CAMPAIGN_DEADLINE"
+                        job.stop()
+                        break
+                    if progress is not None:
+                        total = sum(path.stat().st_size if path.exists() else 0
+                                    for path in ((work / "stdout.bin"), (work / "stderr.bin")))
+                        samples.append((now, total))
+                        cutoff = now - progress["window_seconds"]
+                        # Keep exactly one baseline sample at or before the cutoff.
+                        while len(samples) > 2 and samples[1][0] <= cutoff:
+                            del samples[0]
+                        baseline = samples[0]
+                        if now - baseline[0] >= progress["window_seconds"] and total - baseline[1] < progress["min_bytes"]:
+                            stop_reason = "PROGRESS_NO_GROWTH"
+                            job.stop()
+                            break
                     time.sleep(min(0.05, max(0.001, run["manifest"]["timeout_seconds"] - elapsed)))
                 exit_code = process.wait()
-                status = "COMPLETED" if exit_code == 0 and not timeout else "FAILED"
+                if not timeout and stop_reason is None and policy_deadline is not None and time.monotonic() >= policy_deadline:
+                    stop_reason = 'CAMPAIGN_DEADLINE'
+                status = "COMPLETED" if exit_code == 0 and not timeout and not stop_reason else "FAILED"
                 if timeout:
                     errors.append("Process timeout")
+                elif stop_reason:
+                    errors.append(f"Stop policy: {stop_reason}")
                 elif exit_code != 0:
                     errors.append(f"Nonzero process exit: {exit_code}")
         except BaseException as exc:
@@ -645,14 +823,17 @@ class ProjectStore:
                     process.kill()
                 exit_code = process.wait()
             status = "INTERRUPTED" if isinstance(exc, (KeyboardInterrupt, SystemExit)) else "FAILED"
+            if str(exc) == 'Stop policy: CAMPAIGN_DEADLINE':
+                stop_reason = 'CAMPAIGN_DEADLINE'
             errors.append(f"Execution interrupted: {type(exc).__name__}: {exc}")
         finally:
             if job:
                 job.close()
         return self._finish(run_id, attempt_id, status, exit_code, time.monotonic() - attempt_start,
-                            started, errors, before, timeout)
+                            started, errors, before, timeout, stop_reason=stop_reason)
 
-    def _finish(self, run_id, attempt_id, status, exit_code, wall, started, errors, before=None, timeout=False, only_unstarted=False, recovering=False):
+    def _finish(self, run_id, attempt_id, status, exit_code, wall, started, errors, before=None, timeout=False,
+                only_unstarted=False, recovering=False, stop_reason=None):
         with self._db() as db:
             run = self._run(db, run_id)
             contract = self._contract(db)
@@ -706,6 +887,12 @@ class ProjectStore:
                    # RDS attempt lifecycle, not a query of the OS task's current state.
                    "errors": errors, "scheduler": ({**run["scheduler"], "status": status}
                                                      if run["scheduler"] else None)}
+        if stop_reason is not None:
+            receipt["stop_reason"] = stop_reason
+        if run["manifest"].get("maintenance") is not None:
+            receipt["maintenance"] = True
+            receipt['maintenance_review'] = run['maintenance_review']
+            receipt["assessment"] = {"task_gain": "UNKNOWN", "mechanism": "UNKNOWN", "purpose": "MAINTENANCE"}
         receipt["sha256"] = digest(receipt)
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")

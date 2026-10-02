@@ -42,8 +42,11 @@ def _database():
     path.parent.mkdir(parents=True, exist_ok=True)
     # Brief contention must not drop invocations. SQLite bounds this wait;
     # persistent storage failure still leaves the original command unaffected.
-    connection = sqlite3.connect(path, timeout=2)
+    connection = sqlite3.connect(path, timeout=10)
     try:
+        # Serialize schema creation and the caller's write in one bounded
+        # transaction, before reading schema; no read-to-write lock upgrade.
+        connection.execute('BEGIN IMMEDIATE')
         # Keep existing journal modes; no first-use existence/PRAGMA race.
         connection.execute("CREATE TABLE IF NOT EXISTS tracking (id INTEGER PRIMARY KEY CHECK(id=1), started REAL NOT NULL, day TEXT NOT NULL)")
         connection.execute("CREATE TABLE IF NOT EXISTS calls (id INTEGER PRIMARY KEY, started REAL NOT NULL, day TEXT NOT NULL, command TEXT NOT NULL, mode TEXT NOT NULL, version TEXT NOT NULL, exit_code INTEGER, elapsed_ms REAL)")
