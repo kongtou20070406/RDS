@@ -178,17 +178,26 @@ def read_project_receipt(root_text, digest_sha):
     """Read one receipt body by sha256 from a project ledger, read-only.
 
     Returns ``{"status": "RECEIPT_FOUND", "body": {...}}``, ``RECEIPT_NOT_FOUND``,
-    ``RECEIPT_BODY_INVALID`` with the JSON type of a stored body that is not an object,
+    ``RECEIPT_AMBIGUOUS`` when more than one stored receipt carries the sha256,
+    ``RECEIPT_BODY_INVALID`` with the type of a stored body that is not a JSON object,
     or ``LEDGER_UNAVAILABLE`` with the exception type; the caller judges the body.
     """
     try:
         from rds_project import ProjectStore
         store = ProjectStore(root_text)
         with store._db(True) as db:
-            hit = db.execute("SELECT body FROM receipts WHERE sha256=?", (digest_sha,)).fetchone()
-        if hit is None:
+            hits = db.execute("SELECT body FROM receipts WHERE sha256=? LIMIT 2", (digest_sha,)).fetchall()
+        if not hits:
             return {"status": "RECEIPT_NOT_FOUND"}
-        body = json.loads(hit["body"])
+        if len(hits) > 1:
+            # The ledger writer never repeats a sha256 (it covers the run_id key); no row order picks one.
+            return {"status": "RECEIPT_AMBIGUOUS"}
+        raw = hits[0]["body"]
+        if not isinstance(raw, (str, bytes)):
+            # An untyped imported column can hold NULL or a number; neither is stored JSON text.
+            kind = "null" if raw is None else "integer" if isinstance(raw, int) else "real"
+            return {"status": "RECEIPT_BODY_INVALID", "reason": "sqlite " + kind}
+        body = json.loads(raw)
         if not isinstance(body, dict):
             # An imported or corrupted row is data, not a receipt: nothing is read out of it.
             kind = ("null" if body is None else "boolean" if isinstance(body, bool) else "array"

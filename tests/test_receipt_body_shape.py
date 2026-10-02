@@ -26,21 +26,32 @@ SHA = 'a' * 64
 NON_OBJECT = (('[]', 'array'), ('null', 'null'), ('"SUCCEEDED"', 'string'), ('7', 'number'), ('true', 'boolean'))
 
 
-def raw_ledger(root, body_text, sha=SHA):
-    """The issue's minimal ledger: one receipt row whose stored body text is given verbatim."""
+VALID = json.dumps({'schema': 1, 'run_id': 'r1', 'sha256': SHA, 'run_status': 'SUCCEEDED'})
+
+
+def raw_ledger(root, *bodies, sha=SHA, typed=True):
+    """The issue's minimal ledger: receipt rows whose stored bodies are given verbatim, in order.
+
+    ``typed=False`` mimics an imported table without column types, which keeps NULL and numbers as-is.
+    """
     (root / '.rds').mkdir(parents=True)
     db = sqlite3.connect(root / '.rds' / 'project.sqlite3')
     db.executescript('CREATE TABLE contract(id INTEGER PRIMARY KEY,sha256 TEXT NOT NULL,body TEXT NOT NULL);'
-                     'CREATE TABLE receipts(run_id TEXT PRIMARY KEY,sha256 TEXT NOT NULL,body TEXT NOT NULL);')
+                     + ('CREATE TABLE receipts(run_id TEXT PRIMARY KEY,sha256 TEXT NOT NULL,body TEXT NOT NULL);'
+                        if typed else 'CREATE TABLE receipts(run_id,sha256,body);'))
     db.execute("INSERT INTO contract VALUES (1,'x','{}')")
-    db.execute('INSERT INTO receipts VALUES (?,?,?)', ('r1', sha, body_text))
+    for index, body in enumerate(bodies, 1):
+        db.execute('INSERT INTO receipts VALUES (?,?,?)', (f'r{index}', sha, body))
     db.commit()
     db.close()
     return root
 
 
 def ledger_bytes(root):
-    return hashlib.sha256((root / '.rds' / 'project.sqlite3').read_bytes()).hexdigest()
+    """The ledger's bytes and its directory listing: a read leaves no journal or WAL file behind."""
+    state = root / '.rds'
+    return (hashlib.sha256((state / 'project.sqlite3').read_bytes()).hexdigest(),
+            sorted(path.name for path in state.iterdir()))
 
 
 def one_node_map(project_root, sha=SHA):
@@ -69,10 +80,27 @@ class SharedReadTests(unittest.TestCase):
                 self.assertEqual(read_project_receipt(str(root), SHA),
                                  {'status': 'RECEIPT_BODY_INVALID', 'reason': kind})
 
-    def test_object_body_is_still_found(self):
-        root = raw_ledger(self.base / 'object', json.dumps({'sha256': SHA, 'run_status': 'SUCCEEDED'}))
-        found = read_project_receipt(str(root), SHA)
-        self.assertEqual((found['status'], found['body']['run_status']), ('RECEIPT_FOUND', 'SUCCEEDED'))
+    def test_object_body_is_still_found_as_text_or_blob(self):
+        for label, body in (('text', VALID), ('blob', VALID.encode('utf-8'))):
+            with self.subTest(stored=label):
+                root = raw_ledger(self.base / ('object-' + label), body)
+                found = read_project_receipt(str(root), SHA)
+                self.assertEqual((found['status'], found['body']['run_status']), ('RECEIPT_FOUND', 'SUCCEEDED'))
+
+    def test_non_text_column_value_is_invalid(self):
+        for value, kind in ((None, 'sqlite null'), (7, 'sqlite integer'), (1.5, 'sqlite real')):
+            with self.subTest(value=value):
+                root = raw_ledger(self.base / kind.replace(' ', '-'), value, typed=False)
+                self.assertEqual(read_project_receipt(str(root), SHA),
+                                 {'status': 'RECEIPT_BODY_INVALID', 'reason': kind})
+
+    def test_two_rows_with_one_sha256_are_ambiguous_in_either_order(self):
+        for label, rows in (('valid-first', (VALID, '[]')), ('invalid-first', ('[]', VALID)),
+                            ('both-valid', (VALID, VALID))):
+            with self.subTest(order=label):
+                root = raw_ledger(self.base / label, *rows)
+                self.assertEqual(read_project_receipt(str(root), SHA), {'status': 'RECEIPT_AMBIGUOUS'})
+                self.assertEqual(audit_receipts(one_node_map(root))['grounded_receipts'], [])
 
     def test_malformed_and_overdeep_json_keep_the_existing_unavailable_status(self):
         for text, reason in (('{', 'JSONDecodeError'), ('[' * 200000 + ']' * 200000, 'RecursionError')):
@@ -153,9 +181,20 @@ class HypergraphCLITests(unittest.TestCase):
         self.assertEqual((row['status'], row['reason']), ('LEDGER_UNAVAILABLE', 'JSONDecodeError'))
         self.assertEqual(result['receipt_blocked_node_ids'], ['g'])
 
+    def test_untyped_imported_column_and_duplicate_rows_fail_closed(self):
+        cases = (('int', raw_ledger(self.base / 'ledger-int', 7, typed=False), 'RECEIPT_BODY_INVALID'),
+                 ('null', raw_ledger(self.base / 'ledger-null', None, typed=False), 'RECEIPT_BODY_INVALID'),
+                 ('dup', raw_ledger(self.base / 'ledger-dup', '[]', VALID), 'RECEIPT_AMBIGUOUS'))
+        for label, ledger_root, status in cases:
+            with self.subTest(case=label):
+                _, result = self.run_map(ledger_root, 'case-' + label)
+                [row] = result['receipt_audit']['audits']
+                self.assertEqual(row['status'], status)
+                self.assertEqual(result['receipt_blocked_node_ids'], ['g'])
+                self.assertEqual(result['declared_supported_closure'], [])
+
     def test_a_valid_succeeded_body_still_grounds(self):
-        ledger_root = raw_ledger(self.base / 'ledger-ok', json.dumps(
-            {'schema': 1, 'run_id': 'r1', 'sha256': SHA, 'run_status': 'SUCCEEDED'}))
+        ledger_root = raw_ledger(self.base / 'ledger-ok', VALID)
         _, result = self.run_map(ledger_root, 'ok')
         [row] = result['receipt_audit']['audits']
         self.assertEqual((row['status'], row['run_id']), ('GROUNDED', 'r1'))
@@ -232,6 +271,39 @@ class AdviseTests(unittest.TestCase):
                     review = advisor_review(ctx, route(DEEP_LEARNING[0]))['selection_review']
                 self.assertEqual(calls, [(str(self.ledger), SHA)])
                 self.check(review)
+
+    def test_a_non_text_column_keeps_the_audit_instead_of_dropping_it(self):
+        # A TypeError here used to look like an analyzer without the receipts slice, which re-ran unaudited.
+        self.ledger = raw_ledger(Path(self.tmp.name) / 'untyped', 7, typed=False)
+        review = advisor_review(self.ctx(DEEP_LEARNING), route(DEEP_LEARNING[0]))['selection_review']
+        [row] = review['dependency_review']['receipt_audit']['audits']
+        self.assertEqual((row['status'], row['reason']), ('RECEIPT_BODY_INVALID', 'sqlite integer'))
+        self.assertIn('run', review['dependency_review']['receipt_blocked_node_ids'])
+        self.assertEqual(review['obstruction_review'][0]['receipt_audit']['status'], 'RECEIPT_BODY_INVALID')
+
+
+class GoalLinkGuardTests(unittest.TestCase):
+    """`exec` with require_goal_link audits through the same consumer; a non-object receipt blocks the path."""
+
+    def test_route_through_an_invalid_receipt_is_refused_with_its_repair_token(self):
+        from rds_advisor_search import _dependency_review, _goal_contribution
+        with tempfile.TemporaryDirectory(prefix='rds receipt shape guard ') as raw:
+            ledger_root = raw_ledger(Path(raw) / 'ledger', '[]')
+            spec = {'schema': 1, 'goals': ['D'],
+                    'nodes': [{'id': 'B', 'status': 'SUPPORTED', 'source': 'src-B',
+                               'evidence': {'receipt': {'project_root': str(ledger_root), 'sha256': SHA}}},
+                              {'id': 'D', 'status': 'UNKNOWN', 'source': 'src-D'}],
+                    'hyperedges': [{'id': 'e1', 'premises': ['B'], 'conclusion': 'D', 'status': 'SUPPORTED',
+                                    'source': 'src-e1'}]}
+            context = {'decision': {'goal_conditions': [{'fact': 'D', 'value': True}]}, 'dependency_map': spec}
+            action = {'kind': 'OBLIGATION_CHECK', 'target': 'B',
+                      'goal_contribution': {'target': 'D', 'path': ['B', 'D'], 'source': 'fixture'}}
+            # The exact calls the exec guard makes (rds_quick: audit_receipts=True, audit_files=True).
+            dependency = _dependency_review(context, audit_receipts=True, audit_files=True)
+            self.assertEqual(dependency['receipt_audit']['audits'][0]['status'], 'RECEIPT_BODY_INVALID')
+            path = _goal_contribution(action, context, dependency)['graph_path']
+            self.assertEqual(path['status'], 'UNKNOWN')
+            self.assertEqual(path['blocked_bindings'][0]['token'], 'node:B')
 
 
 if __name__ == '__main__':
