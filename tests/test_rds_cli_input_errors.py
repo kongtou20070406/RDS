@@ -139,6 +139,55 @@ class CLIInputErrorTests(unittest.TestCase):
                 self.assertRejected(run_cli(self.root, *command, "--id", "P404"), "Unknown plan ID: P404")
                 self.assertEqual(self.status(), before)
 
+    def test_malformed_branch_fork_spec_names_the_field_and_keeps_branches(self):
+        self.initialize()
+        before = run_cli(self.root, "branch", "list")
+        self.assertEqual(before.returncode, 0, before.stderr)
+        status = self.status()
+        fork = {"id": "B2", "orthogonal_dimension": "representation", "rationale": "orthogonal probe"}
+        invalid_identity = "Invalid identity (up to 80 ASCII letters, numbers, _, . or -)"
+        cases = [
+            (["not", "an", "object"], "Branch spec must be a JSON object"),
+            ("7", "Branch spec must be a JSON object"),
+            ("null", "Branch spec must be a JSON object"),
+            ('"B2"', "Branch spec must be a JSON object"),
+            ({k: v for k, v in fork.items() if k != "id"}, "Missing branch field: id"),
+            # Checks that already named the problem keep their messages and precedence.
+            ([{"manipulation_verified": True}], "Self-signed verification fields are forbidden"),
+            ({**fork, "id": None}, invalid_identity),
+            ({**fork, "id": ["B2"]}, invalid_identity),
+        ]
+        for value, message in cases:
+            with self.subTest(message=message, value=value):
+                result = run_cli(self.root, "branch", "fork", "--spec", self.write("bad-branch.json", value))
+                self.assertRejected(result, message)
+                self.assertEqual(run_cli(self.root, "branch", "list").stdout, before.stdout)
+                self.assertEqual(self.status(), status)
+        forked = run_cli(self.root, "branch", "fork", "--spec", self.write("branch.json", fork))
+        self.assertEqual(forked.returncode, 0, forked.stderr)
+        self.assertEqual(json.loads(forked.stdout), {"forked_branch": "B2", "parent_id": "main", "active_branch": "B2"})
+
+    def test_non_object_plan_for_fuzz_and_advise_is_rejected_without_traceback(self):
+        self.initialize()
+        before = self.status()
+        for command in (("meta", "fuzz", "--plan"), ("advise", "--plan")):
+            for value in (["P1"], "7", "null"):
+                with self.subTest(command=command, value=value):
+                    result = run_cli(self.root, *command, self.write("bad-plan.json", value))
+                    self.assertRejected(result, "Plan spec must be a JSON object")
+                    self.assertEqual(self.status(), before)
+        fuzzed = run_cli(self.root, "meta", "fuzz", "--plan", str(self.root / "plan.json"))
+        self.assertEqual(fuzzed.returncode, 0, fuzzed.stderr)
+        self.assertEqual(json.loads(fuzzed.stdout)["original_plan_id"], "P1")
+        advised = run_cli(self.root, "advise", "--plan", str(self.root / "plan.json"))
+        self.assertEqual(advised.returncode, 0, advised.stderr)
+        self.assertEqual(json.loads(advised.stdout)["advisor_type"], "PLAN_COMPLIANCE_PASS")
+        # An object plan that fails the check still gets advice rather than a rejection.
+        rejected = run_cli(self.root, "advise", "--plan", self.write("empty-plan.json", {}))
+        self.assertEqual(rejected.returncode, 0, rejected.stderr)
+        self.assertNotEqual(json.loads(rejected.stdout)["advisor_type"], "PLAN_COMPLIANCE_PASS")
+        self.assertEqual(self.status(), before)
+
     def test_valid_reference_plan_still_reserves_and_cancels_idempotently(self):
         self.initialize()
         spec = str(self.root / "plan.json")
