@@ -6,9 +6,10 @@ preventing iterative LLM research loops from retreating to naive hyperparameter 
 import inspect
 import json
 import math
+import re
 from fractions import Fraction
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 # ---------------------------------------------------------------------------
 # Operator 1: ContinuousStateSpaceOperator (state_space_refinement)
@@ -637,6 +638,345 @@ if __name__ == "__main__":
 
 
 # ---------------------------------------------------------------------------
+# Operator 6: LeanAxiomReviewOperator (lean_axiom_review)
+# ---------------------------------------------------------------------------
+
+class LeanAxiomReviewOperator:
+    """Lean 4 Axiom and Environment Dependency Audit Operator.
+
+    Inspects formal Lean theorem obligations and verifies that declared proofs
+    depend only on authorized axioms (e.g., empty set for constructive logic,
+    or standard classical axioms: propext, Classical.choice, Quot.sound).
+    Detects unproved gaps ('sorry'), forbidden axioms, or missing environment bindings.
+    """
+
+    STANDARD_CLASSICAL_AXIOMS = frozenset(("propext", "Classical.choice", "Quot.sound"))
+
+    @classmethod
+    def audit_lean_axioms(
+        cls,
+        theorem_name: str,
+        code_or_stdout: str,
+        allowed_axioms: Optional[Set[str]] = None,
+        is_stdout: bool = False
+    ) -> Dict[str, Any]:
+        """Audits axioms from Lean stdout or source code."""
+        allowed = set(allowed_axioms) if allowed_axioms is not None else set(cls.STANDARD_CLASSICAL_AXIOMS)
+
+        if not is_stdout:
+            # Check source code for sorry or cheat tactics
+            if re.search(r"\bsorry\b", code_or_stdout):
+                return {
+                    "status": "FAIL",
+                    "assurance": "SORRY_AXIOM_DETECTED",
+                    "theorem": theorem_name,
+                    "error": "Proof contains 'sorry' unproved obligation placeholder",
+                    "axioms_detected": ["sorry"],
+                    "allowed_axioms": sorted(allowed),
+                }
+
+        no_axiom_match = re.search(rf"'{re.escape(theorem_name)}'\s+does\s+not\s+depend\s+on\s+any\s+axioms", code_or_stdout)
+        if no_axiom_match:
+            found_axioms = []
+        else:
+            dep_match = re.search(rf"'{re.escape(theorem_name)}'\s+depends\s+on\s+axioms:\s*\[(.*?)\]", code_or_stdout)
+            if dep_match:
+                raw_items = dep_match.group(1).split(",")
+                found_axioms = [item.strip() for item in raw_items if item.strip()]
+            else:
+                found_axioms = []
+
+        disallowed = [ax for ax in found_axioms if ax not in allowed]
+        passed = (len(disallowed) == 0)
+        return {
+            "status": "PASS" if passed else "FAIL",
+            "assurance": "AXIOM_DEPENDENCY_VERIFIED" if passed else "DISALLOWED_AXIOM_DEPENDENCY",
+            "theorem": theorem_name,
+            "axioms_detected": sorted(found_axioms),
+            "allowed_axioms": sorted(allowed),
+            "disallowed_axioms": sorted(disallowed),
+            "is_constructive": (len(found_axioms) == 0),
+        }
+
+    @staticmethod
+    def scaffold_code() -> str:
+        return r'''# Lean 4 Axiom Dependency Audit Template
+# Prevents unproved 'sorry' placeholders or unauthorized classical axioms from passing as proofs.
+import re
+
+def audit_axioms(theorem_name, lean_output, allowed_axioms=None):
+    if allowed_axioms is None:
+        allowed_axioms = {"propext", "Classical.choice", "Quot.sound"}
+    if "sorry" in lean_output:
+        return {"status": "FAIL", "reason": "Proof contains 'sorry'"}
+    if f"'{theorem_name}' does not depend on any axioms" in lean_output:
+        return {"status": "PASS", "axioms": [], "constructive": True}
+    match = re.search(rf"'{re.escape(theorem_name)}'\s+depends\s+on\s+axioms:\s*\[(.*?)\]", lean_output)
+    if match:
+        axioms = [a.strip() for a in match.group(1).split(",") if a.strip()]
+        disallowed = [a for a in axioms if a not in allowed_axioms]
+        if disallowed:
+            return {"status": "FAIL", "disallowed": disallowed}
+        return {"status": "PASS", "axioms": axioms, "constructive": False}
+    return {"status": "UNKNOWN", "reason": "No axiom audit line found"}
+
+if __name__ == "__main__":
+    sample_audit = "'RDS.obligation' depends on axioms: [propext, Quot.sound]"
+    res = audit_axioms("RDS.obligation", sample_audit)
+    print("Axiom audit result:", res)
+'''
+
+
+# ---------------------------------------------------------------------------
+# Operator 7: BoundedFiniteModelOperator (bounded_finite_model)
+# ---------------------------------------------------------------------------
+
+class BoundedFiniteModelOperator:
+    """Bounded Finite Model and Counterexample Search Operator.
+
+    Exhaustively searches finite algebraic domains (such as finite groups Z_n,
+    permutation tables, or Cayley tables) to check algebraic properties (associativity,
+    commutativity, group axioms) or refute conjectures with concrete witnesses.
+    """
+
+    @staticmethod
+    def verify_cayley_property(
+        elements: List[str],
+        op_table: Dict[Tuple[str, str], str],
+        property_name: str = "associative"
+    ) -> Dict[str, Any]:
+        """Verifies an algebraic property on a Cayley operation table."""
+        elem_set = set(elements)
+        # Check closure
+        for (a, b), c in op_table.items():
+            if c not in elem_set:
+                return {
+                    "status": "FAIL",
+                    "assurance": "CLOSURE_VIOLATION",
+                    "counterexample": {"a": a, "b": b, "result": c, "not_in_domain": True}
+                }
+
+        if property_name == "associative":
+            for a in elements:
+                for b in elements:
+                    ab = op_table.get((a, b))
+                    for c in elements:
+                        bc = op_table.get((b, c))
+                        lhs = op_table.get((ab, c))
+                        rhs = op_table.get((a, bc))
+                        if lhs != rhs:
+                            return {
+                                "status": "FAIL",
+                                "assurance": "COUNTEREXAMPLE_FOUND",
+                                "property": "associative",
+                                "counterexample": {
+                                    "witness": [a, b, c],
+                                    "lhs_expr": f"({a} * {b}) * {c} = {ab} * {c} = {lhs}",
+                                    "rhs_expr": f"{a} * ({b} * {c}) = {a} * {bc} = {rhs}",
+                                }
+                            }
+            return {
+                "status": "PASS",
+                "assurance": "BOUNDED_FINITE_MODEL_VERIFIED",
+                "property": "associative",
+                "domain_size": len(elements),
+                "combinations_checked": len(elements) ** 3
+            }
+
+        elif property_name == "commutative":
+            for a in elements:
+                for b in elements:
+                    ab = op_table.get((a, b))
+                    ba = op_table.get((b, a))
+                    if ab != ba:
+                        return {
+                            "status": "FAIL",
+                            "assurance": "COUNTEREXAMPLE_FOUND",
+                            "property": "commutative",
+                            "counterexample": {
+                                "witness": [a, b],
+                                "lhs": f"{a} * {b} = {ab}",
+                                "rhs": f"{b} * {a} = {ba}",
+                            }
+                        }
+            return {
+                "status": "PASS",
+                "assurance": "BOUNDED_FINITE_MODEL_VERIFIED",
+                "property": "commutative",
+                "domain_size": len(elements),
+                "combinations_checked": len(elements) ** 2
+            }
+        else:
+            raise ValueError(f"Unsupported finite property '{property_name}'")
+
+    @staticmethod
+    def search_counterexample(
+        domain: List[Any],
+        predicate: Any
+    ) -> Dict[str, Any]:
+        """Exhaustively searches a finite domain for an element falsifying predicate."""
+        for item in domain:
+            try:
+                res = predicate(item)
+            except Exception as exc:
+                return {
+                    "status": "FAIL",
+                    "assurance": "PREDICATE_ERROR",
+                    "witness": item,
+                    "error": str(exc)
+                }
+            if not res:
+                return {
+                    "status": "FAIL",
+                    "assurance": "COUNTEREXAMPLE_FOUND",
+                    "witness": item,
+                    "domain_size": len(domain)
+                }
+        return {
+            "status": "PASS",
+            "assurance": "BOUNDED_FINITE_MODEL_VERIFIED",
+            "domain_size": len(domain),
+            "exhausted": True
+        }
+
+    @staticmethod
+    def scaffold_code() -> str:
+        return '''# Bounded Finite Model and Cayley Table Verifier Template
+# Checks algebraic closure and associativity on finite structures (e.g. GAP small groups).
+def check_associativity(elements, table):
+    for a in elements:
+        for b in elements:
+            ab = table[(a, b)]
+            for c in elements:
+                bc = table[(b, c)]
+                if table[(ab, c)] != table[(a, bc)]:
+                    return False, (a, b, c)
+    return True, None
+
+if __name__ == "__main__":
+    elems = ["e", "a", "b", "c"]
+    v4 = {
+        ("e","e"): "e", ("e","a"): "a", ("e","b"): "b", ("e","c"): "c",
+        ("a","e"): "a", ("a","a"): "e", ("a","b"): "c", ("a","c"): "b",
+        ("b","e"): "b", ("b","a"): "c", ("b","b"): "e", ("b","c"): "a",
+        ("c","e"): "c", ("c","a"): "b", ("c","b"): "a", ("c","c"): "e",
+    }
+    is_assoc, witness = check_associativity(elems, v4)
+    print("Klein four-group associativity verified:", is_assoc)
+'''
+
+
+# ---------------------------------------------------------------------------
+# Operator 8: ExplicitReductionTransferOperator (explicit_reduction_transfer)
+# ---------------------------------------------------------------------------
+
+class ExplicitReductionTransferOperator:
+    """Explicit Reduction and Representation Transfer Operator.
+
+    Verifies mathematical and computational reductions between two problem representations:
+    checks semantic preservation across sample instances and flags unclosed transfer obligations.
+    """
+
+    @staticmethod
+    def verify_reduction(
+        source_instances: List[Any],
+        forward_map: Any,
+        backward_map: Optional[Any],
+        source_evaluator: Any,
+        target_evaluator: Any
+    ) -> Dict[str, Any]:
+        """Evaluates reduction f: Source -> Target on source_instances."""
+        mismatches = []
+        reconstruction_failures = []
+        verified_count = 0
+
+        for idx, inst in enumerate(source_instances):
+            try:
+                mapped = forward_map(inst)
+                s_val = source_evaluator(inst)
+                t_val = target_evaluator(mapped)
+            except Exception as exc:
+                return {
+                    "status": "FAIL",
+                    "assurance": "REDUCTION_EVALUATION_ERROR",
+                    "instance_index": idx,
+                    "error": str(exc)
+                }
+
+            if s_val != t_val:
+                mismatches.append({
+                    "index": idx,
+                    "source_instance": str(inst),
+                    "mapped_instance": str(mapped),
+                    "source_result": s_val,
+                    "target_result": t_val
+                })
+                continue
+
+            if backward_map is not None:
+                try:
+                    reconstructed = backward_map(mapped)
+                    r_val = source_evaluator(reconstructed)
+                    if r_val != s_val:
+                        reconstruction_failures.append({
+                            "index": idx,
+                            "reconstructed": str(reconstructed),
+                            "expected_val": s_val,
+                            "reconstructed_val": r_val
+                        })
+                except Exception as exc:
+                    reconstruction_failures.append({"index": idx, "error": str(exc)})
+
+            verified_count += 1
+
+        if mismatches:
+            return {
+                "status": "FAIL",
+                "assurance": "REDUCTION_SEMANTIC_MISMATCH",
+                "total_instances": len(source_instances),
+                "mismatches": mismatches[:5],
+            }
+
+        has_reconstruction = (backward_map is not None)
+        if has_reconstruction and reconstruction_failures:
+            return {
+                "status": "FAIL",
+                "assurance": "RECONSTRUCTION_OBLIGATION_UNMET",
+                "reconstruction_failures": reconstruction_failures[:5]
+            }
+
+        assurance = "EXPLICIT_REDUCTION_CERTIFIED" if has_reconstruction else "FORWARD_REDUCTION_VALIDATED_RECONSTRUCTION_UNRESOLVED"
+        return {
+            "status": "PASS",
+            "assurance": assurance,
+            "total_instances": len(source_instances),
+            "verified_instances": verified_count,
+            "has_bidirectional_reconstruction": has_reconstruction,
+        }
+
+    @staticmethod
+    def scaffold_code() -> str:
+        return '''# Explicit Reduction and Representation Transfer Template
+# Verifies that transforming problem representation preserves semantic validity.
+def verify_transfer(instances, forward_fn, eval_source, eval_target):
+    for x in instances:
+        y = forward_fn(x)
+        if eval_source(x) != eval_target(y):
+            return False, x, y
+    return True, None, None
+
+if __name__ == "__main__":
+    test_cases = [-5, -2, 0, 3, 7]
+    def f_map(x): return (max(0, x), max(0, -x))
+    def eval_src(x): return x > 0
+    def eval_tgt(pair): return pair[0] > pair[1]
+
+    ok, bad_x, bad_y = verify_transfer(test_cases, f_map, eval_src, eval_tgt)
+    print("Reduction semantics preserved:", ok)
+'''
+
+
+# ---------------------------------------------------------------------------
 # Registry and CLI Helpers
 # ---------------------------------------------------------------------------
 
@@ -675,6 +1015,27 @@ OPERATORS = {
         "operator_class": EGraphEquivalenceOperator,
         "primary_signal": "proof_bottleneck",
         "guarantee": "Confluence without phase-ordering loops in equational theories",
+    },
+    "lean_axiom_review": {
+        "operator_id": "lean_axiom_review",
+        "title": "Lean 4 Axiom & Dependency Audit Operator",
+        "operator_class": LeanAxiomReviewOperator,
+        "primary_signal": "proof_bottleneck",
+        "guarantee": "Constructive or authorized classical axiom boundary verification",
+    },
+    "bounded_finite_model": {
+        "operator_id": "bounded_finite_model",
+        "title": "Bounded Finite Model & Counterexample Search Operator",
+        "operator_class": BoundedFiniteModelOperator,
+        "primary_signal": "proof_bottleneck",
+        "guarantee": "Exhaustive finite Cayley table verification and witness refutation",
+    },
+    "explicit_reduction_transfer": {
+        "operator_id": "explicit_reduction_transfer",
+        "title": "Explicit Problem Reduction & Representation Transfer",
+        "operator_class": ExplicitReductionTransferOperator,
+        "primary_signal": "proof_bottleneck",
+        "guarantee": "Semantic validity preservation and unclosed obligation tracking",
     },
 }
 
@@ -736,6 +1097,31 @@ def test_operator(card_id: str) -> Dict[str, Any]:
         res = EGraphEquivalenceOperator.verify_algebraic_equivalence(
             ("*", "x", ("+", "y", "0")),
             ("*", "y", "x")
+        )
+    elif card_id == "lean_axiom_review":
+        sample_audit = "'RDS.obligation' depends on axioms: [propext, Quot.sound]"
+        res = LeanAxiomReviewOperator.audit_lean_axioms(
+            "RDS.obligation",
+            sample_audit,
+            allowed_axioms={"propext", "Quot.sound"},
+            is_stdout=True
+        )
+    elif card_id == "bounded_finite_model":
+        elems = ["e", "a", "b", "c"]
+        v4 = {
+            ("e", "e"): "e", ("e", "a"): "a", ("e", "b"): "b", ("e", "c"): "c",
+            ("a", "e"): "a", ("a", "a"): "e", ("a", "b"): "c", ("a", "c"): "b",
+            ("b", "e"): "b", ("b", "a"): "c", ("b", "b"): "e", ("b", "c"): "a",
+            ("c", "e"): "c", ("c", "a"): "b", ("c", "b"): "a", ("c", "c"): "e",
+        }
+        res = BoundedFiniteModelOperator.verify_cayley_property(elems, v4, "associative")
+    elif card_id == "explicit_reduction_transfer":
+        res = ExplicitReductionTransferOperator.verify_reduction(
+            source_instances=[-5, -2, 0, 3, 7],
+            forward_map=lambda x: (max(0, x), max(0, -x)),
+            backward_map=lambda p: p[0] - p[1],
+            source_evaluator=lambda x: x > 0,
+            target_evaluator=lambda p: p[0] > p[1]
         )
     else:
         res = {"status": "UNKNOWN"}

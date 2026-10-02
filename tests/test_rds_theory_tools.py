@@ -145,6 +145,9 @@ class TheoryToolTests(unittest.TestCase):
         available_ids = {op["card_id"] for op in ops_list}
         self.assertIn("state_space_refinement", available_ids)
         self.assertIn("egraph_equivalence_saturation", available_ids)
+        self.assertIn("lean_axiom_review", available_ids)
+        self.assertIn("bounded_finite_model", available_ids)
+        self.assertIn("explicit_reduction_transfer", available_ids)
 
         # Scaffold in-memory and write to file
         scaffold_res = tools.scaffold_operator("state_space_refinement")

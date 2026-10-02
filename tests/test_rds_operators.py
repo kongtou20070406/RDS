@@ -158,15 +158,125 @@ class OperatorUnitTests(unittest.TestCase):
         self.assertEqual(res_distinct["assurance"], "EGRAPH_DISTINCT_CLASSES")
         self.assertFalse(res_distinct["equivalent"])
 
+    def test_lean_axiom_review_operator(self):
+        # 1. Clean constructive theorem
+        res_constructive = ops.LeanAxiomReviewOperator.audit_lean_axioms(
+            "RDS.constructive",
+            "'RDS.constructive' does not depend on any axioms",
+            allowed_axioms=set(),
+            is_stdout=True
+        )
+        self.assertEqual(res_constructive["status"], "PASS")
+        self.assertEqual(res_constructive["assurance"], "AXIOM_DEPENDENCY_VERIFIED")
+        self.assertTrue(res_constructive["is_constructive"])
+        self.assertEqual(res_constructive["axioms_detected"], [])
+
+        # 2. Classical axioms allowed
+        res_classical = ops.LeanAxiomReviewOperator.audit_lean_axioms(
+            "RDS.classical",
+            "'RDS.classical' depends on axioms: [propext, Quot.sound]",
+            allowed_axioms={"propext", "Quot.sound"},
+            is_stdout=True
+        )
+        self.assertEqual(res_classical["status"], "PASS")
+        self.assertEqual(res_classical["axioms_detected"], ["Quot.sound", "propext"])
+
+        # 3. Disallowed axiom
+        res_disallowed = ops.LeanAxiomReviewOperator.audit_lean_axioms(
+            "RDS.unauthorized",
+            "'RDS.unauthorized' depends on axioms: [Classical.choice, UnsoundAxiom]",
+            allowed_axioms={"Classical.choice"},
+            is_stdout=True
+        )
+        self.assertEqual(res_disallowed["status"], "FAIL")
+        self.assertEqual(res_disallowed["assurance"], "DISALLOWED_AXIOM_DEPENDENCY")
+        self.assertIn("UnsoundAxiom", res_disallowed["disallowed_axioms"])
+
+        # 4. 'sorry' gap in source code
+        res_sorry = ops.LeanAxiomReviewOperator.audit_lean_axioms(
+            "RDS.incomplete",
+            "theorem obligation : 1 = 1 := by sorry",
+            is_stdout=False
+        )
+        self.assertEqual(res_sorry["status"], "FAIL")
+        self.assertEqual(res_sorry["assurance"], "SORRY_AXIOM_DETECTED")
+
+    def test_bounded_finite_model_operator(self):
+        elems = ["e", "a", "b", "c"]
+        v4 = {
+            ("e", "e"): "e", ("e", "a"): "a", ("e", "b"): "b", ("e", "c"): "c",
+            ("a", "e"): "a", ("a", "a"): "e", ("a", "b"): "c", ("a", "c"): "b",
+            ("b", "e"): "b", ("b", "a"): "c", ("b", "b"): "e", ("b", "c"): "a",
+            ("c", "e"): "c", ("c", "a"): "b", ("c", "b"): "a", ("c", "c"): "e",
+        }
+        res_v4 = ops.BoundedFiniteModelOperator.verify_cayley_property(elems, v4, "associative")
+        self.assertEqual(res_v4["status"], "PASS")
+        self.assertEqual(res_v4["assurance"], "BOUNDED_FINITE_MODEL_VERIFIED")
+        self.assertEqual(res_v4["combinations_checked"], 64)
+
+        # Non-associative magma: (a * a) * b != a * (a * b)
+        bad_table = dict(v4)
+        bad_table[("a", "a")] = "b"  # mutate multiplication
+        res_bad = ops.BoundedFiniteModelOperator.verify_cayley_property(elems, bad_table, "associative")
+        self.assertEqual(res_bad["status"], "FAIL")
+        self.assertEqual(res_bad["assurance"], "COUNTEREXAMPLE_FOUND")
+        self.assertIn("witness", res_bad["counterexample"])
+
+        # Counterexample search over finite domain
+        domain = [2, 4, 6, 7, 8]
+        is_even = lambda n: n % 2 == 0
+        search_res = ops.BoundedFiniteModelOperator.search_counterexample(domain, is_even)
+        self.assertEqual(search_res["status"], "FAIL")
+        self.assertEqual(search_res["assurance"], "COUNTEREXAMPLE_FOUND")
+        self.assertEqual(search_res["witness"], 7)
+
+    def test_explicit_reduction_transfer_operator(self):
+        # 1. Full bidirectional reduction
+        res_full = ops.ExplicitReductionTransferOperator.verify_reduction(
+            source_instances=[-10, -1, 0, 5, 12],
+            forward_map=lambda x: (max(0, x), max(0, -x)),
+            backward_map=lambda p: p[0] - p[1],
+            source_evaluator=lambda x: x > 0,
+            target_evaluator=lambda p: p[0] > p[1]
+        )
+        self.assertEqual(res_full["status"], "PASS")
+        self.assertEqual(res_full["assurance"], "EXPLICIT_REDUCTION_CERTIFIED")
+        self.assertEqual(res_full["verified_instances"], 5)
+
+        # 2. Forward only (backward unresolved)
+        res_fwd = ops.ExplicitReductionTransferOperator.verify_reduction(
+            source_instances=[1, 2, 3],
+            forward_map=lambda x: x * 2,
+            backward_map=None,
+            source_evaluator=lambda x: x > 0,
+            target_evaluator=lambda y: y > 0
+        )
+        self.assertEqual(res_fwd["status"], "PASS")
+        self.assertEqual(res_fwd["assurance"], "FORWARD_REDUCTION_VALIDATED_RECONSTRUCTION_UNRESOLVED")
+
+        # 3. Semantic mismatch
+        res_mismatch = ops.ExplicitReductionTransferOperator.verify_reduction(
+            source_instances=[-2, 3],
+            forward_map=lambda x: x * -1,  # inverts sign, breaks positivity
+            backward_map=None,
+            source_evaluator=lambda x: x > 0,
+            target_evaluator=lambda y: y > 0
+        )
+        self.assertEqual(res_mismatch["status"], "FAIL")
+        self.assertEqual(res_mismatch["assurance"], "REDUCTION_SEMANTIC_MISMATCH")
+
     def test_registry_and_scaffolding(self):
         available = ops.list_available_operators()
-        self.assertEqual(len(available), 5)
+        self.assertEqual(len(available), 8)
         card_ids = [item["card_id"] for item in available]
         self.assertIn("state_space_refinement", card_ids)
         self.assertIn("contraction_target_bias", card_ids)
         self.assertIn("structural_preflight", card_ids)
         self.assertIn("exact_symbolic_constraints", card_ids)
         self.assertIn("egraph_equivalence_saturation", card_ids)
+        self.assertIn("lean_axiom_review", card_ids)
+        self.assertIn("bounded_finite_model", card_ids)
+        self.assertIn("explicit_reduction_transfer", card_ids)
 
         for card_id in card_ids:
             scaffold = ops.get_operator_scaffold(card_id)

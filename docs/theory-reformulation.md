@@ -25,7 +25,7 @@ Advisor 从已有的 `selection_review` 与同作用域 checkpoint 审查生成 
 
 ## 按需查预载工具与可运行算子脚手架
 
-九张有适用条件的工具卡预载在[目录](../references/theory-tools.json)，按当前信号查一至三张摘要，再按 ID 读取需要的一张：
+十二张有适用条件的工具卡预载在[目录](../references/theory-tools.json)，按当前信号查一至三张摘要，再按 ID 读取需要的一张：
 
 ```text
 python -B scripts/rds_theory_tools.py --signals trajectory_degradation local_global_gap --limit 3
@@ -40,8 +40,8 @@ python -B scripts/rds_theory_tools.py --test-operator state_space_refinement
 python -B scripts/rds_theory_tools.py --scaffold state_space_refinement --out operator.py
 ```
 
-- `--list-operators`：列出当前所有已实现可运行算子的理论卡、主信号与其数学保证（例如状态空间 ZOH 离散化的 $\mathcal{O}(\Delta t)$ 步长不变性、无穷范数收缩与不动点分析、预检接口断言、以及基于 E-Graph 的等式饱和无序重写验证等）；
-- `--test-operator <card-id>`：直接在当前环境执行算子内置验证，检验柯西收敛序列或范数界，输出标准 JSON 报告；
+- `--list-operators`：列出当前所有已实现可运行算子的理论卡、主信号与其数学保证（包括状态空间 ZOH 离散化的 $\mathcal{O}(\Delta t)$ 步长不变性、无穷范数收缩与不动点分析、预检接口断言、有理多项式无浮点误差区间证书、基于 E-Graph 的等式饱和无序重写验证、以及 5.8 元数学交付的三项关键算子：Lean 4 公理与环境依赖审计、有界精确模型与 Cayley 反例搜索、明确命题归约与表述迁移检查）；
+- `--test-operator <card-id>`：直接在当前环境执行算子内置验证，检验柯西收敛序列、范数界、公理依赖或有限群反例，输出标准 JSON 报告；
 - `--scaffold <card-id> [--out <path>]`：导出独立、自包含且带自测的 Python 模板代码，可直接写入目标文件供模型集成。
 
 摘要保留 `id/title/reason/matched_tags/required_inputs/locator/runnable_operator` 和目录 SHA；`selection=TAG_MATCH_ONLY`、`prerequisites=NOT_ASSESSED`。标签命中只提供工具线索，不验证前提、排名科学价值或授权执行。`goal.reformulation.signals` 可以附同一短名单，历史 `as_of` 必须允许该目录日期。Skill 只给入口，不加载整个库；没有匹配时保留未匹配数量，不硬塞无关工具。
