@@ -17,7 +17,9 @@ python -B scripts/rds_cli.py --root <project> advise --research-context <context
 
 ## Advisor 如何使用历史
 
-Advisor 在只读事务中核对 checkpoint 哈希与当前契约，只使用匹配问题的结构化决定。相同路线在相同目标、范围、事实和前提下已被否决时，从可用候选中剪除，并保留 `REPEAT_REJECTED_ROUTE` 及原 checkpoint 身份。比较的是实际干预结构，显示 ID 不作为路线身份；程序不理解任意同义改写。
+Advisor 在只读事务中核对 checkpoint 哈希与当前契约，使用匹配问题的结构化决定；声明了相同验收谓词的同一目标，还会读取改名问题的记录（见下文）。相同路线在相同目标、范围、事实和前提下已被否决时，从可用候选中剪除，并保留 `REPEAT_REJECTED_ROUTE` 及原 checkpoint 身份。比较的是实际干预结构，显示 ID 不作为路线身份；程序不理解任意同义改写。
+
+`decision.goal_conditions`（不计顺序）与 `goal_revision` 相同时，即使 `question_id` 改名，也视为同一目标：范围与事实都未变的被否决路线照样剪除，标记中给出原 `recorded_question_id`；范围或事实改变时照常 `REOPEN_REVIEW`。无论记录在哪个问题下，都按 checkpoint 顺序以最近一次适用的决定为准：回到旧问题既不能绕过后来的否决，也不会让已被取代的否决继续生效。就绪候选只改了某条被否决路线的参数（该路线在同一目标、当前范围下最近一次记录仍为否决，且记录时的审查事实与现在相同）时，提示 `GOAL_ROUTES_REJECTED`；目标仍为 `UNKNOWN` 或 `FALSE` 时 `next_move` 为 `REFORMULATE`：先把一个改变前提、表示或方法的方案与最小修补比较，再决定是否继续加参数。首次尚未测量的尝试、改变了操作或干预的路线、范围明确的证明义务检查和已有可判别对照不受打断；参数变体本身不被阻止；范围或相关事实已改变时不给变体提示，因为新的范围或证据尚未失败。描述、竞争解释和结果标签与路线身份一样只作显示；没有结构化 target、intervention 或 operation 的动作不归入参数变体。其他问题的格式错误记录不阻断本问题：Advisor 提示 `GOAL_HISTORY_SKIPPED`，只用本问题的记录。验收谓词或修订号不同、未声明谓词时不共享历史；参数域否决与 A→B→A 摇摆仍只看本问题；不同项目根目录仍不共享账本。
 
 相关事实、前提、测量、范围或目标改变时保留候选并提示 `REOPEN_REVIEW`；新干预按其实际结构比较。A→B→A 提示 `DECISION_OSCILLATION`，供人核对摇摆原因，不直接禁止执行。发现损坏或契约冲突时报告 `LOOP_HISTORY_REVIEW_ERROR`，不能用部分损坏历史剪枝。
 
