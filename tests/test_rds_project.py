@@ -1055,7 +1055,7 @@ class StopPolicyAndMaintenanceTests(unittest.TestCase):
 
     def test_progress_stalled_after_observed_growth_retains_output_and_charge(self):
         self.bind_progress_code('from pathlib import Path\nimport time\n'
-                                'print("started", flush=True)\nPath("ack-0").touch()\ntime.sleep(30)\n')
+                                'print("x" * 64, flush=True)\nPath("ack-0").touch()\ntime.sleep(30)\n')
         store = self.contract_with(stop_policy={"schema": 1, "wall_seconds": 30,
                                                 "progress": {"window_seconds": 0.2, "min_bytes": 10}})
         real_popen = subprocess.Popen
@@ -1084,7 +1084,7 @@ class StopPolicyAndMaintenanceTests(unittest.TestCase):
         self.assertEqual(receipt.get('stop_reason'), 'PROGRESS_NO_GROWTH', evidence)
         self.assertFalse(receipt['timeout'], evidence)
         self.assertEqual((self.root / '.rds/project-artifacts/r1/stdout.bin').read_bytes().splitlines(),
-                         [b'started'], evidence)
+                         [b'x' * 64], evidence)
         self.assertEqual(store.snapshot()['budget']['cpu_seconds']['charged_estimate'], 1, evidence)
         self.assertEqual(store.snapshot()['budget']['cpu_seconds']['reserved'], 0, evidence)
         self.assertEqual(store.recover('r1')['sha256'], receipt['sha256'], evidence)
