@@ -471,6 +471,63 @@ class SelectionReviewTests(unittest.TestCase):
         self.assertEqual(review['next_move']['kind'], 'RESOLVE_PREMISE')
         self.assertIn('integrity', review['next_move']['reason'])
 
+    def test_goal_rejection_history_prompts_a_changed_premise_only_for_a_new_ready_variant(self):
+        graph, context = fixture()
+        context['decision']['goal_conditions'] = [{'fact': 'quality', 'value': True}, {'fact': 'scope', 'value': True}]
+        context['facts']['quality'] = {'value': False, 'source': 'reported-terminal.json'}
+        graph['nodes'][0]['executable']['action'].update(target='Measure quality', goal_contribution={
+            'target': 'quality', 'path': ['Measure quality'], 'source': 'protocol.json'})
+        result = search_directions(graph, context)
+        history = {'kind': 'GOAL_ROUTES_REJECTED', 'goal_revision': 'g1', 'rejected_routes': 2, 'candidate_ids': ['route:probe'],
+                   'question_ids': ['earlier', 'renamed'], 'checkpoint_ids': ['a', 'b']}
+        result['loop_review'] = {'authorization': 'UNCHANGED', 'status': 'REVIEW_REQUIRED', 'flags': [history]}
+        before = deepcopy(result)
+        move = review_selection(result, context)['next_move']
+        self.assertEqual(result, before)
+        self.assertEqual(move['kind'], 'REFORMULATE')
+        self.assertIn('changes only parameters of 2 route(s)', move['reason'])
+        self.assertIn('not a capacity bound or a guilty premise', move['reason'])
+        self.assertEqual(move['authorization'], 'UNCHANGED')
+
+        # Without a matching ready variant the existing unresolved-goal review is unchanged.
+        other = deepcopy(result)
+        other['loop_review']['flags'][0]['candidate_ids'] = ['route:another']
+        self.assertEqual(review_selection(other, context)['next_move']['kind'], 'RESOLVE_PREMISE')
+        empty = deepcopy(result)
+        empty['candidates'] = []
+        self.assertEqual(review_selection(empty, context)['next_move']['kind'], 'RESOLVE_PREMISE')
+
+        # Overlapping rival predictions still ask for a discriminator first.
+        overlap = deepcopy(graph)
+        overlap['nodes'][0]['executable']['action']['discrimination'] = {
+            'scope_id': 'local-v1', 'source': 'declared-predictions.json',
+            'predictions': {'bias': ['positive'], 'state-support': ['positive']}}
+        overlap_result = search_directions(overlap, context)
+        overlap_result['loop_review'] = deepcopy(result['loop_review'])
+        overlap_review = review_selection(overlap_result, context)
+        self.assertIn('RIVAL_PREDICTIONS_OVERLAP', {f['kind'] for f in overlap_review['flags']})
+        self.assertEqual(overlap_review['next_move']['kind'], 'DESIGN_DISCRIMINATOR')
+
+        # A reported closed goal needs no jump prompt.
+        context['facts']['quality'] = {'value': True, 'source': 'reported-terminal.json'}
+        context['facts']['scope'] = {'value': True, 'source': 'reported-terminal.json'}
+        self.assertNotIn('next_move', review_selection(result, context))
+
+    def test_route_family_ignores_only_parameters_of_structured_actions(self):
+        from rds_advisor import _loop_family, _loop_route
+        base = {'id': 'c', 'action': {'id': 'a', 'kind': 'PAIRED_TEST', 'description': 'Train', 'operation': 'train',
+                                      'target': 'gain', 'parameters': {'gain': 16}}}
+        variant = deepcopy(base)
+        variant['action'].update(parameters={'gain': 16, 'tau': 0.5}, description='A renamed recipe')
+        changed = deepcopy(base)
+        changed['action']['operation'] = 'distill'
+        self.assertNotEqual(_loop_route(base), _loop_route(variant))
+        self.assertEqual(_loop_family(base), _loop_family(variant))
+        self.assertNotEqual(_loop_family(base), _loop_family(changed))
+        described = {'id': 'd', 'action': {'id': 'a', 'kind': 'PAIRED_TEST', 'description': 'Ablate attention heads'}}
+        self.assertIsNone(_loop_family(described))
+        self.assertIsNone(_loop_family({'id': 'e', 'action': {**base['action'], 'parameters': ['not', 'a', 'map']}}))
+
     def test_goal_predicates_are_nonempty_bounded_and_named(self):
         graph, context = fixture()
         for value in ([], [{}], [{'fact': ''}], [{'fact': 'x'}] * 33, 'free text'):
