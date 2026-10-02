@@ -89,6 +89,24 @@ def test_operator(card_id):
     return operators.test_operator(card_id)
 
 
+def run_pipeline(pipeline_spec_path):
+    require(isinstance(pipeline_spec_path, (str, Path)) and str(pipeline_spec_path), "Pipeline spec path must be nonempty")
+    spec_path = Path(pipeline_spec_path)
+    require(spec_path.is_file(), "Pipeline spec file not found: " + str(pipeline_spec_path))
+    with spec_path.open("r", encoding="utf-8") as stream:
+        spec = json.load(stream)
+    if isinstance(spec, list):
+        stages = spec
+        short_circuit = True
+    elif isinstance(spec, dict):
+        stages = spec.get("stages")
+        require(isinstance(stages, list), "Pipeline spec object must contain a 'stages' list")
+        short_circuit = bool(spec.get("short_circuit", True))
+    else:
+        raise ValueError("Pipeline spec must be a JSON array or object with 'stages'")
+    return operators.compose_operators(stages, short_circuit=short_circuit)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
@@ -97,6 +115,7 @@ def main():
     mode.add_argument("--list-operators", action="store_true")
     mode.add_argument("--scaffold")
     mode.add_argument("--test-operator")
+    mode.add_argument("--run-pipeline", help="Run an operator pipeline defined in a JSON spec file")
     parser.add_argument("--limit", type=int, default=3)
     parser.add_argument("--out", help="Create a new output file; requires --scaffold")
     args = parser.parse_args()
@@ -109,6 +128,8 @@ def main():
             result = scaffold_operator(args.scaffold, args.out)
         elif args.test_operator is not None:
             result = test_operator(args.test_operator)
+        elif args.run_pipeline is not None:
+            result = run_pipeline(args.run_pipeline)
         elif args.id is not None:
             result = get_card(args.id)
         else:
@@ -116,6 +137,8 @@ def main():
         print(json.dumps(result, sort_keys=True, separators=(",", ":"), allow_nan=False))
         if args.test_operator is not None:
             return {"PASS": 0, "FAIL": 1, "UNKNOWN": 2}.get(result["test_result"]["status"], 2)
+        if args.run_pipeline is not None:
+            return {"PASS": 0, "FAIL": 1, "UNKNOWN": 2}.get(result.get("overall_status"), 2)
         return 0
     except (ValueError, TypeError, KeyError, OSError) as exc:
         print(json.dumps({"status": "INVALID_INPUT", "reason": str(exc)}))

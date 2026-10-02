@@ -141,7 +141,7 @@ class OperatorUnitTests(unittest.TestCase):
 
     def test_registry_and_scaffolding(self):
         available = ops.list_available_operators()
-        self.assertEqual(len(available), 22)
+        self.assertEqual(len(available), 28)
         card_ids = [item["card_id"] for item in available]
         expected_cards = [
             "state_space_refinement", "contraction_target_bias", "structural_preflight",
@@ -151,7 +151,10 @@ class OperatorUnitTests(unittest.TestCase):
             "empirical_bernstein_bound", "symplectic_energy_conservation", "control_barrier_invariance",
             "poincare_section_return", "liouville_phase_volume", "dimensional_homogeneity",
             "causal_dag_no_leakage", "data_processing_inequality", "conservation_flow_balance",
-            "kolmogorov_probability_axioms",
+            "kolmogorov_probability_axioms", "bezout_diophantine_solvability",
+            "chinese_remainder_congruence", "group_axioms_cayley_table",
+            "group_homomorphism_equivariance", "poset_partial_order_axioms",
+            "knaster_tarski_fixed_point",
         ]
         for exp in expected_cards:
             self.assertIn(exp, card_ids)
@@ -357,6 +360,18 @@ class OperatorUnitTests(unittest.TestCase):
                     exported_class.verify_flow_balance = lambda *args, **kwargs: {"status": "FAIL", "nodes_audited": 0}
                 elif card_id == "kolmogorov_probability_axioms":
                     exported_class.verify_probability_distribution = lambda *args, **kwargs: {"status": "FAIL", "events_count": 0}
+                elif card_id == "bezout_diophantine_solvability":
+                    exported_class.solve_linear_diophantine = lambda *args, **kwargs: {"status": "FAIL", "gcd": 0}
+                elif card_id == "chinese_remainder_congruence":
+                    exported_class.solve_congruences = lambda *args, **kwargs: {"status": "FAIL"}
+                elif card_id == "group_axioms_cayley_table":
+                    exported_class.verify_cayley_table = lambda *args, **kwargs: {"status": "FAIL", "is_abelian": False}
+                elif card_id == "group_homomorphism_equivariance":
+                    exported_class.verify_homomorphism = lambda *args, **kwargs: {"status": "FAIL"}
+                elif card_id == "poset_partial_order_axioms":
+                    exported_class.verify_poset = lambda *args, **kwargs: {"status": "FAIL", "is_total_order": False}
+                elif card_id == "knaster_tarski_fixed_point":
+                    exported_class.find_monotone_fixed_points = lambda *args, **kwargs: {"status": "FAIL", "least_fixed_point": None}
                 with self.assertRaises(AssertionError):
                     namespace["operator_self_test"]()
 
@@ -776,6 +791,157 @@ class OperatorUnitTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             ops.KolmogorovProbabilityAxiomOperator.verify_probability_distribution([])
+
+    def test_bezout_diophantine_operator(self):
+        # 12x + 18y = 30 has solution since gcd(12, 18) = 6 divides 30
+        res = ops.BezoutDiophantineOperator.solve_linear_diophantine(12, 18, 30)
+        self.assertEqual(res["status"], "PASS")
+        self.assertEqual(res["assurance"], "DIOPHANTINE_SOLUTION_CERTIFIED")
+        self.assertEqual(res["gcd"], 6)
+        x0, y0 = res["particular_solution"]
+        self.assertEqual(12 * x0 + 18 * y0, 30)
+
+        # 12x + 18y = 35 has no integer solution since 6 does not divide 35
+        res_fail = ops.BezoutDiophantineOperator.solve_linear_diophantine(12, 18, 35)
+        self.assertEqual(res_fail["status"], "FAIL")
+        self.assertEqual(res_fail["assurance"], "DIOPHANTINE_UNREACHABLE_WITNESS")
+        self.assertEqual(res_fail["witness"]["remainder"], 5)
+
+        with self.assertRaises(ValueError):
+            ops.BezoutDiophantineOperator.solve_linear_diophantine(1.5, 2, 3)
+
+    def test_chinese_remainder_congruence_operator(self):
+        # Compatible system: x = 2 (mod 3), x = 3 (mod 5), x = 2 (mod 7) -> unique sol = 23 (mod 105)
+        res = ops.ChineseRemainderCongruenceOperator.solve_congruences([2, 3, 2], [3, 5, 7])
+        self.assertEqual(res["status"], "PASS")
+        self.assertEqual(res["assurance"], "CHINESE_REMAINDER_SOLVED")
+        self.assertEqual(res["unique_solution"], 23)
+        self.assertEqual(res["lcm_modulus"], 105)
+
+        # Incompatible system: x = 1 (mod 4), x = 2 (mod 6) -> gcd(4, 6) = 2, 1 != 2 (mod 2)
+        res_fail = ops.ChineseRemainderCongruenceOperator.solve_congruences([1, 2], [4, 6])
+        self.assertEqual(res_fail["status"], "FAIL")
+        self.assertEqual(res_fail["assurance"], "MODULAR_CONGRUENCE_INCOMPATIBLE_WITNESS")
+        self.assertEqual(res_fail["witness"]["gcd"], 2)
+
+        with self.assertRaises(ValueError):
+            ops.ChineseRemainderCongruenceOperator.solve_congruences([1], [-5])
+
+    def test_group_axioms_cayley_operator(self):
+        # Klein 4-group (Z2 x Z2): abelian group of order 4
+        elements = ["e", "a", "b", "c"]
+        table = [
+            ["e", "a", "b", "c"],
+            ["a", "e", "c", "b"],
+            ["b", "c", "e", "a"],
+            ["c", "b", "a", "e"]
+        ]
+        res = ops.GroupAxiomsCayleyOperator.verify_cayley_table(elements, table)
+        self.assertEqual(res["status"], "PASS")
+        self.assertEqual(res["assurance"], "GROUP_AXIOMS_CERTIFIED")
+        self.assertEqual(res["identity_element"], "e")
+        self.assertTrue(res["is_abelian"])
+
+        # Non-associative operation (Magma)
+        bad_table = [
+            ["e", "a", "b", "c"],
+            ["a", "b", "c", "e"],
+            ["b", "c", "a", "e"],
+            ["c", "e", "e", "e"]
+        ]
+        res_fail = ops.GroupAxiomsCayleyOperator.verify_cayley_table(elements, bad_table)
+        self.assertEqual(res_fail["status"], "FAIL")
+        self.assertIn("witness", res_fail)
+
+        with self.assertRaises(ValueError):
+            ops.GroupAxiomsCayleyOperator.verify_cayley_table(["e", "a"], [["e"]])
+
+    def test_group_homomorphism_equivariance_operator(self):
+        # Embedding Z2 -> Z2 x Z2
+        src_table = [[0, 1], [1, 0]]
+        tgt_table = [[0, 1, 2, 3], [1, 0, 3, 2], [2, 3, 0, 1], [3, 2, 1, 0]]
+        res = ops.GroupHomomorphismEquivarianceOperator.verify_homomorphism(src_table, tgt_table, {0: 0, 1: 1})
+        self.assertEqual(res["status"], "PASS")
+        self.assertEqual(res["assurance"], "GROUP_HOMOMORPHISM_CERTIFIED")
+
+        # Invalid non-homomorphic map
+        res_fail = ops.GroupHomomorphismEquivarianceOperator.verify_homomorphism(src_table, tgt_table, {0: 1, 1: 1})
+        self.assertEqual(res_fail["status"], "FAIL")
+        self.assertEqual(res_fail["assurance"], "HOMOMORPHISM_BREACH_WITNESS")
+
+        with self.assertRaises(ValueError):
+            ops.GroupHomomorphismEquivarianceOperator.verify_homomorphism(src_table, tgt_table, {0: 0})
+
+    def test_poset_partial_order_operator(self):
+        # Chain order 0 <= 1 <= 2
+        rel = [
+            [True, True, True],
+            [False, True, True],
+            [False, False, True]
+        ]
+        res = ops.PosetPartialOrderOperator.verify_poset(["x", "y", "z"], rel)
+        self.assertEqual(res["status"], "PASS")
+        self.assertEqual(res["assurance"], "POSET_AXIOMS_CERTIFIED")
+        self.assertTrue(res["is_total_order"])
+
+        # Violates transitivity: x <= y and y <= z but not x <= z
+        bad_rel = [
+            [True, True, False],
+            [False, True, True],
+            [False, False, True]
+        ]
+        res_fail = ops.PosetPartialOrderOperator.verify_poset(["x", "y", "z"], bad_rel)
+        self.assertEqual(res_fail["status"], "FAIL")
+        self.assertEqual(res_fail["assurance"], "TRANSITIVITY_BREACH_WITNESS")
+
+        with self.assertRaises(ValueError):
+            ops.PosetPartialOrderOperator.verify_poset(["x"], [[True, False]])
+
+    def test_knaster_tarski_fixed_point_operator(self):
+        # 3-element chain with monotone map f(0)=0, f(1)=1, f(2)=1
+        rel = [
+            [True, True, True],
+            [False, True, True],
+            [False, False, True]
+        ]
+        res = ops.KnasterTarskiFixedPointOperator.find_monotone_fixed_points(3, rel, {0: 0, 1: 1, 2: 1})
+        self.assertEqual(res["status"], "PASS")
+        self.assertEqual(res["assurance"], "KNASTER_TARSKI_FIXED_POINT_CERTIFIED")
+        self.assertEqual(res["least_fixed_point"], 0)
+        self.assertEqual(res["greatest_fixed_point"], 1)
+
+        # Inversion map f(0)=2, f(1)=1, f(2)=0 violates monotonicity (0 <= 2 but f(0) > f(2))
+        res_fail = ops.KnasterTarskiFixedPointOperator.find_monotone_fixed_points(3, rel, {0: 2, 1: 1, 2: 0})
+        self.assertEqual(res_fail["status"], "FAIL")
+        self.assertEqual(res_fail["assurance"], "NON_MONOTONE_OPERATOR_WITNESS")
+
+        with self.assertRaises(ValueError):
+            ops.KnasterTarskiFixedPointOperator.find_monotone_fixed_points(0, [], {})
+
+    def test_operator_pipeline_and_composition(self):
+        stages = [
+            {"name": "check_bezout", "card_id": "bezout_diophantine_solvability", "method": "solve_linear_diophantine", "args": (12, 18, 30)},
+            {"name": "check_crt", "card_id": "chinese_remainder_congruence", "method": "solve_congruences", "args": ([2, 3, 2], [3, 5, 7])},
+            {"name": "check_kolmogorov", "card_id": "kolmogorov_probability_axioms", "method": "verify_probability_distribution", "args": ([0.4, 0.6],)}
+        ]
+        res_pass = ops.compose_operators(stages)
+        self.assertEqual(res_pass["status"], "PASS")
+        self.assertEqual(res_pass["assurance"], "PIPELINE_ALL_STAGES_EVALUATED")
+        self.assertEqual(res_pass["total_stages"], 3)
+
+        # Short-circuit on failure
+        stages_fail = [
+            {"name": "check_bezout_fail", "card_id": "bezout_diophantine_solvability", "method": "solve_linear_diophantine", "args": (12, 18, 35)},
+            {"name": "check_crt_unreached", "card_id": "chinese_remainder_congruence", "method": "solve_congruences", "args": ([2, 3, 2], [3, 5, 7])}
+        ]
+        res_short = ops.compose_operators(stages_fail, short_circuit=True)
+        self.assertEqual(res_short["status"], "FAIL")
+        self.assertEqual(res_short["assurance"], "PIPELINE_SHORT_CIRCUITED_AT_FAIL")
+        self.assertEqual(res_short["failing_stage_name"], "check_bezout_fail")
+        self.assertEqual(len(res_short["completed_stages"]), 1)
+
+        with self.assertRaises(ValueError):
+            ops.compose_operators([])
 
 
 if __name__ == "__main__":

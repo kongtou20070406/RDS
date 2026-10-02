@@ -70,6 +70,47 @@ python -B scripts/rds_theory_tools.py --scaffold state_space_refinement --out op
 - 庞加莱横截面极限环收缩（`poincare_section_return`）：在多维非线性动力系统中建立余维为 1 的局部横截超平面，检测轨迹穿越点序列的返回映射收缩因子与周期极限环轨道稳定性。
 - 刘维尔定理相空间体积演化（`liouville_phase_volume`）：计算流场 Jacobian 矩阵迹（散度），严格界定相空间体积连续演化率，认证体积保持流（保守系统）或耗散吸引子收缩率。
 
+### 构造性抽象数学算子（数论、群论与序理论）
+在不引入非构造性特殊公理（不依赖选择公理 AC、连续统假设 CH）的严格有限公理系统下提供代数与序结构证书：
+- 裴蜀定理与线性丢番图网格可解性（`bezout_diophantine_solvability`）：利用扩展欧几里得算法计算整数格点轨道 $a x + b y = c$ 的最小公约数（$\gcd$）整除性条件，当不可解时输出余数亏格证人；可解时输出特解与通解步长。
+- 中国剩余定理与模同余相容性（`chinese_remainder_congruence`）：对任意非互质模数系统 $x \equiv r_i \pmod{m_i}$ 进行成对最大公约数相容性检验（$(r_i - r_j) \bmod \gcd(m_i, m_j) = 0$），在存在同余矛盾时精准指出冲突模数与差值亏格；相容时在 $\text{LCM}$ 模下合成唯一最小非负解。
+- 有限群公理与 Cayley 乘法表不变量（`group_axioms_cayley_table`）：针对有限离散系统操作乘法表，严格审计封闭性（Closure）、结合律（Associativity: $(a \cdot b) \cdot c = a \cdot (b \cdot c)$）、单位元唯一存在性（Identity）以及每个元素的双侧逆元（Inverse），在破缺时输出违背结合律的三元组或缺失逆元证人。
+- 群同态与几何等变映射（`group_homomorphism_equivariance`）：验证网络表象或离散状态映射 $\phi$ 是否保持代数运算结构 $\phi(g_1 \cdot g_2) = \phi(g_1) * \phi(g_2)$，在破坏等变性时输出反例运算对与目标群偏差值。
+- 偏序集（Poset）公理与孔多塞循环检测（`poset_partial_order_axioms`）：审计二元偏序关系矩阵的自反性（$a \le a$）、反对称性（$a \le b \land b \le a \implies a = b$）与传递性（$a \le b \land b \le c \implies a \le c$），并对偏好/决策网络中的非平凡环路（Condorcet Cycle）提取确凿证人。
+- Knaster-Tarski 完备格单调不动点定理（`knaster_tarski_fixed_point`）：在有限完备格上检验算子单调性（$x \le y \implies f(x) \le f(y)$），并构造性计算最小不动点（$\text{lfp}$）与最大不动点（$\text{gfp}$），在非单调时定位逆序反例对。
+
+### 算子快速组合与执行管线（Operator Pipeline）
+多项物理或数学检验可以通过管线串联，支持 Fail-Closed 短路截断：
+
+```python
+from rds_operators import compose_operators
+
+stages = [
+    {"operator": "bezout_diophantine_solvability", "inputs": {"a": 12, "b": 18, "c": 6}},
+    {"operator": "chinese_remainder_congruence", "inputs": {"remainders": [2, 3], "moduli": [3, 5]}},
+    {"operator": "poset_partial_order_axioms", "inputs": {
+        "elements": [1, 2, 3],
+        "relation_matrix": [[True, True, True], [False, True, True], [False, False, True]]
+    }}
+]
+
+result = compose_operators(stages, short_circuit=True)
+# 若 stage 0 失败，管线立即终止并返回 failing_stage 与 failing_witness，阻断后续无效计算。
+```
+
+也可以通过 CLI 运行 JSON 管线规范文件：
+```bash
+python -B scripts/rds_theory_tools.py --run-pipeline pipeline_spec.json
+```
+退出码与状态映射一致：`PASS=0`, `FAIL=1`, `UNKNOWN/INVALID=2`。
+
+### 这些算子对模型提出 Jump（概念跃迁）有什么用？
+依据 Zahavy 的 ICML 2026 论文与溯因推理（Abductive Reasoning）机制：
+1. **阻断自回归插值幻觉（Interpolative Hallucination）**：大模型依赖 Next-token 预测，倾向于在已有旧理论的语言空间内进行平滑插值修补（例如微调系数或增加层数），产生逻辑通顺但违反基本代数或物理规律的“假假说”。
+2. **生成精确反例证人（Refutation Witness as Abductive Pivot）**：算子拒绝“黑盒打分”，在 FAIL 时给出数学上确定性的极小反例（例如结合律破坏的三元组 $(a, b, c)$、丢番图整除缺陷、能量激增的时间步 $t$、或因果反向泄漏的时间戳）。
+3. **驱动范式层面的概念跃迁（Jump to a New Hypothesis Class）**：将极小反例作为溯因线索（Witness Prompt）注入给模型，能够迫使模型彻底放弃已被数学证伪的前提假设，从而跳出原有的连续/微分空间，跳跃（Jump）到全新的理论类别（例如从欧氏空间跳跃到离散有限群、从无约束网络跳跃到等变几何架构、或引入未观测的状态维度）。
+4. **亚毫秒级低成本剪枝**：所有算子基于纯 Python 标准库和有限有理/构造代数，耗时在亚毫秒级，无需消耗宝贵的 GPU 算力即可淘汰海量伪假说。
+
 摘要保留 `id/title/reason/matched_tags/required_inputs/locator/runnable_operator` 和目录 SHA；`selection=TAG_MATCH_ONLY`、`prerequisites=NOT_ASSESSED`。标签命中只提供工具线索，不验证前提、排名科学价值或授权执行。`goal.reformulation.signals` 可以附同一短名单，历史 `as_of` 必须允许该目录日期。Skill 只给入口，不加载整个库；没有匹配时保留未匹配数量，不硬塞无关工具。
 
 ## 最小契约

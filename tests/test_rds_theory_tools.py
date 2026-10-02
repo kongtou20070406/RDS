@@ -258,6 +258,56 @@ class TheoryToolTests(unittest.TestCase):
             result = rational.certify_interval_bound([0, 1, -1], (0, 1), (0, "20/81"))
             self.assertNotEqual(result["status"], "PASS")
 
+    def test_run_pipeline_cli_and_file_specs(self):
+        command = [sys.executable, "-B", str(ROOT / "scripts/rds_theory_tools.py")]
+        with tempfile.TemporaryDirectory() as folder:
+            # 1. Successful pipeline spec
+            spec_pass = Path(folder) / "pipeline_pass.json"
+            spec_pass.write_text(json.dumps({
+                "short_circuit": True,
+                "stages": [
+                    {"operator": "bezout_diophantine_solvability", "inputs": {"a": 12, "b": 18, "c": 6}},
+                    {"operator": "chinese_remainder_congruence", "inputs": {"remainders": [2, 3], "moduli": [3, 5]}},
+                    {"operator": "poset_partial_order_axioms", "inputs": {
+                        "elements": [1, 2, 3],
+                        "relation_matrix": [[True, True, True], [False, True, True], [False, False, True]]
+                    }}
+                ]
+            }), encoding="utf-8")
+
+            res_pass = subprocess.run(command + ["--run-pipeline", str(spec_pass)], cwd=folder,
+                                      capture_output=True, encoding="utf-8", timeout=10)
+            self.assertEqual(res_pass.returncode, 0, res_pass.stderr)
+            out_pass = json.loads(res_pass.stdout)
+            self.assertEqual(out_pass["overall_status"], "PASS")
+            self.assertEqual(out_pass["stage_count"], 3)
+            self.assertEqual(out_pass["executed_stage_count"], 3)
+            self.assertEqual(out_pass["skipped_stage_count"], 0)
+
+            # 2. Short-circuit failing pipeline spec
+            spec_fail = Path(folder) / "pipeline_fail.json"
+            spec_fail.write_text(json.dumps([
+                {"operator": "bezout_diophantine_solvability", "inputs": {"a": 12, "b": 18, "c": 5}},
+                {"operator": "chinese_remainder_congruence", "inputs": {"remainders": [2, 3], "moduli": [3, 5]}}
+            ]), encoding="utf-8")
+
+            res_fail = subprocess.run(command + ["--run-pipeline", str(spec_fail)], cwd=folder,
+                                      capture_output=True, encoding="utf-8", timeout=10)
+            self.assertEqual(res_fail.returncode, 1, res_fail.stderr)
+            out_fail = json.loads(res_fail.stdout)
+            self.assertEqual(out_fail["overall_status"], "FAIL")
+            self.assertEqual(out_fail["stage_count"], 2)
+            self.assertEqual(out_fail["executed_stage_count"], 1)
+            self.assertEqual(out_fail["skipped_stage_count"], 1)
+
+            # 3. Invalid spec
+            bad_spec = Path(folder) / "bad.json"
+            bad_spec.write_text(json.dumps({"invalid": True}), encoding="utf-8")
+            res_bad = subprocess.run(command + ["--run-pipeline", str(bad_spec)], cwd=folder,
+                                     capture_output=True, encoding="utf-8", timeout=10)
+            self.assertEqual(res_bad.returncode, 2)
+            self.assertEqual(json.loads(res_bad.stdout)["status"], "INVALID_INPUT")
+
 
 if __name__ == "__main__":
     unittest.main()

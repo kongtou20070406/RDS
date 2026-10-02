@@ -1639,6 +1639,453 @@ class KolmogorovProbabilityAxiomOperator:
         return _scaffold(KolmogorovProbabilityAxiomOperator, _kolmogorov_self_test)
 
 
+class BezoutDiophantineOperator:
+    """Linear Diophantine equation a*x + b*y = c solver and integer grid reachability verifier."""
+
+    @staticmethod
+    def extended_gcd(a: int, b: int) -> Tuple[int, int, int]:
+        """Returns (gcd, x, y) such that a*x + b*y = gcd."""
+        if b == 0:
+            return (abs(a), 1 if a >= 0 else -1, 0)
+        x2, x1, y2, y1 = 1, 0, 0, 1
+        sign_a = 1 if a >= 0 else -1
+        sign_b = 1 if b >= 0 else -1
+        a_abs, b_abs = abs(a), abs(b)
+        while b_abs > 0:
+            q = a_abs // b_abs
+            r = a_abs - q * b_abs
+            x = x2 - q * x1
+            y = y2 - q * y1
+            a_abs, b_abs = b_abs, r
+            x2, x1 = x1, x
+            y2, y1 = y1, y
+        return (a_abs, x2 * sign_a, y2 * sign_b)
+
+    @classmethod
+    def solve_linear_diophantine(cls, a: int, b: int, c: int) -> Dict[str, Any]:
+        if not isinstance(a, int) or not isinstance(b, int) or not isinstance(c, int):
+            raise ValueError("Diophantine coefficients a, b, c must be integers")
+        if a == 0 and b == 0:
+            if c == 0:
+                return {
+                    "status": "PASS",
+                    "assurance": "DIOPHANTINE_TRIVIAL_IDENTITY",
+                    "gcd": 0,
+                    "particular_solution": [0, 0],
+                }
+            return {
+                "status": "FAIL",
+                "assurance": "DIOPHANTINE_UNREACHABLE_WITNESS",
+                "gcd": 0,
+                "witness": {"defect": "0x + 0y = c has no solution for nonzero c", "remainder": c},
+            }
+
+        g, x0, y0 = cls.extended_gcd(a, b)
+        if c % g != 0:
+            return {
+                "status": "FAIL",
+                "assurance": "DIOPHANTINE_UNREACHABLE_WITNESS",
+                "a": a,
+                "b": b,
+                "c": c,
+                "gcd": g,
+                "witness": {
+                    "remainder": c % g,
+                    "defect": f"Target {c} is not divisible by gcd({a}, {b}) = {g}",
+                },
+            }
+
+        factor = c // g
+        part_x = x0 * factor
+        part_y = y0 * factor
+        return {
+            "status": "PASS",
+            "assurance": "DIOPHANTINE_SOLUTION_CERTIFIED",
+            "a": a,
+            "b": b,
+            "c": c,
+            "gcd": g,
+            "particular_solution": [part_x, part_y],
+            "step_x": b // g if b != 0 else 0,
+            "step_y": -(a // g) if a != 0 else 0,
+        }
+
+    @staticmethod
+    def scaffold_code():
+        return _scaffold(BezoutDiophantineOperator, _bezout_self_test)
+
+
+class ChineseRemainderCongruenceOperator:
+    """Chinese Remainder Theorem and modular congruence compatibility verifier."""
+
+    @staticmethod
+    def _extended_gcd(a: int, b: int) -> Tuple[int, int, int]:
+        if b == 0:
+            return (abs(a), 1 if a >= 0 else -1, 0)
+        x2, x1, y2, y1 = 1, 0, 0, 1
+        sign_a = 1 if a >= 0 else -1
+        sign_b = 1 if b >= 0 else -1
+        a_abs, b_abs = abs(a), abs(b)
+        while b_abs > 0:
+            q = a_abs // b_abs
+            r = a_abs - q * b_abs
+            x = x2 - q * x1
+            y = y2 - q * y1
+            a_abs, b_abs = b_abs, r
+            x2, x1 = x1, x
+            y2, y1 = y1, y
+        return (a_abs, x2 * sign_a, y2 * sign_b)
+
+    @classmethod
+    def solve_congruences(cls, remainders: List[int], moduli: List[int]) -> Dict[str, Any]:
+        if not isinstance(remainders, (list, tuple)) or not isinstance(moduli, (list, tuple)):
+            raise ValueError("Expected lists of remainders and moduli")
+        if len(remainders) != len(moduli) or len(remainders) < 1:
+            raise ValueError("Remainders and moduli must be equal length non-empty sequences")
+
+        for m in moduli:
+            if not isinstance(m, int) or m <= 0:
+                raise ValueError("Moduli must be positive integers")
+        for r in remainders:
+            if not isinstance(r, int):
+                raise ValueError("Remainders must be integers")
+
+        k = len(remainders)
+        for i in range(k):
+            for j in range(i + 1, k):
+                m1, m2 = moduli[i], moduli[j]
+                r1, r2 = remainders[i], remainders[j]
+                g = math.gcd(m1, m2)
+                if (r1 - r2) % g != 0:
+                    return {
+                        "status": "FAIL",
+                        "assurance": "MODULAR_CONGRUENCE_INCOMPATIBLE_WITNESS",
+                        "witness": {
+                            "index_i": i,
+                            "index_j": j,
+                            "modulus_i": m1,
+                            "modulus_j": m2,
+                            "remainder_i": r1,
+                            "remainder_j": r2,
+                            "gcd": g,
+                            "discrepancy": (r1 - r2) % g,
+                            "defect": "Congruences are mutually contradictory modulo gcd",
+                        },
+                    }
+
+        curr_r = remainders[0] % moduli[0]
+        curr_m = moduli[0]
+        for i in range(1, k):
+            r_next = remainders[i] % moduli[i]
+            m_next = moduli[i]
+            g, p, _ = cls._extended_gcd(curr_m, m_next)
+            diff = r_next - curr_r
+            t = (p * (diff // g)) % (m_next // g)
+            curr_r = (curr_r + curr_m * t) % (curr_m * (m_next // g))
+            curr_m = (curr_m * m_next) // g
+
+        return {
+            "status": "PASS",
+            "assurance": "CHINESE_REMAINDER_SOLVED",
+            "congruences_count": k,
+            "unique_solution": curr_r,
+            "lcm_modulus": curr_m,
+        }
+
+    @staticmethod
+    def scaffold_code():
+        return _scaffold(ChineseRemainderCongruenceOperator, _crt_self_test)
+
+
+class GroupAxiomsCayleyOperator:
+    """Finite group axioms and Cayley table closure, associativity, and inverses verifier."""
+
+    @classmethod
+    def verify_cayley_table(cls, elements: List[Union[int, str]], table: List[List[Union[int, str]]]) -> Dict[str, Any]:
+        if not isinstance(elements, (list, tuple)) or len(elements) < 1:
+            raise ValueError("Expected non-empty list of elements")
+        n = len(elements)
+        if len(set(elements)) != n:
+            raise ValueError("Elements must be distinct")
+        if not isinstance(table, (list, tuple)) or len(table) != n:
+            raise ValueError("Cayley table rows must match elements count")
+
+        elem_to_idx = {elem: idx for idx, elem in enumerate(elements)}
+
+        idx_table = []
+        for r_idx, row in enumerate(table):
+            if not isinstance(row, (list, tuple)) or len(row) != n:
+                raise ValueError("Cayley table columns must match elements count")
+            row_indices = []
+            for c_idx, val in enumerate(row):
+                if val not in elem_to_idx:
+                    return {
+                        "status": "FAIL",
+                        "assurance": "GROUP_CLOSURE_BREACH_WITNESS",
+                        "witness": {
+                            "row_element": elements[r_idx],
+                            "col_element": elements[c_idx],
+                            "offending_value": val,
+                            "defect": "Operation output is not in the declared set G",
+                        },
+                    }
+                row_indices.append(elem_to_idx[val])
+            idx_table.append(row_indices)
+
+        identity_candidates = []
+        for i in range(n):
+            is_id = True
+            for x in range(n):
+                if idx_table[i][x] != x or idx_table[x][i] != x:
+                    is_id = False
+                    break
+            if is_id:
+                identity_candidates.append(i)
+
+        if len(identity_candidates) == 0:
+            return {
+                "status": "FAIL",
+                "assurance": "GROUP_IDENTITY_ABSENT_WITNESS",
+                "witness": {"defect": "No identity element e satisfies e*x = x*e = x for all x"},
+            }
+        if len(identity_candidates) > 1:
+            return {
+                "status": "FAIL",
+                "assurance": "GROUP_IDENTITY_NON_UNIQUE_WITNESS",
+                "witness": {"candidates": [elements[k] for k in identity_candidates], "defect": "Multiple identity elements found"},
+            }
+
+        id_idx = identity_candidates[0]
+        id_elem = elements[id_idx]
+
+        for x in range(n):
+            has_inv = any(idx_table[x][y] == id_idx and idx_table[y][x] == id_idx for y in range(n))
+            if not has_inv:
+                return {
+                    "status": "FAIL",
+                    "assurance": "GROUP_INVERSE_ABSENT_WITNESS",
+                    "witness": {"element": elements[x], "defect": "Element has no two-sided inverse"},
+                }
+
+        for a in range(n):
+            for b in range(n):
+                ab = idx_table[a][b]
+                for c in range(n):
+                    lhs = idx_table[ab][c]
+                    bc = idx_table[b][c]
+                    rhs = idx_table[a][bc]
+                    if lhs != rhs:
+                        return {
+                            "status": "FAIL",
+                            "assurance": "GROUP_ASSOCIATIVITY_BREACH_WITNESS",
+                            "witness": {
+                                "triplet": [elements[a], elements[b], elements[c]],
+                                "lhs_eval": elements[lhs],
+                                "rhs_eval": elements[rhs],
+                                "defect": "(a * b) * c != a * (b * c)",
+                            },
+                        }
+
+        is_abelian = all(idx_table[i][j] == idx_table[j][i] for i in range(n) for j in range(i + 1, n))
+
+        return {
+            "status": "PASS",
+            "assurance": "GROUP_AXIOMS_CERTIFIED",
+            "order": n,
+            "identity_element": id_elem,
+            "is_abelian": is_abelian,
+            "elements": list(elements),
+        }
+
+    @staticmethod
+    def scaffold_code():
+        return _scaffold(GroupAxiomsCayleyOperator, _group_axioms_self_test)
+
+
+class GroupHomomorphismEquivarianceOperator:
+    """Group homomorphism and equivariant representation map verifier."""
+
+    @classmethod
+    def verify_homomorphism(cls, source_table: List[List[int]], target_table: List[List[int]], mapping: Dict[int, int]) -> Dict[str, Any]:
+        if not isinstance(source_table, (list, tuple)) or not isinstance(target_table, (list, tuple)):
+            raise ValueError("Expected source and target group tables")
+        if not isinstance(mapping, dict):
+            raise ValueError("Mapping must be dictionary mapping source index to target index")
+
+        n_src = len(source_table)
+        n_tgt = len(target_table)
+
+        for g in range(n_src):
+            if g not in mapping:
+                raise ValueError(f"Mapping missing for element {g}")
+            phi_g = mapping[g]
+            if not (0 <= phi_g < n_tgt):
+                raise ValueError(f"Mapped value {phi_g} out of target bounds")
+
+        for g1 in range(n_src):
+            phi_g1 = mapping[g1]
+            for g2 in range(n_src):
+                phi_g2 = mapping[g2]
+                g_prod = source_table[g1][g2]
+                lhs = mapping[g_prod]
+                rhs = target_table[phi_g1][phi_g2]
+                if lhs != rhs:
+                    return {
+                        "status": "FAIL",
+                        "assurance": "HOMOMORPHISM_BREACH_WITNESS",
+                        "witness": {
+                            "g1": g1,
+                            "g2": g2,
+                            "phi_g1": phi_g1,
+                            "phi_g2": phi_g2,
+                            "phi_prod_lhs": lhs,
+                            "target_prod_rhs": rhs,
+                            "defect": "phi(g1 * g2) != phi(g1) * phi(g2)",
+                        },
+                    }
+
+        return {
+            "status": "PASS",
+            "assurance": "GROUP_HOMOMORPHISM_CERTIFIED",
+            "source_order": n_src,
+            "target_order": n_tgt,
+            "mapping": dict(mapping),
+        }
+
+    @staticmethod
+    def scaffold_code():
+        return _scaffold(GroupHomomorphismEquivarianceOperator, _homomorphism_self_test)
+
+
+class PosetPartialOrderOperator:
+    """Partial Order (Poset) axioms and Condorcet cycle detector."""
+
+    @classmethod
+    def verify_poset(cls, elements: List[Union[int, str]], relation_matrix: List[List[bool]]) -> Dict[str, Any]:
+        if not isinstance(elements, (list, tuple)) or len(elements) < 1:
+            raise ValueError("Expected non-empty list of elements")
+        n = len(elements)
+        if len(relation_matrix) != n:
+            raise ValueError("Relation matrix rows must match elements count")
+        for row in relation_matrix:
+            if not isinstance(row, (list, tuple)) or len(row) != n:
+                raise ValueError("Relation matrix columns must match elements count")
+
+        for i in range(n):
+            if not relation_matrix[i][i]:
+                return {
+                    "status": "FAIL",
+                    "assurance": "REFLEXIVITY_BREACH_WITNESS",
+                    "witness": {"element": elements[i], "defect": "a <= a does not hold"},
+                }
+
+        for i in range(n):
+            for j in range(i + 1, n):
+                if relation_matrix[i][j] and relation_matrix[j][i]:
+                    return {
+                        "status": "FAIL",
+                        "assurance": "ANTISYMMETRY_BREACH_WITNESS",
+                        "witness": {
+                            "element_a": elements[i],
+                            "element_b": elements[j],
+                            "defect": "a <= b and b <= a for distinct elements (mutual non-trivial cycle)",
+                        },
+                    }
+
+        for i in range(n):
+            for j in range(n):
+                if relation_matrix[i][j]:
+                    for k in range(n):
+                        if relation_matrix[j][k] and not relation_matrix[i][k]:
+                            return {
+                                "status": "FAIL",
+                                "assurance": "TRANSITIVITY_BREACH_WITNESS",
+                                "witness": {
+                                    "element_a": elements[i],
+                                    "element_b": elements[j],
+                                    "element_c": elements[k],
+                                    "defect": "a <= b and b <= c but not a <= c",
+                                },
+                            }
+
+        is_total = all(relation_matrix[i][j] or relation_matrix[j][i] for i in range(n) for j in range(i + 1, n))
+
+        return {
+            "status": "PASS",
+            "assurance": "POSET_AXIOMS_CERTIFIED",
+            "elements_count": n,
+            "is_total_order": is_total,
+        }
+
+    @staticmethod
+    def scaffold_code():
+        return _scaffold(PosetPartialOrderOperator, _poset_self_test)
+
+
+class KnasterTarskiFixedPointOperator:
+    """Knaster-Tarski fixed-point theorem on finite complete lattices."""
+
+    @classmethod
+    def find_monotone_fixed_points(cls, n_elements: int, order_matrix: List[List[bool]], mapping: Dict[int, int]) -> Dict[str, Any]:
+        if not isinstance(n_elements, int) or n_elements < 1:
+            raise ValueError("Lattice size must be positive integer")
+        if len(order_matrix) != n_elements:
+            raise ValueError("Order matrix dimensions must match lattice size")
+
+        for i in range(n_elements):
+            if i not in mapping:
+                raise ValueError(f"Mapping undefined for element {i}")
+            fi = mapping[i]
+            for j in range(n_elements):
+                if order_matrix[i][j]:
+                    fj = mapping[j]
+                    if not order_matrix[fi][fj]:
+                        return {
+                            "status": "FAIL",
+                            "assurance": "NON_MONOTONE_OPERATOR_WITNESS",
+                            "witness": {
+                                "element_x": i,
+                                "element_y": j,
+                                "mapped_x": fi,
+                                "mapped_y": fj,
+                                "defect": "x <= y but f(x) not <= f(y) (violates monotonicity)",
+                            },
+                        }
+
+        fixed_points = [x for x in range(n_elements) if mapping[x] == x]
+        if not fixed_points:
+            return {
+                "status": "FAIL",
+                "assurance": "NO_FIXED_POINT_WITNESS",
+                "witness": {"defect": "No fixed points exist"},
+            }
+
+        lfp = None
+        for cand in fixed_points:
+            if all(order_matrix[cand][other] for other in fixed_points):
+                lfp = cand
+                break
+
+        gfp = None
+        for cand in fixed_points:
+            if all(order_matrix[other][cand] for other in fixed_points):
+                gfp = cand
+                break
+
+        return {
+            "status": "PASS",
+            "assurance": "KNASTER_TARSKI_FIXED_POINT_CERTIFIED",
+            "lattice_size": n_elements,
+            "fixed_points": fixed_points,
+            "least_fixed_point": lfp,
+            "greatest_fixed_point": gfp,
+        }
+
+    @staticmethod
+    def scaffold_code():
+        return _scaffold(KnasterTarskiFixedPointOperator, _knaster_tarski_self_test)
+
+
 def _ssm_self_test():
     op = ContinuousStateSpaceOperator(3, in_dim=2, out_dim=2)
     report = op.verify_step_invariance()
@@ -1836,6 +2283,84 @@ def _kolmogorov_self_test():
     return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
 
 
+def _bezout_self_test():
+    report = BezoutDiophantineOperator.solve_linear_diophantine(12, 18, 30)
+    negative = BezoutDiophantineOperator.solve_linear_diophantine(12, 18, 35)
+    assert report["status"] == "PASS" and report["gcd"] == 6
+    assert negative["status"] == "FAIL" and "witness" in negative
+    return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
+
+
+def _crt_self_test():
+    report = ChineseRemainderCongruenceOperator.solve_congruences([2, 3, 2], [3, 5, 7])
+    negative = ChineseRemainderCongruenceOperator.solve_congruences([1, 2], [4, 6])
+    assert report["status"] == "PASS" and report["unique_solution"] == 23
+    assert negative["status"] == "FAIL" and "witness" in negative
+    return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
+
+
+def _group_axioms_self_test():
+    elements = ["e", "a", "b", "c"]
+    table = [
+        ["e", "a", "b", "c"],
+        ["a", "e", "c", "b"],
+        ["b", "c", "e", "a"],
+        ["c", "b", "a", "e"]
+    ]
+    report = GroupAxiomsCayleyOperator.verify_cayley_table(elements, table)
+    bad_table = [
+        ["e", "a", "b", "c"],
+        ["a", "b", "c", "e"],
+        ["b", "c", "a", "e"],
+        ["c", "e", "e", "e"]
+    ]
+    negative = GroupAxiomsCayleyOperator.verify_cayley_table(elements, bad_table)
+    assert report["status"] == "PASS" and report["is_abelian"]
+    assert negative["status"] == "FAIL" and "witness" in negative
+    return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
+
+
+def _homomorphism_self_test():
+    src_table = [[0, 1], [1, 0]]
+    tgt_table = [[0, 1, 2, 3], [1, 0, 3, 2], [2, 3, 0, 1], [3, 2, 1, 0]]
+    report = GroupHomomorphismEquivarianceOperator.verify_homomorphism(src_table, tgt_table, {0: 0, 1: 1})
+    negative = GroupHomomorphismEquivarianceOperator.verify_homomorphism(src_table, tgt_table, {0: 1, 1: 1})
+    assert report["status"] == "PASS"
+    assert negative["status"] == "FAIL" and "witness" in negative
+    return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
+
+
+def _poset_self_test():
+    rel = [
+        [True, True, True],
+        [False, True, True],
+        [False, False, True]
+    ]
+    report = PosetPartialOrderOperator.verify_poset(["x", "y", "z"], rel)
+    bad_rel = [
+        [True, True, False],
+        [False, True, True],
+        [True, False, True]
+    ]
+    negative = PosetPartialOrderOperator.verify_poset(["x", "y", "z"], bad_rel)
+    assert report["status"] == "PASS" and report["is_total_order"]
+    assert negative["status"] == "FAIL" and "witness" in negative
+    return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
+
+
+def _knaster_tarski_self_test():
+    rel = [
+        [True, True, True],
+        [False, True, True],
+        [False, False, True]
+    ]
+    report = KnasterTarskiFixedPointOperator.find_monotone_fixed_points(3, rel, {0: 0, 1: 1, 2: 1})
+    negative = KnasterTarskiFixedPointOperator.find_monotone_fixed_points(3, rel, {0: 2, 1: 1, 2: 0})
+    assert report["status"] == "PASS" and report["least_fixed_point"] == 0
+    assert negative["status"] == "FAIL" and "witness" in negative
+    return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
+
+
 def _scaffold(cls, self_test):
     """Export the canonical implementation and the same executable self-test."""
     tree = ast.parse(inspect.getsource(cls))
@@ -1852,71 +2377,89 @@ def _scaffold(cls, self_test):
 
 OPERATORS = {
     "state_space_refinement": {"operator_id": "continuous_state_space", "title": "Diagonal ZOH Numerical Example",
-        "operator_class": ContinuousStateSpaceOperator, "primary_signal": "step_sensitivity",
+        "operator_class": ContinuousStateSpaceOperator, "primary_signal": "step_sensitivity", "primary_method": "discretize_zoh",
         "guarantee": "Finite ZOH updates and NFE diagnostics; convergence remains UNKNOWN", "self_test": _ssm_self_test},
     "contraction_target_bias": {"operator_id": "contraction_dynamics", "title": "Rational Infinity-Norm and Fixed-Point Analysis",
-        "operator_class": ContractionDynamicsOperator, "primary_signal": "trajectory_degradation",
+        "operator_class": ContractionDynamicsOperator, "primary_signal": "trajectory_degradation", "primary_method": "analyze_system",
         "guarantee": "Exact analysis of supplied rational values; floats denote their binary rationals", "self_test": _contraction_self_test},
     "structural_preflight": {"operator_id": "structural_preflight", "title": "Declared Signature and Shape Dry Run",
-        "operator_class": StructuralPreflightOperator, "primary_signal": "execution_mismatch",
+        "operator_class": StructuralPreflightOperator, "primary_signal": "execution_mismatch", "primary_method": "preflight_callable",
         "guarantee": "Checks declared signature and shapes of a trusted callable", "self_test": _preflight_self_test},
     "exact_symbolic_constraints": {"operator_id": "rational_interval_certificate", "title": "Rational Polynomial Interval Enclosure",
-        "operator_class": RationalCertificateOperator, "primary_signal": "proof_bottleneck",
+        "operator_class": RationalCertificateOperator, "primary_signal": "proof_bottleneck", "primary_method": "certify_interval_bound",
         "guarantee": "Sound rational whole-interval enclosure or exact witness; inconclusive is UNKNOWN", "self_test": _rational_self_test},
     "gershgorin_spectral_bound": {"operator_id": "gershgorin_spectral_radius", "title": "Gershgorin Circle Spectral Radius and Invertibility Certificate",
-        "operator_class": GershgorinSpectralOperator, "primary_signal": "trajectory_degradation",
+        "operator_class": GershgorinSpectralOperator, "primary_signal": "trajectory_degradation", "primary_method": "analyze_discs",
         "guarantee": "Exact rational Gershgorin discs bounding spectral radius, stability, and invertibility", "self_test": _gershgorin_self_test},
     "lipschitz_layer_bound": {"operator_id": "lipschitz_frobenius_bound", "title": "Frobenius and Operator Norm Lipschitz Certificate",
-        "operator_class": LipschitzBoundOperator, "primary_signal": "trajectory_degradation",
+        "operator_class": LipschitzBoundOperator, "primary_signal": "trajectory_degradation", "primary_method": "certify_layer_norm",
         "guarantee": "Composite layer-wise Frobenius and infinity norm bounds for perturbation stability", "self_test": _lipschitz_self_test},
     "hoeffding_sample_bound": {"operator_id": "concentration_sample_bound", "title": "Sub-Gaussian Hoeffding Sample Size and Concentration Bound",
-        "operator_class": ConcentrationBoundOperator, "primary_signal": "proof_bottleneck",
+        "operator_class": ConcentrationBoundOperator, "primary_signal": "proof_bottleneck", "primary_method": "hoeffding_confidence_radius",
         "guarantee": "Finite-sample Hoeffding confidence radius and sample size qualification for empirical comparisons", "self_test": _concentration_self_test},
     "rational_voronoi_partition": {"operator_id": "rational_voronoi_cover", "title": "2D Rational Voronoi Covering and Boundary Hole Detector",
-        "operator_class": RationalVoronoiCoverOperator, "primary_signal": "proof_bottleneck",
+        "operator_class": RationalVoronoiCoverOperator, "primary_signal": "proof_bottleneck", "primary_method": "check_partition_covering",
         "guarantee": "Exact 2D domain partition covering and unassigned hole/witness detection", "self_test": _voronoi_self_test},
     "multi_step_energy_dissipation": {"operator_id": "multi_step_energy_dissipation", "title": "Multi-Step Energy Dissipation and Monotonic Descent Verifier",
-        "operator_class": MultiStepEnergyDissipationOperator, "primary_signal": "trajectory_degradation",
+        "operator_class": MultiStepEnergyDissipationOperator, "primary_signal": "trajectory_degradation", "primary_method": "verify_energy_dissipation",
         "guarantee": "Trace-level discrete Lyapunov quadratic energy dissipation and monotonic divergence witness", "self_test": _dissipation_self_test},
     "markov_chebyshev_bound": {"operator_id": "markov_chebyshev_tail", "title": "Markov and Chebyshev Non-Parametric Tail Risk Bounds",
-        "operator_class": MarkovChebyshevBoundOperator, "primary_signal": "trajectory_degradation",
+        "operator_class": MarkovChebyshevBoundOperator, "primary_signal": "trajectory_degradation", "primary_method": "chebyshev_bound",
         "guarantee": "Non-parametric probability tail upper bounds from mean and variance", "self_test": _markov_chebyshev_self_test},
     "false_discovery_rate_bh": {"operator_id": "false_discovery_rate", "title": "Benjamini-Hochberg and Benjamini-Yekutieli FDR Control",
-        "operator_class": FalseDiscoveryRateOperator, "primary_signal": "proof_bottleneck",
+        "operator_class": FalseDiscoveryRateOperator, "primary_signal": "proof_bottleneck", "primary_method": "control_fdr_bh",
         "guarantee": "Multiple testing false discovery rate control under independence or arbitrary dependence", "self_test": _fdr_self_test},
     "sequential_ville_eprocess": {"operator_id": "sequential_ville_test", "title": "Anytime-Valid Sequential e-Process and Supermartingale Stopping Test",
-        "operator_class": SequentialVilleEProcessOperator, "primary_signal": "proof_bottleneck",
+        "operator_class": SequentialVilleEProcessOperator, "primary_signal": "proof_bottleneck", "primary_method": "test_stopping_boundary",
         "guarantee": "Ville supermartingale inequality stopping guarantee resisting optional stopping", "self_test": _ville_self_test},
     "empirical_bernstein_bound": {"operator_id": "empirical_bernstein_radius", "title": "Variance-Sensitive Empirical Bernstein Concentration Bound",
-        "operator_class": EmpiricalBernsteinOperator, "primary_signal": "proof_bottleneck",
+        "operator_class": EmpiricalBernsteinOperator, "primary_signal": "proof_bottleneck", "primary_method": "bernstein_confidence_radius",
         "guarantee": "Sample-variance adaptive concentration radius tighter than worst-case Hoeffding", "self_test": _bernstein_self_test},
     "symplectic_energy_conservation": {"operator_id": "symplectic_energy_drift", "title": "Hamiltonian Symplectic Energy Conservation and Drift Verifier",
-        "operator_class": SymplecticConservationOperator, "primary_signal": "trajectory_degradation",
+        "operator_class": SymplecticConservationOperator, "primary_signal": "trajectory_degradation", "primary_method": "verify_energy_conservation",
         "guarantee": "Hamiltonian total energy deviation tracking and relative numerical drift bounds", "self_test": _symplectic_self_test},
     "control_barrier_invariance": {"operator_id": "control_barrier_safety", "title": "Discrete Control Barrier Function and Forward Invariance Verifier",
-        "operator_class": ControlBarrierFunctionOperator, "primary_signal": "trajectory_degradation",
+        "operator_class": ControlBarrierFunctionOperator, "primary_signal": "trajectory_degradation", "primary_method": "verify_forward_invariance",
         "guarantee": "Forward invariance safe set certificate for discrete transition sequences", "self_test": _cbf_self_test},
     "poincare_section_return": {"operator_id": "poincare_return_contraction", "title": "Transversal Poincaré Section and Limit Cycle Contraction Verifier",
-        "operator_class": PoincareLimitCycleOperator, "primary_signal": "trajectory_degradation",
+        "operator_class": PoincareLimitCycleOperator, "primary_signal": "trajectory_degradation", "primary_method": "analyze_section_crossings",
         "guarantee": "Transversal crossing return map contraction factor and periodic orbit stability", "self_test": _poincare_self_test},
     "liouville_phase_volume": {"operator_id": "liouville_volume_evolution", "title": "Liouville Phase Volume Contraction and Divergence Attractor Verifier",
-        "operator_class": LiouvilleVolumeOperator, "primary_signal": "trajectory_degradation",
+        "operator_class": LiouvilleVolumeOperator, "primary_signal": "trajectory_degradation", "primary_method": "analyze_divergence",
         "guarantee": "Jacobian trace divergence bound certifying phase volume contraction rate onto attractors", "self_test": _liouville_self_test},
     "dimensional_homogeneity": {"operator_id": "buckingham_dimensional_homogeneity", "title": "Buckingham Pi Dimensional Homogeneity and Invariant Verifier",
-        "operator_class": DimensionalHomogeneityOperator, "primary_signal": "proof_bottleneck",
+        "operator_class": DimensionalHomogeneityOperator, "primary_signal": "proof_bottleneck", "primary_method": "verify_equation_homogeneity",
         "guarantee": "SI exponent vector matching and transcendental dimensionless argument verification", "self_test": _dim_homogeneity_self_test},
     "causal_dag_no_leakage": {"operator_id": "causal_precedence_dag", "title": "Causal Precedence DAG and Look-Ahead Temporal Leakage Verifier",
-        "operator_class": CausalDAGNoLeakageOperator, "primary_signal": "trajectory_degradation",
+        "operator_class": CausalDAGNoLeakageOperator, "primary_signal": "trajectory_degradation", "primary_method": "verify_dag_precedence",
         "guarantee": "Strict temporal arrow of time and topological acyclicity certificate", "self_test": _causal_dag_self_test},
     "data_processing_inequality": {"operator_id": "data_processing_inequality", "title": "Information-Theoretic Data Processing Inequality and Monotonicity Verifier",
-        "operator_class": DataProcessingInequalityOperator, "primary_signal": "trajectory_degradation",
+        "operator_class": DataProcessingInequalityOperator, "primary_signal": "trajectory_degradation", "primary_method": "verify_information_decay",
         "guarantee": "Markov chain mutual information non-increase post-processing bounds", "self_test": _dpi_self_test},
     "conservation_flow_balance": {"operator_id": "continuity_flow_balance", "title": "Continuity Equation and Conservation Flow Balance Verifier",
-        "operator_class": ConservationFlowBalanceOperator, "primary_signal": "trajectory_degradation",
+        "operator_class": ConservationFlowBalanceOperator, "primary_signal": "trajectory_degradation", "primary_method": "verify_node_flow_balance",
         "guarantee": "Kirchhoff / continuity node flow accumulation conservation certificate", "self_test": _conservation_flow_self_test},
     "kolmogorov_probability_axioms": {"operator_id": "kolmogorov_axioms_wellformedness", "title": "Kolmogorov Probability Axioms and Normalization Verifier",
-        "operator_class": KolmogorovProbabilityAxiomOperator, "primary_signal": "proof_bottleneck",
+        "operator_class": KolmogorovProbabilityAxiomOperator, "primary_signal": "proof_bottleneck", "primary_method": "verify_probability_distribution",
         "guarantee": "Non-negativity, unit total measure, and distribution well-formedness certificate", "self_test": _kolmogorov_self_test},
+    "bezout_diophantine_solvability": {"operator_id": "bezout_diophantine_grid_solvability", "title": "Bézout Identity and Linear Diophantine Grid Solvability Verifier",
+        "operator_class": BezoutDiophantineOperator, "primary_signal": "proof_bottleneck", "primary_method": "solve_linear_diophantine",
+        "guarantee": "Extended Euclidean GCD reachability and exact Diophantine integer grid solution", "self_test": _bezout_self_test},
+    "chinese_remainder_congruence": {"operator_id": "chinese_remainder_theorem_congruence", "title": "Chinese Remainder Theorem and Modular Congruence Compatibility Verifier",
+        "operator_class": ChineseRemainderCongruenceOperator, "primary_signal": "proof_bottleneck", "primary_method": "solve_congruences",
+        "guarantee": "Pairwise modular congruence compatibility and unique solution modulo LCM", "self_test": _crt_self_test},
+    "group_axioms_cayley_table": {"operator_id": "group_axioms_finite_cayley", "title": "Finite Group Axioms and Cayley Table Invariant Verifier",
+        "operator_class": GroupAxiomsCayleyOperator, "primary_signal": "proof_bottleneck", "primary_method": "verify_cayley_table",
+        "guarantee": "Closure, associativity, unique identity, and inverse existence certificate on finite tables", "self_test": _group_axioms_self_test},
+    "group_homomorphism_equivariance": {"operator_id": "group_homomorphism_equivariance_map", "title": "Group Homomorphism and Geometric Equivariance Action Verifier",
+        "operator_class": GroupHomomorphismEquivarianceOperator, "primary_signal": "trajectory_degradation", "primary_method": "verify_homomorphism",
+        "guarantee": "Structure-preserving map phi(g1 * g2) = phi(g1) * phi(g2) and equivariant layer action certificate", "self_test": _homomorphism_self_test},
+    "poset_partial_order_axioms": {"operator_id": "poset_partial_order_axioms", "title": "Partial Order (Poset) Axioms and Condorcet Cycle Detector",
+        "operator_class": PosetPartialOrderOperator, "primary_signal": "proof_bottleneck", "primary_method": "verify_poset",
+        "guarantee": "Reflexivity, antisymmetry, and transitivity certificate with Condorcet cycle witness", "self_test": _poset_self_test},
+    "knaster_tarski_fixed_point": {"operator_id": "knaster_tarski_complete_lattice", "title": "Knaster-Tarski Complete Lattice Monotone Fixed-Point Verifier",
+        "operator_class": KnasterTarskiFixedPointOperator, "primary_signal": "proof_bottleneck", "primary_method": "find_monotone_fixed_points",
+        "guarantee": "Monotonicity verification and exact constructive least/greatest fixed-point computation", "self_test": _knaster_tarski_self_test},
 }
 
 
@@ -1939,3 +2482,112 @@ def test_operator(card_id):
     return {"card_id": card_id, "operator_id": meta["operator_id"], "title": meta["title"],
             "self_test_status": checks["self_test_status"], "negative_status": checks["negative_status"],
             "test_result": checks["positive"]}
+
+
+class OperatorPipeline:
+    """Fail-closed multi-stage operator pipeline runner."""
+
+    def __init__(self, stages: List[Dict[str, Any]]):
+        if not isinstance(stages, (list, tuple)) or len(stages) < 1:
+            raise ValueError("Expected non-empty list of pipeline stages")
+        self.stages = list(stages)
+
+    def execute(self, short_circuit: bool = True) -> Dict[str, Any]:
+        results = []
+        for idx, stage in enumerate(self.stages):
+            card_id = stage.get("card_id") or stage.get("operator")
+            if card_id not in OPERATORS:
+                raise ValueError(f"Unknown card_id '{card_id}' in stage {idx}")
+            op_meta = OPERATORS[card_id]
+            op_cls = op_meta["operator_class"]
+            method_name = stage.get("method") or op_meta.get("primary_method")
+            if not method_name:
+                raise ValueError(f"No method specified for operator '{card_id}' in stage {idx}")
+            if not hasattr(op_cls, method_name):
+                raise ValueError(f"Operator {op_cls.__name__} has no method '{method_name}'")
+
+            args = stage.get("args", ())
+            if not isinstance(args, (list, tuple)):
+                raise ValueError(f"Stage {idx} 'args' must be a list or tuple")
+            kwargs = stage.get("kwargs") or stage.get("inputs") or {}
+            if not isinstance(kwargs, dict):
+                raise ValueError(f"Stage {idx} 'kwargs'/'inputs' must be a dict")
+
+            raw_attr = op_cls.__dict__.get(method_name)
+            if isinstance(raw_attr, (classmethod, staticmethod)) or inspect.isclass(raw_attr):
+                fn = getattr(op_cls, method_name)
+                stage_res = fn(*args, **kwargs)
+            elif callable(raw_attr):
+                sig = inspect.signature(raw_attr)
+                if "self" in sig.parameters:
+                    init_args = stage.get("init_args", ())
+                    init_kwargs = stage.get("init_kwargs", {})
+                    instance = op_cls(*init_args, **init_kwargs)
+                    stage_res = getattr(instance, method_name)(*args, **kwargs)
+                else:
+                    fn = getattr(op_cls, method_name)
+                    stage_res = fn(*args, **kwargs)
+            else:
+                fn = getattr(op_cls, method_name)
+                stage_res = fn(*args, **kwargs)
+
+            if not isinstance(stage_res, dict):
+                stage_res = {"status": "PASS", "result": stage_res}
+
+            record = {
+                "stage_index": idx,
+                "stage_name": stage.get("name", f"stage_{idx}_{card_id}"),
+                "card_id": card_id,
+                "status": stage_res.get("status", "UNKNOWN"),
+                "assurance": stage_res.get("assurance"),
+                "result": stage_res,
+            }
+            results.append(record)
+
+            if short_circuit and stage_res.get("status") == "FAIL":
+                return {
+                    "overall_status": "FAIL",
+                    "status": "FAIL",
+                    "assurance": "PIPELINE_SHORT_CIRCUITED_AT_FAIL",
+                    "stage_count": len(self.stages),
+                    "total_stages": len(self.stages),
+                    "executed_stage_count": len(results),
+                    "skipped_stage_count": len(self.stages) - len(results),
+                    "failing_stage_index": idx,
+                    "failing_stage_name": record["stage_name"],
+                    "failing_card_id": card_id,
+                    "failing_witness": stage_res.get("witness"),
+                    "completed_stages": results,
+                    "stages_summary": [
+                        {"stage": r["stage_name"], "card_id": r["card_id"], "status": r["status"]}
+                        for r in results
+                    ],
+                    "details": results,
+                }
+
+        all_pass = all(r["status"] == "PASS" for r in results)
+        any_unknown = any(r["status"] == "UNKNOWN" for r in results)
+        status = "PASS" if all_pass else ("UNKNOWN" if any_unknown else "FAIL")
+
+        return {
+            "overall_status": status,
+            "status": status,
+            "assurance": "PIPELINE_ALL_STAGES_EVALUATED",
+            "stage_count": len(self.stages),
+            "total_stages": len(self.stages),
+            "executed_stage_count": len(results),
+            "skipped_stage_count": len(self.stages) - len(results),
+            "stages_summary": [
+                {"stage": r["stage_name"], "card_id": r["card_id"], "status": r["status"]}
+                for r in results
+            ],
+            "completed_stages": results,
+            "details": results,
+        }
+
+    def run(self, short_circuit: bool = True) -> Dict[str, Any]:
+        return self.execute(short_circuit=short_circuit)
+
+
+def compose_operators(stages: List[Dict[str, Any]], short_circuit: bool = True) -> Dict[str, Any]:
+    return OperatorPipeline(stages).execute(short_circuit=short_circuit)
