@@ -708,14 +708,17 @@ class ProjectStore:
         if receipt.get("run_id") != row["run_id"]:
             raise ReceiptIntegrityError(prefix + "names a different run" + suffix)
         # The writer stores digest(body without sha256) in both the body and the row; bind the value read.
+        mismatch = ReceiptIntegrityError(prefix + "does not match its recorded sha256" + suffix)
+        if receipt.get("sha256") != row["sha256"]:
+            raise mismatch
         try:
             recomputed = digest({key: value for key, value in receipt.items() if key != "sha256"})
-        except (ValueError, TypeError, RecursionError):
+        except (ValueError, RecursionError):
             # The decoder accepts NaN/Infinity, overflowing floats and lone surrogate escapes; the writer emits none.
-            raise ReceiptIntegrityError(prefix + "has no canonical encoding (non-finite number or unpaired surrogate)"
-                                        + suffix) from None
-        if receipt.get("sha256") != row["sha256"] or recomputed != row["sha256"]:
-            raise ReceiptIntegrityError(prefix + "does not match its recorded sha256" + suffix)
+            raise ReceiptIntegrityError(prefix + "has no canonical encoding (e.g. a non-finite number or an unpaired"
+                                        " surrogate)" + suffix) from None
+        if recomputed != row["sha256"]:
+            raise mismatch
         return receipt
 
     @staticmethod

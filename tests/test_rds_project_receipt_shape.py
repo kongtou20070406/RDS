@@ -41,10 +41,12 @@ def damaged_bodies(receipt):
             "sha256 field differs": (canonical(resealed), mismatch),
             "edited under original sha256": (canonical(edited), mismatch),
             "minimal id and sha256": (canonical(minimal), mismatch),
+            # Precedence: a differing recorded sha256 field is named before the value is re-encoded.
+            "sha256 field differs and NaN": (canonical(resealed)[:-1] + ',"extra":NaN}', mismatch),
             **non_canonical_bodies(receipt)}
 
 
-NO_CANONICAL = "has no canonical encoding (non-finite number or unpaired surrogate)"
+NO_CANONICAL = "has no canonical encoding (e.g. a non-finite number or an unpaired surrogate)"
 
 
 def non_canonical_bodies(receipt):
@@ -152,8 +154,9 @@ class ProjectReceiptShapeCliTests(unittest.TestCase):
                 self.assertEqual(store.snapshot()["receipts"], [receipt])
                 self.assertEqual(store.recover("r1"), receipt)
                 self.assertFalse(store.execute("r1")["execution_started"])
-                result = cli(store, "status", "--brief")
-                self.assertEqual(result.returncode, 0, result.stderr)
+                for argv in (["status", "--brief"], ["next"], ["recover", "--id", "r1"], ["execute", "--id", "r1"]):
+                    result = cli(store, *argv)
+                    self.assertEqual(result.returncode, 0, result.stderr)
 
 
 class ProjectReceiptShapeMaintenanceTests(unittest.TestCase):
