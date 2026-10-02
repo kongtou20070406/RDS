@@ -14,6 +14,7 @@ Pick the goal type, run its one command, and drive the work from the kernel's ow
 
 | Goal | Run | Detail on demand |
 | --- | --- | --- |
+| Start from a plain-language request (first time) | Follow the [plain-language quick start](docs/quickstart.md) — copyable prompts, a generated first project, and `[RDS-REJECT]` recovery | [Project runner example](examples/project-runner/README.md) |
 | Start a locked experiment campaign | `project init --contract <contract.json>` — template below | [Project tools](docs/development-loop.md) |
 | Advance a running campaign | `project next` — prints the derived step and its runnable command | [Development loop](docs/development-loop.md) |
 | Decide a research direction | `advise --context <context.json> --graph <graph.json> --brief`; lock the route with `--choose <candidate-id> --record <checkpoint-id>` | [Research discipline](references/research-discipline.md) |
