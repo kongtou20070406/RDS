@@ -211,9 +211,10 @@ def audit_receipts(spec):
         except (ValueError, FileNotFoundError, OSError, sqlite3.Error) as exc:
             row.update(status="LEDGER_UNAVAILABLE", reason=type(exc).__name__)
         audited.append(row)
-    grounded = {row["receipt"]["sha256"] for row in audited if row["status"] == "GROUNDED"}
+    grounded = {(row["receipt"]["project_root"], row["receipt"]["sha256"])
+                for row in audited if row["status"] == "GROUNDED"}
     return {"assurance": "RECEIPT_EXECUTION_NOT_STATEMENT_VERIFICATION", "audits": audited,
-            "grounded_receipt_sha256s": sorted(grounded),
+            "grounded_receipts": sorted(grounded),
             "all_receipts_grounded": bool(audited) and len(grounded) == len(audited)}
 
 
@@ -224,7 +225,8 @@ def _supported_closure(nodes, edges, grounded_receipts=frozenset()):
         if node["status"] != "SUPPORTED":
             continue
         evidence = node.get("evidence")
-        if evidence is None or evidence["receipt"]["sha256"] in grounded_receipts:
+        if evidence is None or (evidence["receipt"]["project_root"],
+                                evidence["receipt"]["sha256"]) in grounded_receipts:
             closure.add(ident)
         else:
             receipt_block[ident] = "receipt not grounded"
@@ -235,7 +237,8 @@ def _supported_closure(nodes, edges, grounded_receipts=frozenset()):
         if edge["status"] != "SUPPORTED" or head in closure:
             continue
         evidence = edge.get("evidence")
-        if evidence is not None and evidence["receipt"]["sha256"] not in grounded_receipts:
+        if evidence is not None and (evidence["receipt"]["project_root"],
+                                     evidence["receipt"]["sha256"]) not in grounded_receipts:
             continue
         if not all(tail in closure for tail in edge["premises"]):
             pending.append(i)
@@ -299,12 +302,13 @@ def analyze_hypergraph(spec, audit_receipts_enabled=False):
     grounded, receipt_audit = frozenset(), None
     if audit_receipts_enabled:
         receipt_audit = audit_receipts(spec)
-        grounded = frozenset(receipt_audit["grounded_receipt_sha256s"])
+        grounded = frozenset(receipt_audit["grounded_receipts"])
     closure, derivations, conflicts, receipt_block = _supported_closure(nodes, edges, grounded)
     blocked_nodes = set(receipt_block)
     blocked_rules = {edge["id"] for edge in edges if edge["status"] == "SUPPORTED"
                      and edge.get("evidence") is not None
-                     and edge["evidence"]["receipt"]["sha256"] not in grounded}
+                     and (edge["evidence"]["receipt"]["project_root"],
+                          edge["evidence"]["receipt"]["sha256"]) not in grounded}
     relevant_nodes, relevant_edges = _goal_relevance(edges, goals)
 
     incoming = {edge["conclusion"] for edge in edges}
@@ -463,7 +467,7 @@ def review_hypergraph(value, *, locator="input", retract_nodes=(), retract_rules
     except ValueError as exc:
         input_review["errors"].append({"path": "$", "reason": str(exc)})
         return incomplete()
-    grounded = frozenset(audit_receipts(spec)['grounded_receipt_sha256s']) if audit_receipts_enabled else frozenset()
+    grounded = frozenset(audit_receipts(spec)['grounded_receipts']) if audit_receipts_enabled else frozenset()
     previous_closure, previous_derivations, _, _ = _supported_closure(nodes, edges, grounded)
     original_spec = spec
     candidate = deepcopy(spec)

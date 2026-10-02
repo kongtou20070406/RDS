@@ -387,7 +387,7 @@ def _dependency_review(context, *, audit_receipts=False, audit_files=False):
                 record["id"] for kind in ("nodes", "hyperedges") for record in spec.get(kind, [])
                 if isinstance(record, dict) and record.get("evidence") is not None]
             result["receipt_audit"] = {"assurance": "RECEIPT_EXECUTION_NOT_STATEMENT_VERIFICATION",
-                                       "audits": [], "grounded_receipt_sha256s": [],
+                                       "audits": [], "grounded_receipts": [],
                                        "all_receipts_grounded": False,
                                        "status": UNKNOWN,
                                        "reason": "the installed analyzer cannot audit receipts; "
