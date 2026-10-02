@@ -29,6 +29,8 @@ python -B scripts/rds_cli.py --root <source-directory> exec --name probe-002 --t
 
 If exactly one `READY` candidate remains, its identity is completed automatically. Otherwise supply `--choose <candidate-id>` from the advice. This records the caller's planned route, not scientific acceptance. The prospective `exec` reviews the current ledger, records the choice **before execution**, then records the execution identity afterward in that same ledger. Unchanged rejected routes are unavailable; changed relevant facts, premises or scope can reopen review. Unknown prerequisites, ambiguity or corrupt history cannot authorize a quick research run. An `exec` without context/ledger is explicitly an operational wrapper and does not claim direction selection.
 
+If the selected action was discarded for an invalid declared protocol, the entry reports a bounded, identity-matched reason instead of only saying the candidate is missing. For example, an `OBLIGATION_CHECK` missing one of its three outcomes remains rejected and identifies the outcome requirement. Repair the original declaration; the entry does not invent an outcome, substitute another route or launch a job. Unrelated discarded alternatives do not prevent a uniquely available route from being selected.
+
 Prospective child jobs consume a conservative wall allowance in that same parent ledger before launch; unspent allowance is not refunded. Changing a job name or creating a fresh child directory cannot replenish it. Quick execution requires a wall-only parent budget; multi-resource work needs an explicit project manifest. The original human deadline and authorization still apply.
 
 ## Theory and experiments
