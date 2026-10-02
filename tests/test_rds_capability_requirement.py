@@ -14,7 +14,8 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from rds_advisor import RDSAdvisor
-from rds_advisor_search import MOVE_PRESERVE_CLAUSES, OBSTRUCTION_MOVE_TEXT, review_obstructions, search_directions
+from rds_advisor_search import (MOVE_PRESERVE_CLAUSES, OBSTRUCTION_MOVE_TEXT, SPECIFY_CAPABILITY_TEXT, review_obstructions,
+                                search_directions)
 
 
 def route(goal, decision='next', kind='PAIRED_TEST', node='route'):
@@ -81,16 +82,18 @@ class CapabilityRequirementCLITests(unittest.TestCase):
         ctx['obstructions'] = records
         return baseline, self.advise(ctx, graph)
 
-    def test_deep_learning_unsupported_operation_yields_source_bound_requirement_and_keeps_move_kind(self):
+    def test_deep_learning_unsupported_operation_yields_source_bound_requirement_and_specify_capability(self):
         goal = DEEP_LEARNING[0]
         record = obstruction(goal, 'UNSUPPORTED_OPERATION', requirement=REQUIREMENT, signals=['trajectory_degradation'])
         baseline, review = self.baseline_and_review(DEEP_LEARNING, [record])
         self.assertEqual(review['goal']['status'], 'FALSE')
         self.assertNotIn('obstruction_review', baseline)
         self.assertNotIn('obstructions', baseline['next_move'])
-        # The decision order is unchanged: the declared obstruction informs, it does not reroute.
-        self.assertEqual(review['next_move']['kind'], baseline['next_move']['kind'])
-        self.assertEqual(review['next_move']['authorization'], 'UNCHANGED')
+        # A generic reformulation becomes the specific jump; authorization and preserved inputs are unchanged.
+        move, before = review['next_move'], baseline['next_move']
+        self.assertEqual((before['kind'], move['kind'], move['supersedes']), ('REFORMULATE', 'SPECIFY_CAPABILITY', 'REFORMULATE'))
+        self.assertEqual({k: move[k] for k in ('basis', 'authorization', 'preserve_refs')},
+                         {k: before[k] for k in ('basis', 'authorization', 'preserve_refs')})
         entry = review['obstruction_review'][0]
         self.assertEqual((entry['status'], entry['response']), ('APPLICABLE', 'CAPABILITY_REQUIRED'))
         self.assertEqual(entry['assurance'], 'INPUT_REPORTED_OBSTRUCTION_NOT_DIAGNOSIS')
@@ -108,10 +111,7 @@ class CapabilityRequirementCLITests(unittest.TestCase):
         self.assertEqual(review['next_move']['obstructions'],
                          [{'id': record['id'], 'response': 'CAPABILITY_REQUIRED',
                            'ref': 'selection_review.obstruction_review[0]'}])
-        prompt = review['next_move']['prompt']
-        self.assertIn(OBSTRUCTION_MOVE_TEXT, prompt)
-        self.assertTrue(prompt.endswith(MOVE_PRESERVE_CLAUSES))  # Preservation clauses stay last.
-        self.assertEqual(prompt.replace(OBSTRUCTION_MOVE_TEXT, ''), baseline['next_move']['prompt'])
+        self.assertEqual(move['prompt'], SPECIFY_CAPABILITY_TEXT + MOVE_PRESERVE_CLAUSES)  # Preservation clauses stay last.
 
     def test_deep_learning_missing_data_selects_evidence_repair_not_a_capability_gap(self):
         goal = DEEP_LEARNING[0]
@@ -123,6 +123,11 @@ class CapabilityRequirementCLITests(unittest.TestCase):
         self.assertEqual(entry['requirement'], REQUIREMENT)
         self.assertIn('requirement.input', entry['next'])
         self.assertEqual(review['next_move']['kind'], baseline['next_move']['kind'])
+        self.assertNotIn('supersedes', review['next_move'])
+        prompt = review['next_move']['prompt']
+        self.assertIn(OBSTRUCTION_MOVE_TEXT, prompt)
+        self.assertTrue(prompt.endswith(MOVE_PRESERVE_CLAUSES))  # Preservation clauses stay last.
+        self.assertEqual(prompt.replace(OBSTRUCTION_MOVE_TEXT, ''), baseline['next_move']['prompt'])
 
     def test_record_text_stays_data_and_is_never_spliced_into_guidance(self):
         goal = DEEP_LEARNING[0]
@@ -136,18 +141,31 @@ class CapabilityRequirementCLITests(unittest.TestCase):
         self.assertIsNone(review['obstruction_review'][1]['live_check'])
         self.assertEqual(review['next_move']['authorization'], 'UNCHANGED')
 
-    def test_co_declared_cause_on_the_same_obligation_holds_back_a_capability_gap(self):
+    def test_co_declared_causes_on_the_same_obligation_are_all_held_back(self):
         goal = DEEP_LEARNING[0]
         capability = obstruction(goal, 'UNSUPPORTED_OPERATION', requirement=REQUIREMENT, signals=['trajectory_degradation'])
         for other in ('ADAPTER_MISMATCH', 'MISSING_INPUT', 'EXECUTION_CAP', 'UNDETERMINED'):
             with self.subTest(other=other):
-                _, review = self.baseline_and_review(DEEP_LEARNING, [capability, obstruction(goal, other)])
+                baseline, review = self.baseline_and_review(DEEP_LEARNING, [capability, obstruction(goal, other)])
                 held, kept = review['obstruction_review']
                 self.assertEqual((held['response'], held['cause_status']), ('DISCRIMINATING_CHECK', 'UNKNOWN'))
                 self.assertNotIn('required_capability', held)
                 self.assertEqual(held['requirement'], REQUIREMENT)  # The declared contract is retained.
                 self.assertIn(other, held['reason'])
-                self.assertNotEqual(kept['response'], 'CAPABILITY_REQUIRED')
+                self.assertEqual((kept['response'], kept['cause_status']), ('DISCRIMINATING_CHECK', 'UNKNOWN'))
+                if other != 'UNDETERMINED':
+                    self.assertIn('UNSUPPORTED_OPERATION', kept['reason'])
+                # No established capability requirement, so the move kind stays the generic one.
+                self.assertEqual(review['next_move']['kind'], baseline['next_move']['kind'])
+        # The stricter rule is not specific to capability gaps; declared data stays for the check.
+        records = [obstruction(goal, 'MISSING_INPUT', requirement=REQUIREMENT),
+                   obstruction(goal, 'DEPENDENCY_UNAVAILABLE', dependency='sympy_exact')]
+        _, review = self.baseline_and_review(DEEP_LEARNING, records)
+        missing, dependency = review['obstruction_review']
+        self.assertEqual([e['response'] for e in (missing, dependency)], ['DISCRIMINATING_CHECK'] * 2)
+        self.assertEqual(missing['requirement'], REQUIREMENT)
+        self.assertEqual(dependency['dependency'], 'sympy_exact')
+        self.assertIn('--capability sympy_exact', dependency['live_check'])
         # A co-cause whose applicability is unknown still holds back; one ruled out by scope does not.
         ctx = context(*DEEP_LEARNING)
         del ctx['decision']['scope']
@@ -158,10 +176,11 @@ class CapabilityRequirementCLITests(unittest.TestCase):
             DEEP_LEARNING, [capability, {**obstruction(goal, 'MISSING_INPUT'), 'scope': {'domain': 'older'}}])
         self.assertEqual([e.get('response', e['status']) for e in review['obstruction_review']],
                          ['CAPABILITY_REQUIRED', 'NOT_APPLICABLE'])
-        # Two unsupported operations on the same obligation are not a conflict.
+        # Two records with the same cause on the same obligation are not a conflict.
         second = {**capability, 'id': 'second'}
         _, review = self.baseline_and_review(DEEP_LEARNING, [capability, second])
         self.assertEqual([e['response'] for e in review['obstruction_review']], ['CAPABILITY_REQUIRED'] * 2)
+        self.assertEqual(review['next_move']['kind'], 'SPECIFY_CAPABILITY')
 
     def test_scope_matching_uses_canonical_json_like_the_ledger(self):
         goal = DEEP_LEARNING[0]
@@ -189,28 +208,31 @@ class CapabilityRequirementCLITests(unittest.TestCase):
 
     def test_software_tool_cap_dependency_and_adapter_obstructions_stay_distinct(self):
         goal = SOFTWARE_TOOL[0]
-        records = [obstruction(goal, 'EXECUTION_CAP'),
-                   obstruction(goal, 'DEPENDENCY_UNAVAILABLE', id='dep-known', dependency='sympy_exact'),
-                   obstruction(goal, 'DEPENDENCY_UNAVAILABLE', id='dep-other', dependency='external_solver'),
-                   obstruction(goal, 'ADAPTER_MISMATCH')]
-        baseline, review = self.baseline_and_review(SOFTWARE_TOOL, records)
+        cap = obstruction(goal, 'EXECUTION_CAP')
+        dependencies = [obstruction(goal, 'DEPENDENCY_UNAVAILABLE', id='dep-known', dependency='sympy_exact'),
+                        obstruction(goal, 'DEPENDENCY_UNAVAILABLE', id='dep-other', dependency='external_solver')]
+        adapter = obstruction(goal, 'ADAPTER_MISMATCH')
+        baseline, review = self.baseline_and_review(SOFTWARE_TOOL, [cap])
         self.assertEqual(review['goal']['status'], 'UNKNOWN')
         self.assertEqual(review['next_move']['kind'], baseline['next_move']['kind'])
         self.assertEqual(review['next_move']['kind'], 'RESOLVE_PREMISE')
-        entries = {e['id']: e for e in review['obstruction_review']}
-        cap = entries['o-execution_cap']
-        self.assertEqual(cap['response'], 'INCOMPLETE_COMPUTATION')
-        self.assertIn('not a refutation', cap['next'])
-        self.assertTrue(all('required_capability' not in e for e in entries.values()))
-        known, other = entries['dep-known'], entries['dep-other']
+        entry = review['obstruction_review'][0]
+        self.assertEqual(entry['response'], 'INCOMPLETE_COMPUTATION')
+        self.assertIn('not a refutation', entry['next'])
+        _, review = self.baseline_and_review(SOFTWARE_TOOL, dependencies)  # Same cause: no conflict.
+        known, other = review['obstruction_review']
         self.assertEqual((known['response'], known['dependency']), ('DEPENDENCY_REPORT', 'sympy_exact'))
         self.assertIn('rds_capabilities.py --capability sympy_exact', known['live_check'])
         self.assertEqual((other['response'], other['dependency']), ('DEPENDENCY_REPORT', 'external_solver'))
         self.assertIsNone(other['live_check'])
-        self.assertEqual(entries['o-adapter_mismatch']['response'], 'ADAPTER_REPAIR')
-        self.assertIn('UNKNOWN', entries['o-adapter_mismatch']['next'])
-        self.assertEqual([o['response'] for o in review['next_move']['obstructions']],
-                         ['INCOMPLETE_COMPUTATION', 'DEPENDENCY_REPORT', 'DEPENDENCY_REPORT', 'ADAPTER_REPAIR'])
+        _, review = self.baseline_and_review(SOFTWARE_TOOL, [adapter])
+        self.assertEqual(review['obstruction_review'][0]['response'], 'ADAPTER_REPAIR')
+        self.assertIn('UNKNOWN', review['obstruction_review'][0]['next'])
+        # Declared together on one obligation, the causes compete: each asks for a discriminating check.
+        _, review = self.baseline_and_review(SOFTWARE_TOOL, [cap, *dependencies, adapter])
+        self.assertEqual(review['next_move']['kind'], 'RESOLVE_PREMISE')
+        self.assertTrue(all('required_capability' not in e for e in review['obstruction_review']))
+        self.assertEqual([o['response'] for o in review['next_move']['obstructions']], ['DISCRIMINATING_CHECK'] * 4)
 
     def test_mathematics_unsupported_check_without_contract_or_source_keeps_the_cause_unknown(self):
         goal = MATHEMATICS[0]
@@ -223,10 +245,13 @@ class CapabilityRequirementCLITests(unittest.TestCase):
         unsourced = obstruction(goal, 'UNSUPPORTED_OPERATION', id='unsourced', requirement=REQUIREMENT)
         del unsourced['source']
         undetermined = obstruction(goal, 'UNDETERMINED', id='unclear')
-        _, review = self.baseline_and_review(MATHEMATICS, [sourced])
+        baseline, review = self.baseline_and_review(MATHEMATICS, [sourced])
         exact = review['obstruction_review'][0]
         self.assertEqual(exact['response'], 'CAPABILITY_REQUIRED')
         self.assertTrue(exact['required_capability']['catalogue']['shortlist'])
+        # Every UNKNOWN goal predicate is covered by the requirement, so it supersedes the evidence step.
+        self.assertEqual((baseline['next_move']['kind'], review['next_move']['kind'], review['next_move']['supersedes']),
+                         ('RESOLVE_PREMISE', 'SPECIFY_CAPABILITY', 'RESOLVE_PREMISE'))
         _, review = self.baseline_and_review(MATHEMATICS, [no_contract, unsourced, undetermined])
         entries = {e['id']: e for e in review['obstruction_review']}
         for name in ('vague', 'unsourced', 'unclear'):
@@ -234,6 +259,29 @@ class CapabilityRequirementCLITests(unittest.TestCase):
                 self.assertEqual(entries[name]['response'], 'DISCRIMINATING_CHECK')
                 self.assertEqual(entries[name]['cause_status'], 'UNKNOWN')
                 self.assertNotIn('required_capability', entries[name])
+        self.assertEqual(review['next_move']['kind'], 'RESOLVE_PREMISE')
+
+    def test_an_uncovered_unknown_predicate_or_goal_link_gap_keeps_its_move(self):
+        goal = MATHEMATICS[0]
+        record = obstruction(goal, 'UNSUPPORTED_OPERATION', requirement=REQUIREMENT)
+        ctx = context(*MATHEMATICS)
+        ctx['decision']['goal_conditions'].append({'fact': 'side_condition_checked', 'op': 'eq', 'value': True})
+        baseline = self.advise(ctx, route(goal))
+        ctx['obstructions'] = [record]
+        review = self.advise(ctx, route(goal))
+        self.assertEqual(review['obstruction_review'][0]['response'], 'CAPABILITY_REQUIRED')
+        self.assertEqual(review['next_move']['kind'], baseline['next_move']['kind'])
+        self.assertEqual(review['next_move']['kind'], 'RESOLVE_PREMISE')
+        self.assertIn(OBSTRUCTION_MOVE_TEXT, review['next_move']['prompt'])
+        # An action without a declared goal path keeps REVIEW_GOAL_LINK.
+        graph = route(DEEP_LEARNING[0])
+        del graph['nodes'][0]['executable']['action']['goal_contribution']
+        ctx = context(*DEEP_LEARNING)
+        baseline = self.advise(ctx, graph)
+        ctx['obstructions'] = [obstruction(DEEP_LEARNING[0], 'UNSUPPORTED_OPERATION', requirement=REQUIREMENT)]
+        review = self.advise(ctx, graph)
+        self.assertEqual((baseline['next_move']['kind'], review['next_move']['kind']), ('REVIEW_GOAL_LINK', 'REVIEW_GOAL_LINK'))
+        self.assertNotIn('supersedes', review['next_move'])
 
     def test_requirement_without_signals_reports_an_unsearched_catalogue(self):
         goal = MATHEMATICS[0]
@@ -292,6 +340,7 @@ class CapabilityRequirementCLITests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertLess(len(proc.stdout.encode('utf-8')), 1024)
             summary = json.loads(proc.stdout)
+            self.assertEqual(summary['next_move'], 'SPECIFY_CAPABILITY')
             full = json.loads(Path(summary['record']).read_text(encoding='utf-8'))
             search = next(r['search'] for r in full['recommendations'] if r['type'] == 'EXECUTABLE_DIRECTION_SEARCH')
             self.assertEqual(search['selection_review'], first)
@@ -392,6 +441,16 @@ class CapabilityRequirementReviewTests(unittest.TestCase):
         move = search['selection_review']['next_move']
         self.assertEqual(move['prompt'], prompt)
         self.assertEqual(move['obstructions'][0]['response'], 'EVIDENCE_REPAIR')
+        # An integrity move is never superseded, even by an established capability requirement.
+        ctx['obstructions'] = [obstruction(goal, 'UNSUPPORTED_OPERATION', requirement=REQUIREMENT)]
+        search = search_directions(route(goal), ctx)
+        search['selection_review']['next_move'].update(
+            kind='RESOLVE_PREMISE', reason='Recorded history integrity is unresolved; inspect the existing loop review.')
+        search['loop_review'] = {'flags': [{'kind': 'LOOP_HISTORY_REVIEW_ERROR'}]}
+        review_obstructions(search, ctx)
+        move = search['selection_review']['next_move']
+        self.assertEqual((move['kind'], move['obstructions'][0]['response']), ('RESOLVE_PREMISE', 'CAPABILITY_REQUIRED'))
+        self.assertNotIn('supersedes', move)
 
     def test_healthy_scoped_obligation_is_not_blocked_by_a_completion_obstruction(self):
         graph = route('completion_standard', kind='OBLIGATION_CHECK')

@@ -39,6 +39,18 @@ OBSTRUCTION_MOVE_TEXT = (
     "computation, dependency report, adapter repair, a discriminating check, or for a capability requirement a reusable "
     "operation meeting its input/operation/output contract with a checker, compared with the smallest repair. Declared "
     "obstructions are input-reported, not a diagnosis, and authorize neither execution nor installation. ")
+# A sourced capability requirement supersedes only a generic jump move, or a goal-evidence step whose every
+# UNKNOWN predicate it covers; integrity, input, search-scope, goal-link and discriminator moves keep precedence.
+CAPABILITY_SUPERSEDES = ("REFORMULATE", "REVIEW_ALTERNATIVE")
+GOAL_EVIDENCE_REASON = "The original goal has unresolved evidence; no scientific failure is established."
+SPECIFY_CAPABILITY_REASON = ("A sourced unsupported operation blocks an open goal obligation and no other cause is declared "
+                             "for it; the reusable operation it requires is the next step.")
+SPECIFY_CAPABILITY_TEXT = (
+    "Specify the smallest reusable adaptation, composition or new operation that meets each referenced required_capability "
+    "input/operation/output contract, with a checker on a known case, and compare it with the smallest repair of the current "
+    "route. The shortlist covers only the bounded catalogue; availability and prerequisites are not assessed. Answer any other "
+    "referenced obstruction with its stated response. Declared obstructions are input-reported, not a diagnosis, and "
+    "authorize neither execution nor installation. ")
 
 
 def _evidence_status(record):
@@ -550,28 +562,45 @@ def _obstruction_review(records, context, goal):
             entries.append({**entry, "status": "APPLICABLE", **_obstruction_response(record)})
             continue
         entries.append({**entry, "status": status, "reason": reason})
-    # A capability gap is not established while another cause is declared for the same open obligation,
-    # including one whose applicability is unknown; only a cause ruled out (NOT_APPLICABLE) is ignored.
+    # No cause is established while a different cause is declared for the same open obligation, including one
+    # whose applicability is unknown; only a cause ruled out (NOT_APPLICABLE) is ignored. Same-cause records
+    # do not conflict. Declared contracts, dependency names and live checks stay as data for the check.
+    causes = {}
+    for entry in entries:
+        if entry["status"] in {"APPLICABLE", UNKNOWN}:
+            causes.setdefault(entry["obligation"], set()).add(entry["cause"])
     for record, entry in zip(records, entries):
-        if entry.get("response") != "CAPABILITY_REQUIRED":
+        others = sorted(causes.get(entry["obligation"], set()) - {entry["cause"]})
+        if entry["status"] != "APPLICABLE" or entry["response"] == "DISCRIMINATING_CHECK" or not others:
             continue
-        others = sorted({e["cause"] for e in entries if e["status"] in {"APPLICABLE", UNKNOWN}
-                         and e["obligation"] == entry["obligation"] and e["cause"] != "UNSUPPORTED_OPERATION"})
-        if others:
-            del entry["required_capability"]
-            entry.update(response="DISCRIMINATING_CHECK", cause_status=UNKNOWN, next=UNDETERMINED_NEXT,
-                         requirement=deepcopy(record["requirement"]),
-                         reason="Co-declared " + ", ".join(others) + " on this obligation must be resolved or ruled out "
-                                "before it is treated as a capability gap.")
+        entry.pop("required_capability", None)
+        if record.get("requirement") is not None:
+            entry["requirement"] = deepcopy(record["requirement"])
+        entry.update(response="DISCRIMINATING_CHECK", cause_status=UNKNOWN, next=UNDETERMINED_NEXT,
+                     reason="Co-declared " + ", ".join(others) + " on this obligation must be resolved or ruled out "
+                            "before this cause is treated as established.")
     return entries
+
+
+def _specify_capability(move, review, entries, integrity):
+    """Whether the applicable capability requirements supersede the existing move kind."""
+    capability = {e["obligation"] for e in entries if e["status"] == "APPLICABLE" and e["response"] == "CAPABILITY_REQUIRED"}
+    if integrity or not capability:
+        return False
+    if move["kind"] in CAPABILITY_SUPERSEDES:
+        return True
+    unknown = {c["fact"] for c in (review.get("goal") or {}).get("conditions", []) if c["truth"] == UNKNOWN}
+    return (move["kind"] == "RESOLVE_PREMISE" and move["reason"] == GOAL_EVIDENCE_REASON
+            and bool(unknown) and unknown <= capability)
 
 
 def review_obstructions(search, context):
     """Validate and consume declared obstructions after every existing context check.
 
-    Responses are added to selection_review and referenced from the existing next_move;
-    its kind, precedence and authorization are unchanged. Only the Advisor entry calls this:
-    direct search_directions callers neither validate nor receive obstruction_review.
+    Responses are added to selection_review and referenced from the existing next_move. A move is
+    never created or removed and authorization is unchanged; an established capability requirement
+    turns only a generic jump or fully covered goal-evidence move into SPECIFY_CAPABILITY. Only the
+    Advisor entry calls this: direct search_directions callers neither validate nor receive obstruction_review.
     """
     records = _obstruction_records(context)
     review = search.get("selection_review") if isinstance(search, dict) else None
@@ -585,7 +614,10 @@ def review_obstructions(search, context):
     move["obstructions"] = [{"id": entry["id"], "response": entry["response"],
                              "ref": f"selection_review.obstruction_review[{index}]"} for index, entry in applicable]
     integrity = any(f.get("kind") == "LOOP_HISTORY_REVIEW_ERROR" for f in search.get("loop_review", {}).get("flags", []))
-    if not integrity and move["prompt"].endswith(MOVE_PRESERVE_CLAUSES):
+    if _specify_capability(move, review, entries, integrity):
+        move.update(supersedes=move["kind"], kind="SPECIFY_CAPABILITY", reason=SPECIFY_CAPABILITY_REASON,
+                    prompt=SPECIFY_CAPABILITY_TEXT + MOVE_PRESERVE_CLAUSES)
+    elif not integrity and move["prompt"].endswith(MOVE_PRESERVE_CLAUSES):
         move["prompt"] = move["prompt"][:-len(MOVE_PRESERVE_CLAUSES)] + OBSTRUCTION_MOVE_TEXT + MOVE_PRESERVE_CLAUSES
     return entries
 
