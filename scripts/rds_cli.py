@@ -1304,7 +1304,8 @@ def parser():
     rsi_use = rsi_actions.add_parser('use')
     rsi_use.add_argument('--name', required=True)
     rsi_use.add_argument('--output', '-o', help='Export a verified local module to a project-relative .py file without overwriting')
-    rsi_actions.add_parser('list')
+    rsi_list = rsi_actions.add_parser('list', help='Discover local tool entries; registration is not a fresh reuse check')
+    rsi_list.add_argument('--name', help='Inspect one exact local tool name without dumping unrelated records')
     for child in rsi_actions.choices.values():
         child.add_argument('--json', action='store_true')
     commands.add_parser("init").add_argument("--contract", required=True)
