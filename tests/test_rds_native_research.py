@@ -266,6 +266,64 @@ class NativeResearchTests(unittest.TestCase):
         self.assertNotEqual(changed.returncode, 0)
         self.assertIn('frozen objective', changed.stderr)
 
+    def test_native_goal_is_visible_during_local_advisor_review(self):
+        assets.bind_objective(self.root, self.goal)
+        context = {'decision': {'id': 'local-lemma', 'goal_revision': '1', 'scope': GOAL['scope']}, 'facts': {}}
+        action = {'id': 'check', 'kind': 'OBLIGATION_CHECK', 'target': 'lemma', 'claim': 'A local implication',
+                  'description': 'Check one scoped lemma',
+                  'required_observables': ['certificate'], 'outcomes': [
+                      {'observation': label, 'next_decision': label} for label in ('verified', 'counterexample', 'unresolved')]}
+        graph = {'schema': 1, 'nodes': [{'id': 'route', 'executable': {
+            'decisions': ['local-lemma'], 'preconditions': [], 'action': action}}], 'edges': []}
+        context_path = self.write('context.json', json.dumps(context))
+        graph_path = self.write('graph.json', json.dumps(graph))
+        result = self.cli('advise', '--research-context', str(context_path), '--graph', str(graph_path))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        advice = json.loads(result.stdout)
+        search = next(row['search'] for row in advice['recommendations'] if 'search' in row)
+        review = search['selection_review']
+        self.assertEqual(review['objective_binding'], advice['objective_binding'])
+        self.assertEqual(review['next_move']['kind'], 'REVIEW_GOAL_LINK')
+        self.assertEqual(search['candidates'][0]['status'], 'READY')
+        self.assertEqual(json.loads(context_path.read_text()), context)
+
+    def test_artifact_import_retains_goal_map_and_rejects_conflicting_binding(self):
+        assets.bind_objective(self.root, self.goal)
+        source = Path(__file__).resolve().parents[1] / 'examples/goal-linked-hypergraph.json'
+        context = {'decision': {'id': 'local-lemma', 'goal_revision': '1', 'scope': GOAL['scope']},
+                   'facts': {}, 'research_mode': 'theory', 'dependency_map': json.loads(source.read_text())}
+        action = {'id': 'check', 'kind': 'OBLIGATION_CHECK', 'target': 'closed_small_case',
+                  'claim': 'A local case', 'description': 'Check one local case', 'required_observables': ['certificate'],
+                  'outcomes': [{'observation': label, 'next_decision': label}
+                               for label in ('verified', 'counterexample', 'unresolved')],
+                  'goal_contribution': {'target': 'completion_standard',
+                      'path': ['closed_small_case', 'completion_standard'], 'source': 'synthetic contract'}}
+        graph = {'schema': 1, 'nodes': [{'id': 'route', 'executable': {
+            'decisions': ['local-lemma'], 'preconditions': [], 'action': action}}], 'edges': []}
+        cp = self.write('context.json', json.dumps(context))
+        gp = self.write('graph.json', json.dumps(graph))
+        ap = self.write('artifacts.json', '{"schema":"rds-artifact-manifest-v1","sources":[]}')
+        result = self.cli('advise', '--research-context', str(cp), '--graph', str(gp), '--artifacts', str(ap))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        advice = json.loads(result.stdout)
+        review = next(r['search']['selection_review'] for r in advice['recommendations'] if 'search' in r)
+        self.assertEqual(review['dependency_review']['status'], 'ANALYZED')
+        self.assertEqual(review['candidates'][0]['goal_contribution']['status'], 'UNKNOWN')
+        self.assertEqual(review['next_move']['kind'], 'REVIEW_GOAL_LINK')
+        context['objective_binding'] = {'sha256': 'conflicting supplied original goal'}
+        cp.write_text(json.dumps(context))
+        changed = self.cli('advise', '--research-context', str(cp), '--graph', str(gp), '--artifacts', str(ap))
+        self.assertNotEqual(changed.returncode, 0)
+        self.assertIn('differs', changed.stderr)
+        del context['objective_binding']
+        context['scope'] = {**GOAL['scope'], 'domain': 'conflicting declared original domain'}
+        cp.write_text(json.dumps(context))
+        for imports in ([], ['--artifacts', str(ap)]):
+            with self.subTest(imports=imports):
+                changed = self.cli('advise', '--research-context', str(cp), '--graph', str(gp), *imports)
+                self.assertNotEqual(changed.returncode, 0)
+                self.assertIn('scope conflicts', changed.stderr)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -45,6 +45,9 @@ class SelectionReviewTests(unittest.TestCase):
     def test_valid_proxy_does_not_close_a_failed_task_goal_or_change_permission(self):
         graph, context = fixture()
         context['decision']['goal_conditions'] = [{'fact': 'long_chain_gain', 'op': 'gte', 'value': .05}]
+        graph['nodes'][0]['executable']['action']['goal_contribution'] = {
+            'target': 'long_chain_gain', 'path': ['Measure the declared task gain'], 'source': 'task-protocol.json'}
+        graph['nodes'][0]['executable']['action']['target'] = 'Measure the declared task gain'
         context['facts'] = {k: {'value': value, 'source': 'synthetic-terminal.json'} for k, value in (
             ('pipeline_valid', True), ('manipulation_passed', True), ('long_chain_gain', -.19))}
         with tempfile.TemporaryDirectory() as root:
@@ -82,6 +85,117 @@ class SelectionReviewTests(unittest.TestCase):
         self.assertNotIn('GOAL_BRIDGE_OPEN', [f['kind'] for f in review['flags']])
         self.assertEqual(review['basis'], 'REVIEW_ONLY')
         self.assertNotIn('next_move', review)
+
+    def test_goal_contribution_is_a_declaration_across_modes_and_goal_types(self):
+        for mode in ('theory', 'empirical', 'mixed'):
+            for native in (False, True):
+                with self.subTest(mode=mode, native=native):
+                    graph, context = fixture()
+                    context['research_mode'] = mode
+                    action = graph['nodes'][0]['executable']['action']
+                    if mode == 'theory':
+                        action.update(kind='OBLIGATION_CHECK', target='local-lemma', claim='A local implication',
+                            outcomes=[{'observation': label, 'next_decision': label}
+                                      for label in ('verified', 'counterexample', 'unresolved')])
+                        action.pop('competing_explanations')
+                    target = 'completion_standard' if native else 'quality'
+                    if native:
+                        context['objective_binding'] = {'question_id': 'original', 'goal_revision': 'g1', 'sha256': 'a' * 64}
+                    else:
+                        context['decision']['goal_conditions'] = [{'fact': target, 'value': True}]
+                        context['facts'][target] = {'value': False, 'source': 'task-result.json'}
+                    before = deepcopy((graph, context))
+                    search = search_directions(graph, context)
+                    review = search['selection_review']
+                    self.assertEqual(review['next_move']['kind'], 'REVIEW_GOAL_LINK')
+                    self.assertEqual(review['candidates'][0]['goal_contribution']['status'], 'UNDECLARED')
+                    self.assertEqual(search['candidates'][0]['status'], 'READY')
+                    self.assertEqual((graph, context), before)
+
+                    declaration = {'target': target, 'path': ['Produce a local bound', 'Use it in the original acceptance check'],
+                                   'source': 'proposed-dependency.json'}
+                    action['goal_contribution'] = declaration
+                    action['target'] = 'Produce a local bound'
+                    before = deepcopy((graph, context))
+                    search = search_directions(graph, context)
+                    report = search['selection_review']['candidates'][0]['goal_contribution']
+                    self.assertEqual(report['status'], 'DECLARED_PATH')
+                    self.assertEqual(report['assurance'], 'DECLARED_LINK_NOT_SCIENTIFIC_PROOF')
+                    self.assertEqual(report['authorization'], 'UNCHANGED')
+                    self.assertEqual({k: report[k] for k in declaration}, declaration)
+                    self.assertEqual(search['candidates'][0]['status'], 'READY')
+                    if not native:
+                        self.assertEqual(search['selection_review']['goal']['status'], 'FALSE')
+                    self.assertEqual((graph, context), before)
+
+    def test_invalid_or_unbound_contribution_never_promotes_a_candidate(self):
+        valid = {'target': 'completion_standard', 'path': ['Close the stated obligation'], 'source': 'proposal.json'}
+        variants = [None, {}, {**valid, 'target': 'different-goal'}, {**valid, 'source': ''},
+                    {**valid, 'source': {'path': 'proposal.json'}}, {**valid, 'path': []},
+                    {**valid, 'path': [' ']}, {**valid, 'path': ['x'] * 9}, {**valid, 'path': ['x' * 513]},
+                    {**valid, 'path': 'unsupported prose'}, {**valid, 'proved': True}]
+        for declaration in variants:
+            with self.subTest(declaration=declaration):
+                graph, context = fixture()
+                context['objective_binding'] = {'question_id': 'original', 'goal_revision': 'g1', 'sha256': 'a' * 64}
+                graph['nodes'][0]['executable']['action']['goal_contribution'] = declaration
+                before = deepcopy((graph, context))
+                search = search_directions(graph, context)
+                review = search['selection_review']
+                self.assertEqual(review['candidates'][0]['goal_contribution']['status'], 'UNKNOWN')
+                self.assertIn('GOAL_CONTRIBUTION_INVALID', [f['kind'] for f in review['flags']])
+                self.assertEqual(review['next_move']['kind'], 'REVIEW_GOAL_LINK')
+                self.assertEqual(search['candidates'][0]['status'], 'READY')
+                self.assertEqual((graph, context), before)
+        graph, context = fixture()
+        graph['nodes'][0]['executable']['action']['goal_contribution'] = valid
+        review = search_directions(graph, context)['selection_review']
+        self.assertEqual(review['candidates'][0]['goal_contribution']['status'], 'UNKNOWN')
+        self.assertNotIn('objective_binding', review)
+
+    def test_healthy_goal_link_keeps_unrelated_defects_out_of_compact_advice(self):
+        for defect in (None, {'target': 'wrong', 'path': ['unused'], 'source': 'proposal.json'}):
+            with self.subTest(defect=defect):
+                graph, context = self.paired({'bias': ['positive'], 'state-support': ['negative']})
+                context['objective_binding'] = {'question_id': 'original', 'goal_revision': 'g1', 'sha256': 'a' * 64}
+                graph['nodes'][0]['executable']['action']['goal_contribution'] = {
+                    'target': 'completion_standard', 'path': ['Decide the necessary applicability bridge'], 'source': 'proposal.json'}
+                graph['nodes'][0]['executable']['action']['target'] = 'Decide the necessary applicability bridge'
+                if defect is not None:
+                    graph['nodes'][1]['executable']['action']['goal_contribution'] = defect
+                search = search_directions(graph, context)
+                self.assertNotIn('next_move', search['selection_review'])
+                self.assertTrue(any(f['kind'].startswith('GOAL_CONTRIBUTION_') for f in search['selection_review']['flags']))
+                with tempfile.TemporaryDirectory() as root:
+                    summary = brief(root, {'recommendations': [{'search': search}]}, 'test')
+                self.assertFalse(any(f.startswith('GOAL_CONTRIBUTION_') for f in summary['flags']))
+
+    def test_goal_link_choice_and_brief_keep_full_declaration_without_authorizing(self):
+        graph, context = fixture()
+        context['objective_binding'] = {'question_id': 'original', 'goal_revision': 'g1', 'sha256': 'a' * 64}
+        with tempfile.TemporaryDirectory() as root:
+            search = search_directions(graph, context)
+            advice = {'recommendations': [{'type': 'EXECUTABLE_DIRECTION_SEARCH', 'search': search}]}
+            record = choice(advice, context)
+            self.assertEqual(record['selection_review']['objective_binding'], context['objective_binding'])
+            self.assertEqual(record['candidate']['status'], 'READY')
+            self.assertEqual(record['scientific_support'], 'UNKNOWN')
+            summary = brief(root, advice, 'test')
+            self.assertEqual(summary['next_move'], 'REVIEW_GOAL_LINK')
+            self.assertEqual(summary['flags'][0], 'GOAL_CONTRIBUTION_UNDECLARED')
+            self.assertLessEqual(len(summary['flags']), 3)
+            self.assertNotIn('prompt', summary)
+            self.assertEqual(json.loads(Path(summary['record']).read_text(encoding='utf-8')), advice)
+            declaration = {'target': 'completion_standard', 'path': ['A useful auxiliary lemma', 'Original proof obligation'],
+                           'source': 'proposal.json'}
+            graph['nodes'][0]['executable']['action']['goal_contribution'] = declaration
+            graph['nodes'][0]['executable']['action']['target'] = 'A useful auxiliary lemma'
+            search = search_directions(graph, context)
+            advice['recommendations'][0]['search'] = search
+            record = choice(advice, context)
+            self.assertEqual(record['candidate']['action']['goal_contribution'], declaration)
+            self.assertEqual(record['selection_review']['candidates'][0]['goal_contribution']['path'], declaration['path'])
+            self.assertEqual(record['scientific_support'], 'UNKNOWN')
 
     def paired(self, predictions):
         graph, context = fixture()
@@ -222,6 +336,7 @@ class SelectionReviewTests(unittest.TestCase):
         action.pop('competing_explanations')
         context['decision']['goal_conditions'] = [{'fact': 'goal', 'value': True}]
         context['facts']['goal'] = {'value': False, 'source': 'reported-goal.json'}
+        action['goal_contribution'] = {'target': 'goal', 'path': ['L1'], 'source': 'proof-plan.json'}
         original = deepcopy((graph, context))
         review = search_directions(graph, context)['selection_review']
         self.assertEqual(review['basis'], 'SCOPED_OBLIGATION')
@@ -304,6 +419,9 @@ class SelectionReviewTests(unittest.TestCase):
         context = deepcopy(helper.context)
         context['decision']['goal_conditions'] = [{'fact': 'goal', 'value': True}]
         context['facts']['goal'] = {'value': False, 'source': 'reported-goal.json'}
+        graph['nodes'][1]['executable']['action']['goal_contribution'] = {
+            'target': 'goal', 'path': ['Check the original claim'], 'source': 'proposal.json'}
+        graph['nodes'][1]['executable']['action']['target'] = 'Check the original claim'
         review = helper.search(context=context, graph=graph)['search']['selection_review']
         self.assertEqual(review['next_move']['kind'], 'REFORMULATE')
         self.assertIn('goal predicate failed', review['next_move']['reason'])

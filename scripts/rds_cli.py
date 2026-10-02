@@ -954,7 +954,8 @@ def cmd_advise(args, rds):
         require(isinstance(manual, dict) and isinstance(manual.get("facts", {}), dict),
                 "Research context and facts must be objects")
         require(isinstance(manual.get("costs", {}), dict), "Research context costs must be an object")
-        for key in ("decision", "targets", "budget", "max_depth", "max_candidates", "target_types", "templates", "frontier", "frontier_proposals", "resources"):
+        for key in ("decision", "targets", "budget", "max_depth", "max_candidates", "target_types", "templates", "frontier", "frontier_proposals", "resources",
+                    "dependency_map", "objective_binding", "method_constraints", "research_mode", "require_goal_link", "scope"):
             if key in manual:
                 context[key] = manual[key]
         facts = dict(context.get("facts", {}))
@@ -1020,6 +1021,13 @@ def cmd_advise(args, rds):
     else:
         from rds_meta import load_judgment_graph
         _, graph = load_judgment_graph(getattr(args, "graph", None))
+    from rds_math import check_context
+    binding = check_context(args.root, state.get('advisor_context', {}))
+    if binding is not None:
+        # Keep the original goal visible while reviewing a narrower local action.
+        context = deepcopy(state.get('advisor_context', {}))
+        context['objective_binding'] = binding
+        state = {**state, 'advisor_context': context}
     recommendations = advisor.recommend_next_directions(state, graph)
     result = {
         "advisor_type": "STRATEGIC_RESEARCH_ADVICE",
@@ -1027,8 +1035,6 @@ def cmd_advise(args, rds):
         "recommendations_count": len(recommendations),
         "recommendations": recommendations
     }
-    from rds_math import check_context
-    binding = check_context(args.root, state.get('advisor_context', {}))
     if binding is not None:
         result['objective_binding'] = binding
     if imported is not None:
