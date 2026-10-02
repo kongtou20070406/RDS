@@ -53,11 +53,18 @@ MATH_AFFIRM = {'portable': [predicate('independent_checker_result', 'eq', 'accep
 
 
 class TripleAffirmativeCLITests(unittest.TestCase):
-    def advise(self, ctx, goal_fact, observed=None, declared=None, *extra, expect=0, aliases=None, derived=None):
+    def advise(self, ctx, goal_fact, observed=None, declared=None, *extra, expect=0, aliases=None, derived=None,
+               jsonl=None):
         """Run the real `advise` entry; `observed` values are imported from a hash-bound metric file."""
         with tempfile.TemporaryDirectory() as raw:
             project = Path(raw)
             sources = []
+            if jsonl:
+                data, rows = jsonl
+                (project / 'log.jsonl').write_bytes(data)
+                sources.append({'id': 'log', 'kind': 'log', 'path': 'log.jsonl', 'format': 'jsonl',
+                                'expected_sha256': digest(data), 'binding': BINDING,
+                                'facts': [{'id': k, 'row': r, 'pointer': p} for k, (r, p) in rows.items()]})
             if observed:
                 metric = json.dumps(observed).encode('utf-8')
                 (project / 'metrics.json').write_bytes(metric)
@@ -236,6 +243,30 @@ class TripleAffirmativeCLITests(unittest.TestCase):
         for name in ('portable', 'applicable'):
             row = review['goal']['triple_affirmative'][name]['conditions'][0]
             self.assertEqual((row['truth'], row['affirms']), ('UNKNOWN', 'UNKNOWN'))
+
+    def test_non_integer_jsonl_row_spelling_of_the_same_line_is_not_a_new_reading(self):
+        # 1.0 and true equal line 1 in Python; they must not mint a second locator for one physical line.
+        data = b'{"err":0.05}\n'
+        review = self.advise(context(DL_GOAL, DL_AFFIRM), 'heldout_error',
+                             jsonl=(data, {'heldout_error': (1, '/err'), 'clean_root_replay_error': (1.0, '/err'),
+                                           'worst_declared_cohort_error': (True, '/err')}))
+        self.assertOpen(review, ['PORTABLE', 'APPLICABLE'], 'UNKNOWN', 'RESOLVE_PREMISE')
+        self.assertEqual(review['goal']['triple_affirmative']['found']['status'], 'TRUE')
+        for name in ('portable', 'applicable'):
+            row = review['goal']['triple_affirmative'][name]['conditions'][0]
+            self.assertEqual((row['truth'], row['affirms']), ('UNKNOWN', 'UNKNOWN'))
+        # Three integer reads of the same line are reuse, not three affirmations.
+        review = self.advise(context(DL_GOAL, DL_AFFIRM), 'heldout_error',
+                             jsonl=(data, {'heldout_error': (1, '/err'), 'clean_root_replay_error': (1, '/err'),
+                                           'worst_declared_cohort_error': (1, '/err')}))
+        self.assertOpen(review, ['FOUND', 'PORTABLE', 'APPLICABLE'], 'UNKNOWN', 'RESOLVE_PREMISE')
+        # Distinct physical lines are distinct readings and still affirm.
+        review = self.advise(context(DL_GOAL, DL_AFFIRM), 'heldout_error',
+                             jsonl=(b'{"err":0.05}\n{"err":0.06}\n{"err":0.09}\n',
+                                    {'heldout_error': (1, '/err'), 'clean_root_replay_error': (2, '/err'),
+                                     'worst_declared_cohort_error': (3, '/err')}))
+        self.assertEqual(review['goal']['triple_affirmative']['status'], 'TRUE')
+        self.assertNotIn('next_move', review)
 
     def test_derivation_from_the_goal_measurement_is_reuse(self):
         values = {'heldout_error': 0.05, 'worst_declared_cohort_error': 0.09}
