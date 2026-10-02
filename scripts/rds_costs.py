@@ -33,17 +33,12 @@ def _known(value):
 
 
 def receipt_identity(receipt):
-    """Return declared identity and conflicts without preferring one record."""
+    """Keep explicit identities, check scalar aliases, and leave inventories as metadata."""
     result, conflicts = {}, []
-    for origin in (receipt, receipt.get("binding", {}), receipt.get("protocol", {})):
-        if not isinstance(origin, dict):
-            continue
+    origins = [origin for origin in (receipt, receipt.get("binding", {}), receipt.get("protocol", {}))
+               if isinstance(origin, dict)]
+    for origin in origins:
         values = {k: origin[k] for k in IDENTITY_FIELDS if k in origin}
-        for old, new in (("source_sha256", "code_sha256"), ("dataset_sha256", "data_sha256")):
-            if old in origin:
-                if new in values and values[new] != origin[old]:
-                    conflicts.append(new)
-                values[new] = origin[old]
         if "run_id" in origin:
             values["run_id"] = origin["run_id"]
         for key, value in values.items():
@@ -51,6 +46,16 @@ def receipt_identity(receipt):
                 conflicts.append(key)
             else:
                 result[key] = deepcopy(value)
+    for origin in origins:
+        for old, new in (("source_sha256", "code_sha256"), ("dataset_sha256", "data_sha256")):
+            # Per-file hash maps are metadata, not a scalar code/data identity.
+            # Invalid non-map aliases still reach the existing hash validation.
+            if old not in origin or isinstance(origin[old], dict):
+                continue
+            if new in result and result[new] != origin[old]:
+                conflicts.append(new)
+            elif new not in result:
+                result[new] = deepcopy(origin[old])
     return result, sorted(set(conflicts))
 
 

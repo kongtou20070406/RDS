@@ -2,6 +2,7 @@
 
 ## 5.8.0 — Unreleased
 
+- Keep per-file source/dataset hash inventories as receipt metadata rather than scalar code/data identities. Preserve explicit aggregate identities, compatible scalar aliases and genuine identity conflicts during artifact import and control comparison.
 - Add runnable theory examples with finite numerical diagnostics, exact rational interval enclosures and explicit input/shape checks. Export the same implementation with positive/negative self-tests, create scaffold files exclusively, and preserve PASS/FAIL/UNKNOWN at the CLI boundary.
 
 - Bind native objectives before Advisor selection; review action-to-goal declarations and optionally consume the existing AND/OR dependency map. Retain missing evidence sets and proposed-rule obligations, and surface missing links without promoting graph closure to scientific acceptance.
