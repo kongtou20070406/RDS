@@ -2,6 +2,8 @@
 
 ## 5.8.0 — Unreleased
 
+- Expose a bounded local tool shortlist in `rsi list`, with exact-name lookup, callable entries and historical registration explicitly separated from fresh reuse checks. Route the Skill from a concrete capability gap to scoped practice, actual application and retained local reuse without loading the full catalogue.
+
 - Add on-demand bilingual research-record handoff prompts for private RSI review. Preserve decision-time evidence, raw failures, missing dependencies and scoped original goals without a new packaging CLI, state store or automatic adoption.
 
 - Reduce repeated dependency work within one Advisor operation and replace repeated closure/relevance scans with ordered event propagation and reverse adjacency. Preserve first derivation witnesses, complete blocker/truncation results, candidate re-review after history filtering and fresh checks at later operations. Prefer the existing brief output in the Skill, retaining full records on disk instead of adding another output mode.
