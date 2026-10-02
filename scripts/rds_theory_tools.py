@@ -74,9 +74,11 @@ def list_operators():
 def scaffold_operator(card_id, out_path=None):
     require(isinstance(card_id, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", card_id), "Invalid theory card id")
     code = operators.get_operator_scaffold(card_id)
-    if out_path:
+    if out_path is not None:
+        require(isinstance(out_path, (str, Path)) and str(out_path), "Output path must be nonempty")
         out_file = Path(out_path)
-        out_file.write_text(code, encoding="utf-8")
+        with out_file.open("x", encoding="utf-8") as handle:
+            handle.write(code)
         return {"status": "WRITTEN", "card_id": card_id, "path": str(out_file.resolve()),
                 "size_bytes": len(code.encode("utf-8"))}
     return {"status": "OK", "card_id": card_id, "scaffold": code}
@@ -96,21 +98,24 @@ def main():
     mode.add_argument("--scaffold")
     mode.add_argument("--test-operator")
     parser.add_argument("--limit", type=int, default=3)
-    parser.add_argument("--out")
+    parser.add_argument("--out", help="Create a new output file; requires --scaffold")
     args = parser.parse_args()
     try:
         require(1 <= args.limit <= 5, "Limit must be an integer in 1..5")
+        require(args.out is None or args.scaffold is not None, "--out requires --scaffold")
         if args.list_operators:
             result = {"status": "OK", "operators": list_operators()}
-        elif args.scaffold:
+        elif args.scaffold is not None:
             result = scaffold_operator(args.scaffold, args.out)
-        elif args.test_operator:
+        elif args.test_operator is not None:
             result = test_operator(args.test_operator)
-        elif args.id:
+        elif args.id is not None:
             result = get_card(args.id)
         else:
             result = shortlist(args.signals, args.limit)
         print(json.dumps(result, sort_keys=True, separators=(",", ":"), allow_nan=False))
+        if args.test_operator is not None:
+            return {"PASS": 0, "FAIL": 1, "UNKNOWN": 2}.get(result["test_result"]["status"], 2)
         return 0
     except (ValueError, TypeError, KeyError, OSError) as exc:
         print(json.dumps({"status": "INVALID_INPUT", "reason": str(exc)}))
