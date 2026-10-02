@@ -139,14 +139,210 @@ class OperatorUnitTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ops.RationalCertificateOperator.certify_interval_bound([1], (2, 1), (0, 1))
 
+    def test_egraph_equivalence_operator(self):
+        # Algebraic equivalence under commutativity and identity
+        res = ops.EGraphEquivalenceOperator.verify_algebraic_equivalence(
+            ("*", "x", ("+", "y", 0)),
+            ("*", "y", "x"), variables=("x", "y")
+        )
+        self.assertEqual(res["status"], "PASS")
+        self.assertEqual(res["assurance"], "BOUNDED_REWRITE_CHECK")
+        self.assertEqual(res["domain"], "rational_polynomials")
+        self.assertEqual(res["certificate_status"], "NOT_EMITTED")
+        self.assertEqual(res["application_status"], "UNKNOWN")
+        self.assertTrue(res["equivalent"])
+        self.assertEqual(res["root_a"], res["root_b"])
+
+        # Non-equivalent terms settle by exact rational counterexample
+        res_distinct = ops.EGraphEquivalenceOperator.verify_algebraic_equivalence(
+            ("+", "x", "y"),
+            ("*", "x", "y"), variables=("x", "y")
+        )
+        self.assertEqual(res_distinct["status"], "FAIL")
+        self.assertEqual(res_distinct["assurance"], "EXACT_RATIONAL_COUNTEREXAMPLE")
+        witness = res_distinct["counterexample"]
+        x, y = (Fraction(witness["variables"][name]) for name in ("x", "y"))
+        self.assertEqual(Fraction(witness["expr_a"]), x + y)
+        self.assertEqual(Fraction(witness["expr_b"]), x * y)
+        self.assertNotEqual(x + y, x * y)
+        self.assertFalse(res_distinct["equivalent"])
+
+    def test_lean_axiom_review_operator(self):
+        # 1. Clean constructive theorem
+        res_constructive = ops.LeanAxiomReviewOperator.audit_lean_axioms(
+            "RDS.constructive",
+            "'RDS.constructive' does not depend on any axioms",
+            allowed_axioms=set(),
+            is_stdout=True
+        )
+        self.assertEqual(res_constructive["status"], "PASS")
+        self.assertEqual(res_constructive["assurance"], "INPUT_REPORTED_AXIOM_AUDIT")
+        self.assertIsNone(res_constructive["is_constructive"])
+        self.assertTrue(res_constructive['reported_axiom_free'])
+        self.assertFalse(res_constructive['lean_verified'])
+        self.assertEqual(res_constructive["axioms_detected"], [])
+
+        # 2. Classical axioms allowed
+        res_classical = ops.LeanAxiomReviewOperator.audit_lean_axioms(
+            "RDS.classical",
+            "'RDS.classical' depends on axioms: [propext, Quot.sound]",
+            allowed_axioms={"propext", "Quot.sound"},
+            is_stdout=True
+        )
+        self.assertEqual(res_classical["status"], "PASS")
+        self.assertEqual(res_classical["axioms_detected"], ["Quot.sound", "propext"])
+
+        # 3. Disallowed axiom
+        res_disallowed = ops.LeanAxiomReviewOperator.audit_lean_axioms(
+            "RDS.unauthorized",
+            "'RDS.unauthorized' depends on axioms: [Classical.choice, UnsoundAxiom]",
+            allowed_axioms={"Classical.choice"},
+            is_stdout=True
+        )
+        self.assertEqual(res_disallowed["status"], "FAIL")
+        self.assertEqual(res_disallowed["assurance"], "DISALLOWED_AXIOM_DEPENDENCY")
+        self.assertIn("UnsoundAxiom", res_disallowed["disallowed_axioms"])
+
+        # 4. 'sorry' gap in source code
+        res_sorry = ops.LeanAxiomReviewOperator.audit_lean_axioms(
+            "RDS.incomplete",
+            "theorem obligation : 1 = 1 := by sorry",
+            is_stdout=False
+        )
+        self.assertEqual(res_sorry["status"], "FAIL")
+        self.assertEqual(res_sorry["assurance"], "SORRY_AXIOM_DETECTED")
+
+    def test_lean_audit_missing_wrong_malformed_or_conflicting_report_is_unknown(self):
+        reports = ['', 'not Lean output', "'T.other' does not depend on any axioms",
+                   "'T' depends on axioms: [", "'T' depends on axioms: [propext,,Quot.sound]",
+                   "'T' depends on axioms: [propext,]", "'T' depends on axioms: [garbage !]",
+                   "'T' depends on axioms: [propext, propext]", "'T' does not depend on any axioms trailing garbage",
+                   "'T' does not depend on any axioms\n'T' depends on axioms: [sorryAx]",
+                   "'T' does not depend on any axioms\n'T' malformed report",
+                   "-- 'T' does not depend on any axioms",
+                   "'T' does not depend on any axioms\n'T' does not depend on any axioms",
+                   "'T' depends on axioms: [«unsupported name»]"]
+        for text in reports:
+            with self.subTest(text=text):
+                report = ops.LeanAxiomReviewOperator.audit_lean_axioms('T', text, allowed_axioms=set(), is_stdout=True)
+                self.assertEqual(report['status'], 'UNKNOWN')
+                self.assertIsNone(report['axioms_detected'])
+                self.assertIsNone(report['is_constructive'])
+                self.assertFalse(report['lean_verified'])
+
+    def test_lean_audit_source_cannot_forge_report_and_sorry_ax_cannot_be_allowed(self):
+        source = "theorem T : True := by trivial\n/-\n'T' does not depend on any axioms\n-/"
+        report = ops.LeanAxiomReviewOperator.audit_lean_axioms('T', source)
+        self.assertEqual(report['status'], 'UNKNOWN')
+        gap = ops.LeanAxiomReviewOperator.audit_lean_axioms('T', "'T' depends on axioms: [sorryAx]",
+                                                            allowed_axioms={'sorryAx'}, is_stdout=True)
+        self.assertEqual(gap['status'], 'FAIL')
+        self.assertEqual(gap['disallowed_axioms'], ['sorryAx'])
+
+    def test_lean_audit_multiline_explicit_empty_and_exact_theorem(self):
+        for text, allowed, expected in [("'T' depends on axioms: []", set(), []),
+                                        ("'T' does not depend on any axioms\r\n", set(), []),
+                                        ("'T' depends on axioms: [propext,\n Quot.sound]", {'propext', 'Quot.sound'}, ['Quot.sound', 'propext']),
+                                        ("'other' depends on axioms: [sorryAx]\n'T' does not depend on any axioms", set(), [])]:
+            report = ops.LeanAxiomReviewOperator.audit_lean_axioms('T', text, allowed_axioms=allowed, is_stdout=True)
+            self.assertEqual(report['status'], 'PASS')
+            self.assertEqual(report['axioms_detected'], expected)
+            self.assertEqual(report['assurance'], 'INPUT_REPORTED_AXIOM_AUDIT')
+            self.assertIsNone(report['is_constructive'])
+            self.assertFalse(report['lean_verified'])
+
+    def test_lean_audit_invalid_inputs_are_bounded(self):
+        for name, text, allowed, flag in [('', 'x', set(), True), ('T', 'x' * 65537, set(), True),
+                                        ('T', '汉' * 21846, set(), True), ('T\nother', 'x', set(), True),
+                                         ('T', None, set(), True), ('T', 'x', 'propext', True),
+                                         ('T', 'x', {1}, True), ('T', 'x', set(), 'false')]:
+            with self.subTest(name=name, flag=flag), self.assertRaises(ValueError):
+                ops.LeanAxiomReviewOperator.audit_lean_axioms(name, text, allowed_axioms=allowed, is_stdout=flag)
+
+    def test_lean_audit_export_retains_unknown_and_unverified_evidence(self):
+        namespace = {'__name__': 'exported_operator'}
+        exec(compile(ops.get_operator_scaffold('lean_axiom_review'), '<exported-operator>', 'exec'), namespace)
+        report = namespace['LeanAxiomReviewOperator'].audit_lean_axioms('missing.theorem', 'not Lean output', is_stdout=True)
+        self.assertEqual(report['status'], 'UNKNOWN')
+        self.assertFalse(report['lean_verified'])
+        self.assertIsNone(report['is_constructive'])
+
+    def test_bounded_finite_model_operator(self):
+        elems = ["e", "a", "b", "c"]
+        v4 = {
+            ("e", "e"): "e", ("e", "a"): "a", ("e", "b"): "b", ("e", "c"): "c",
+            ("a", "e"): "a", ("a", "a"): "e", ("a", "b"): "c", ("a", "c"): "b",
+            ("b", "e"): "b", ("b", "a"): "c", ("b", "b"): "e", ("b", "c"): "a",
+            ("c", "e"): "c", ("c", "a"): "b", ("c", "b"): "a", ("c", "c"): "e",
+        }
+        res_v4 = ops.BoundedFiniteModelOperator.verify_cayley_property(elems, v4, "associative")
+        self.assertEqual(res_v4["status"], "PASS")
+        self.assertEqual(res_v4["assurance"], "BOUNDED_FINITE_MODEL_VERIFIED")
+        self.assertEqual(res_v4["combinations_checked"], 64)
+
+        # Non-associative magma: (a * a) * b != a * (a * b)
+        bad_table = dict(v4)
+        bad_table[("a", "a")] = "b"  # mutate multiplication
+        res_bad = ops.BoundedFiniteModelOperator.verify_cayley_property(elems, bad_table, "associative")
+        self.assertEqual(res_bad["status"], "FAIL")
+        self.assertEqual(res_bad["assurance"], "COUNTEREXAMPLE_FOUND")
+        self.assertIn("witness", res_bad["counterexample"])
+
+        # Counterexample search over finite domain
+        domain = [2, 4, 6, 7, 8]
+        is_even = lambda n: n % 2 == 0
+        search_res = ops.BoundedFiniteModelOperator.search_counterexample(domain, is_even)
+        self.assertEqual(search_res["status"], "FAIL")
+        self.assertEqual(search_res["assurance"], "COUNTEREXAMPLE_FOUND")
+        self.assertEqual(search_res["witness"], 7)
+
+    def test_explicit_reduction_transfer_operator(self):
+        # 1. Full bidirectional reduction
+        res_full = ops.ExplicitReductionTransferOperator.verify_reduction(
+            source_instances=[-10, -1, 0, 5, 12],
+            forward_map=lambda x: (max(0, x), max(0, -x)),
+            backward_map=lambda p: p[0] - p[1],
+            source_evaluator=lambda x: x > 0,
+            target_evaluator=lambda p: p[0] > p[1]
+        )
+        self.assertEqual(res_full["status"], "PASS")
+        self.assertEqual(res_full["assurance"], "EXPLICIT_REDUCTION_CERTIFIED")
+        self.assertEqual(res_full["verified_instances"], 5)
+
+        # 2. Forward only (backward unresolved)
+        res_fwd = ops.ExplicitReductionTransferOperator.verify_reduction(
+            source_instances=[1, 2, 3],
+            forward_map=lambda x: x * 2,
+            backward_map=None,
+            source_evaluator=lambda x: x > 0,
+            target_evaluator=lambda y: y > 0
+        )
+        self.assertEqual(res_fwd["status"], "PASS")
+        self.assertEqual(res_fwd["assurance"], "FORWARD_REDUCTION_VALIDATED_RECONSTRUCTION_UNRESOLVED")
+
+        # 3. Semantic mismatch
+        res_mismatch = ops.ExplicitReductionTransferOperator.verify_reduction(
+            source_instances=[-2, 3],
+            forward_map=lambda x: x * -1,  # inverts sign, breaks positivity
+            backward_map=None,
+            source_evaluator=lambda x: x > 0,
+            target_evaluator=lambda y: y > 0
+        )
+        self.assertEqual(res_mismatch["status"], "FAIL")
+        self.assertEqual(res_mismatch["assurance"], "REDUCTION_SEMANTIC_MISMATCH")
+
     def test_registry_and_scaffolding(self):
         available = ops.list_available_operators()
-        self.assertEqual(len(available), 4)
+        self.assertEqual(len(available), 8)
         card_ids = [item["card_id"] for item in available]
         self.assertIn("state_space_refinement", card_ids)
         self.assertIn("contraction_target_bias", card_ids)
         self.assertIn("structural_preflight", card_ids)
         self.assertIn("exact_symbolic_constraints", card_ids)
+        self.assertIn("egraph_equivalence_saturation", card_ids)
+        self.assertIn("lean_axiom_review", card_ids)
+        self.assertIn("bounded_finite_model", card_ids)
+        self.assertIn("explicit_reduction_transfer", card_ids)
 
         for card_id in card_ids:
             scaffold = ops.get_operator_scaffold(card_id)
@@ -311,6 +507,14 @@ class OperatorUnitTests(unittest.TestCase):
                     exported_class.analyze_system = lambda *args, **kwargs: {"status": "FAIL"}
                 elif card_id == "structural_preflight":
                     exported_class.preflight_callable = lambda *args, **kwargs: {"status": "PASS"}
+                elif card_id == "egraph_equivalence_saturation":
+                    exported_class.verify_algebraic_equivalence = lambda *args, **kwargs: {"status": "FAIL"}
+                elif card_id == "lean_axiom_review":
+                    exported_class.audit_lean_axioms = lambda *args, **kwargs: {"status": "FAIL"}
+                elif card_id == "bounded_finite_model":
+                    exported_class.verify_cayley_property = lambda *args, **kwargs: {"status": "FAIL"}
+                elif card_id == "explicit_reduction_transfer":
+                    exported_class.verify_reduction = lambda *args, **kwargs: {"status": "FAIL"}
                 else:
                     exported_class.certify_interval_bound = lambda *args, **kwargs: {"status": "FAIL"}
                 with self.assertRaises(AssertionError):

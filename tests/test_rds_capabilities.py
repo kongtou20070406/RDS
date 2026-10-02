@@ -33,5 +33,25 @@ class CapabilityTests(unittest.TestCase):
             imported.assert_not_called()
 
 
+    def test_rust_native_capability_probe(self):
+        # Default environment without cargo / native library returns UNAVAILABLE cleanly
+        report = capabilities.probe('rust_native')
+        self.assertIn(report['status'], ('AVAILABLE', 'UNAVAILABLE'))
+        self.assertIn('backend', report)
+
+        # Mock available native accelerator
+        mock_info = {
+            'status': 'AVAILABLE',
+            'backend': 'RUST_CDYLIB_NATIVE',
+            'native_library_loaded': True,
+            'cargo_available': True,
+        }
+        with patch('rds_accelerator.get_accelerator_status', return_value=mock_info):
+            rep_avail = capabilities.probe('rust_native')
+            self.assertEqual(rep_avail['status'], 'AVAILABLE')
+            self.assertEqual(rep_avail['backend'], 'RUST_CDYLIB_NATIVE')
+            self.assertTrue(rep_avail['native_loaded'])
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -20,7 +20,11 @@ This guide targets v5.6.0-rc.1, including the mathematical implementation introd
 | Concrete changes, deliverables and acceptance checks | [Development plan](roadmap.md) | [开发与验收计划](roadmap.md) |
 | Real records, locked project runs, rule replay and RDS self-development | [Tool and development loop](development-loop.md) | [工具与开发反馈循环](development-loop.md) |
 | Useful parallel batches, idle capacity and budget semantics | [Resource-aware planning](resource-planning.md) | [资源利用与并行规划](resource-planning.md) |
+| Campaign deadline, progress watchdog and maintenance runs | [Stop policy](stop-policy.md) | [停止策略](stop-policy.md) |
+| Host command hook, admission identity and bypass coverage | [Host hook](host-hook.md) | [宿主命令钩子](host-hook.md) |
+| Receipt-bound support and OR-surviving retraction in the dependency map | [Hypergraph evidence](hypergraph-evidence.md) | [超图证据绑定](hypergraph-evidence.md) |
 | DL verifiers, Mathlib and Lean 4 integration options | [Ecosystem survey](lean4-ecosystem-survey.md) | [Lean 生态与接入综述](lean4-ecosystem-survey.md) |
+| Tensor-operator equivalence, E-Graphs, and Riemannian/infinite-dimensional formalization | [Tensor operator formalization](tensor-operator-formalization.md) | [张量算子形式化路线](tensor-operator-formalization.zh-CN.md) |
 | Same-model skill comparison and benchmark selection | [Benchmark plan](benchmark-plan.md) | [基准选型与对比方案](benchmark-plan.md) |
 
 The [execution contract](../references/l3-state-machine.md) defines the runtime in the checkout being used. [SKILL.md](../SKILL.md) defines the research protocol. When the two differ, report the inconsistency instead of interpreting a protocol instruction as an implemented guarantee.

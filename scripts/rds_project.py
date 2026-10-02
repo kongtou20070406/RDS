@@ -25,6 +25,30 @@ import uuid
 
 TERMINAL = {"COMPLETED", "FAILED", "INTERRUPTED"}
 ROLES = {"code", "config", "data", "evaluator", "protocol"}
+
+
+def _is_rational_literal(value):
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, float):
+        return math.isfinite(value)
+    return isinstance(value, (int, str)) and bool(str(value).strip()) and "e" not in str(value).lower()
+
+
+def _parse_rational_string(value, name):
+    """Parse an exact decimal or integer string; reject floats, exponents and junk."""
+    require(isinstance(value, str) and value.strip(), f"{name} must be a nonempty rational string")
+    text = value.strip()
+    require("e" not in text and "E" not in text, f"{name} must not use exponent notation")
+    try:
+        from fractions import Fraction
+        parsed = Fraction(text)
+    except (ValueError, ZeroDivisionError) as exc:
+        raise ValueError(f"{name} must be an exact rational string such as '1/100' or '0.5'") from exc
+    require(parsed >= 0, f"{name} must be nonnegative")
+    return parsed
+
+
 IDENTITY = ("code_sha256", "config_sha256", "data_sha256", "data_split",
             "init", "seed", "checkpoint", "schedule", "sample_work", "numeric_protocol")
 
@@ -50,6 +74,29 @@ def require(condition, message):
         raise ValueError(message)
 
 
+def execution_route(argv, bindings, outpaths, root, objective=None, route=None, arm=None, executor_sha256=None):
+    """Exact declared contents/roles; names, destinations and allowances are not new work."""
+    inputs = {}
+    for binding in bindings:
+        key = os.path.normcase(str((Path(root) / binding['path']).resolve()))
+        item = inputs.setdefault(key, {'sha256': binding['sha256'], 'roles': set()})
+        require(item['sha256'] == binding['sha256'], 'Conflicting execution input hashes')
+        item['roles'].update(binding.get('roles', [binding.get('role')]))
+    normalized = {path: 'input:' + digest({'sha256': item['sha256'], 'roles': sorted(item['roles'])})
+                  for path, item in inputs.items()}
+    outputs = {os.path.normcase(str((Path(root) / path).resolve())) for path in outpaths}
+    command = []
+    for value in argv[1:]:
+        prefix, separator, tail = value.partition('=')
+        token = tail if separator and prefix.startswith('-') else value
+        path = os.path.normcase(str((Path(root) / token).resolve()))
+        replacement = normalized.get(path, 'declared-output' if path in outputs else token)
+        command.append(prefix + '=' + replacement if separator and prefix.startswith('-') else replacement)
+    return digest({'executor_sha256': executor_sha256 if executor_sha256 is not None else file_sha(argv[0]), 'argv': command,
+                   'inputs': sorted(set(normalized.values())), 'objective_sha256': objective,
+                   'scoped_route': route, 'arm': arm})
+
+
 def number(value, name, positive=False):
     require(not isinstance(value, bool) and isinstance(value, (int, float))
             and math.isfinite(value) and (value > 0 if positive else value >= 0),
@@ -57,14 +104,23 @@ def number(value, name, positive=False):
     return float(value)
 
 
-def load_json(path):
+def load_json(path, *, max_bytes=None, expected_sha256=None):
     def pairs(items):
         result = {}
         for key, value in items:
             require(key not in result, f"Duplicate JSON key: {key}")
             result[key] = value
         return result
-    return json.loads(Path(path).read_text(encoding="utf-8"), object_pairs_hook=pairs,
+    if max_bytes is None and expected_sha256 is None:
+        source = Path(path).read_text(encoding='utf-8')
+    else:
+        with Path(path).open('rb') as stream:
+            raw = stream.read(max_bytes + 1) if max_bytes is not None else stream.read()
+        require(max_bytes is None or len(raw) <= max_bytes, 'Maintenance context exceeds byte limit')
+        require(expected_sha256 is None or hashlib.sha256(raw).hexdigest() == expected_sha256,
+                'Maintenance context binding changed')
+        source = raw.decode('utf-8')
+    return json.loads(source, object_pairs_hook=pairs,
                       parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
 
 
@@ -199,9 +255,86 @@ class ProjectStore:
                     f"Insufficient {resource} budget before start")
         contract = self._contract(db)
         claims = self._output_claims(db)
+        self._campaign_deadline(db, contract)
+        if 'maintenance' in run['manifest']:
+            self._maintenance_review(contract, run['manifest']['maintenance'], run['manifest']['argv'])
+            _, used = self._maintenance_spend(db)
+            require(used <= contract['maintenance_allowance']['wall_seconds'] + 1e-9,
+                    'Maintenance wall allowance exhausted before start')
         for path in run["manifest"]["outpaths"]:
             key = self._output_key(self._path(path, True, contract))
             require(claims.get(key) == {run["id"]}, "Output is not exclusively claimed by this run")
+
+    @staticmethod
+    def _campaign_deadline(db, contract, *, admit=False):
+        """One immutable deadline per owning ledger, including idle/recovery time."""
+        if 'stop_policy' not in contract:
+            return None
+        row = db.execute("SELECT body FROM events WHERE json_extract(body,'$.kind')='CAMPAIGN_STARTED' ORDER BY id LIMIT 1").fetchone()
+        if row is None:
+            require(admit, 'Stop policy: campaign admission is missing')
+            event = {'kind': 'CAMPAIGN_STARTED', 'contract_sha256': digest(contract), 'started_at': time.time()}
+            db.execute('INSERT INTO events(body) VALUES (?)', (canonical(event),))
+        else:
+            event = json.loads(row['body'])
+            require(event['contract_sha256'] == digest(contract), 'Stop policy: campaign binding differs')
+        deadline = event['started_at'] + contract['stop_policy']['wall_seconds']
+        require(time.time() < deadline, 'Stop policy: CAMPAIGN_DEADLINE')
+        return deadline
+
+    def _maintenance_context(self, contract):
+        from rds_math import check_context
+        require('objective_sha256' in contract, 'Maintenance requires a frozen native objective')
+        ref = contract['maintenance_allowance']['context']
+        require(isinstance(ref, dict) and set(ref) == {'path', 'sha256'}, 'Maintenance context requires path and sha256')
+        require(any(b['role'] == 'config' and b['path'] == ref['path'] and b['sha256'] == ref['sha256']
+                    for b in contract['bindings']), 'Maintenance context must be a frozen config binding')
+        path = self._path(ref['path'])
+        context = load_json(path, max_bytes=128 * 1024, expected_sha256=ref['sha256'])
+        binding = check_context(self.root, context)
+        require(binding and context.get('objective_binding') == binding
+                and binding['sha256'] == contract['objective_sha256'], 'Maintenance objective binding differs')
+        require(isinstance(context.get('action'), dict), 'Maintenance context requires a bound repair action')
+        return context
+
+    def _maintenance_review(self, contract, maintenance, argv):
+        from rds_advisor_search import _dependency_review, _goal_contribution
+        require('maintenance_allowance' in contract, 'Maintenance runs require a contract maintenance_allowance')
+        context = self._maintenance_context(contract)
+        action = context['action']
+        require(action.get('argv') == argv and action.get('target') == maintenance['affected_obligation']
+                and action.get('goal_contribution') == maintenance['goal_contribution'],
+                'Maintenance command and original-goal target differ from the bound repair action')
+        dependency = _dependency_review(context)
+        require(dependency is not None and dependency['status'] == 'ANALYZED',
+                'Maintenance requires a complete dependency review')
+        contribution = _goal_contribution(action, context, dependency)
+        mapped = (contribution or {}).get('graph_path', {})
+        goal = mapped.get('goal_review', {})
+        require(maintenance['goal_contribution'].get('target') == 'completion_standard'
+                and mapped.get('status') == 'DECLARED_CONNECTED_PATH'
+                and goal.get('blocker_sets_complete') is True and goal.get('status') != 'DECLARED_SUPPORTED',
+                'Maintenance must address an unresolved original-goal obligation')
+        token = mapped['start_token']
+        require(token == maintenance['blocker'] and token in {r['token'] for r in dependency['ready_obligations']}
+                and any(token in missing for missing in goal['minimal_missing_evidence_sets'])
+                and not (set(contribution['path'][1:-1]) & set(dependency['declared_supported_closure'])),
+                'Maintenance blocker must be a current ready original-goal obligation')
+        return {'objective_binding': context['objective_binding'], 'context_sha256': digest(context),
+                'dependency_map_sha256': dependency['input_sha256'], 'contribution': contribution,
+                'assurance': 'INPUT_REPORTED_GRAPH_PATH_NOT_PROOF'}
+
+    @staticmethod
+    def _maintenance_spend(db):
+        prior = [json.loads(row['body']) for row in db.execute("SELECT body FROM events WHERE json_extract(body,'$.kind')='MAINTENANCE_USE'")]
+        used = 0.0
+        for event in prior:
+            receipt = db.execute('SELECT body FROM receipts WHERE run_id=?', (event['run_id'],)).fetchone()
+            run = db.execute('SELECT body FROM runs WHERE id=?', (event['run_id'],)).fetchone()
+            resource = json.loads(receipt['body'])['resources']['wall_seconds'] if receipt else {}
+            observed = json.loads(run['body']).get('observed_wall_seconds', 0.0) if run else 0.0
+            used += max(event['wall_seconds'], observed, resource.get('measured') or 0.0, resource.get('charged_estimate') or 0.0)
+        return len(prior), used
 
     @contextmanager
     def _db(self, readonly=False):
@@ -263,7 +396,41 @@ class ProjectStore:
     def initialize(self, contract):
         require(isinstance(contract, dict) and type(contract.get("schema")) is int
                 and contract["schema"] == 1, "Project contract schema must be 1")
-        require(set(contract) <= {"schema", "bindings", "allowed_commands", "output_roots", "output_files", "budget", "description", "objective_sha256"}, "Unknown contract fields")
+        require(set(contract) <= {"schema", "bindings", "allowed_commands", "output_roots", "output_files", "budget", "description",
+                                  "primary_metric", "objective_sha256", "execution_policy", "stop_policy", "maintenance_allowance"}, "Unknown contract fields")
+        if "primary_metric" in contract:
+            metric = contract["primary_metric"]
+            require(isinstance(metric, dict) and set(metric) == {"name", "direction", "min_useful_delta"},
+                    "primary_metric must define name, direction and min_useful_delta")
+            require(isinstance(metric["name"], str) and metric["name"], "primary_metric.name must be a nonempty string")
+            require(metric["direction"] in ("min", "max"), "primary_metric.direction must be 'min' or 'max'")
+            _parse_rational_string(metric["min_useful_delta"], "primary_metric.min_useful_delta")
+        if "stop_policy" in contract:
+            policy = contract["stop_policy"]
+            require(isinstance(policy, dict) and set(policy) == {"schema", "wall_seconds", "progress"},
+                    "stop_policy must define schema, wall_seconds and progress")
+            require(type(policy["schema"]) is int and policy["schema"] == 1, "stop_policy schema must be 1")
+            number(policy["wall_seconds"], "stop_policy.wall_seconds", True)
+            progress = policy["progress"]
+            require(isinstance(progress, dict) and set(progress) == {"window_seconds", "min_bytes"},
+                    "stop_policy.progress must define window_seconds and min_bytes")
+            number(progress["window_seconds"], "stop_policy.progress.window_seconds", True)
+            require(type(progress["min_bytes"]) is int and not isinstance(progress["min_bytes"], bool)
+                    and progress["min_bytes"] >= 0, "stop_policy.progress.min_bytes must be a nonnegative integer")
+        if "maintenance_allowance" in contract:
+            allowance = contract["maintenance_allowance"]
+            require(isinstance(allowance, dict) and set(allowance) == {"schema", "wall_seconds", "max_uses", "context"},
+                    "maintenance_allowance must define schema, wall_seconds, max_uses and context")
+            require(type(allowance["schema"]) is int and allowance["schema"] == 1, "maintenance_allowance schema must be 1")
+            number(allowance["wall_seconds"], "maintenance_allowance.wall_seconds")
+            require(type(allowance["max_uses"]) is int and not isinstance(allowance["max_uses"], bool)
+                    and 1 <= allowance["max_uses"] <= 64, "maintenance_allowance.max_uses must be an integer in 1..64")
+        if 'execution_policy' in contract:
+            policy = contract['execution_policy']
+            require(isinstance(policy, dict) and set(policy) == {'schema', 'max_attempts'}
+                    and type(policy['schema']) is int and policy['schema'] == 1
+                    and type(policy['max_attempts']) is int and 1 <= policy['max_attempts'] <= 32,
+                    'Execution policy requires schema 1 and max_attempts in 1..32')
         if 'objective_sha256' in contract:
             from rds_math import objective
             goal = objective(self.root)
@@ -283,6 +450,8 @@ class ProjectStore:
             binding_roles.add((path, b["role"]))
             roles.add(b["role"])
         require(ROLES <= roles, "code/config/data/evaluator/protocol bindings required")
+        if 'maintenance_allowance' in contract:
+            self._maintenance_context(contract)
         commands = contract.get("allowed_commands")
         require(isinstance(commands, list) and commands, "Allowed argv commands required")
         for argv in commands:
@@ -348,6 +517,8 @@ class ProjectStore:
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             contract = self._contract(db)
+            require('stop_policy' not in contract and 'maintenance_allowance' not in contract,
+                    'Configured stop/maintenance policies require project create/execute; theory allowance cannot bypass them')
             require(db.execute("SELECT 1 FROM runs WHERE id=?", (run_id,)).fetchone() is None, "Run ID already exists")
             require(db.execute("SELECT 1 FROM events WHERE json_extract(body,'$.kind')='THEORY_ALLOWANCE' "
                                "AND json_extract(body,'$.run_id')=? AND json_extract(body,'$.manifest_sha256')=? "
@@ -393,10 +564,11 @@ class ProjectStore:
             require(row is not None, "Unknown theory attempt ID")
             return json.loads(row["body"])
 
-    def register(self, spec):
+    def register(self, spec, *, executor_sha256=None):
         require(isinstance(spec, dict) and type(spec.get("schema")) is int
                 and spec["schema"] == 1, "Run manifest schema must be 1")
-        require(set(spec) <= {"schema", "id", "arm", "control_id", "protocol", "argv", "outpaths", "resource_estimates", "timeout_seconds", "description"}, "Unknown manifest fields; handwritten verification is not accepted")
+        require(set(spec) <= {"schema", "id", "arm", "control_id", "protocol", "argv", "outpaths", "resource_estimates",
+                              "timeout_seconds", "description", "maintenance"}, "Unknown manifest fields; handwritten verification is not accepted")
         run_id = spec.get("id", "")
         require(isinstance(run_id, str) and 1 <= len(run_id) <= 80 and all(c.isalnum() or c in "-_" for c in run_id), "Invalid run ID")
         require(spec.get("arm") in {"control", "treatment", "tool"}, "Invalid arm")
@@ -404,11 +576,24 @@ class ProjectStore:
         require(spec["arm"] != "treatment" or spec.get("control_id"), "Treatment requires a control ID")
         timeout = number(spec.get("timeout_seconds"), "timeout_seconds", True)
         executor = self._command(spec.get("argv"))
+        if "maintenance" in spec:
+            maintenance = spec["maintenance"]
+            require(isinstance(maintenance, dict)
+                    and set(maintenance) == {"reason", "blocker", "affected_obligation", "repair", "acceptance", "goal_contribution"},
+                    "maintenance must declare reason, blocker, affected_obligation, repair, acceptance and goal_contribution")
+            require(maintenance.get("reason") == "MAINTENANCE", "Maintenance reason must be MAINTENANCE")
+            require(all(isinstance(maintenance[key], str) and maintenance[key].strip() and len(maintenance[key]) <= 2048
+                        for key in ("blocker", "affected_obligation", "repair", "acceptance")),
+                    "Maintenance blocker, affected_obligation, repair and acceptance must be nonempty strings")
+            require(isinstance(maintenance['goal_contribution'], dict), 'Maintenance goal_contribution must be an object')
         with self._db() as db:
             contract = self._contract(db)
             require(spec["argv"] in contract["allowed_commands"], "Command is not authorized")
             bindings, errors = self._bindings(contract)
             require(not errors, "; ".join(errors))
+            if 'maintenance_allowance' in contract and 'maintenance' not in spec:
+                require(spec['argv'] != self._maintenance_context(contract)['action'].get('argv'),
+                        'Bound repair command requires a maintenance declaration')
             estimates = spec.get("resource_estimates")
             require(isinstance(estimates, dict) and set(estimates) == set(contract["budget"]), "Resource estimates must match budget dimensions")
             estimates = {key: number(value, f"estimate.{key}") for key, value in estimates.items()}
@@ -433,10 +618,34 @@ class ProjectStore:
                    "executor_sha256": file_sha(executor), "attempt_id": None, "worker_pid": None,
                    "pid": None, "started_at": None, "finished_at": None, "observed_wall_seconds": 0.0,
                    "scheduler": None}
+            require(executor_sha256 is None or run['executor_sha256'] == executor_sha256,
+                    'Execution policy: command executable changed before registration')
+            if 'execution_policy' in contract:
+                run['execution_route_sha256'] = execution_route(spec['argv'], bindings, outpaths, self.root,
+                    contract.get('objective_sha256'), arm=spec['arm'], executor_sha256=run['executor_sha256'])
             db.execute("BEGIN IMMEDIATE")
             require(db.execute("SELECT 1 FROM runs WHERE id=?", (run_id,)).fetchone() is None, "Run ID already exists")
+            if 'execution_policy' in contract:
+                previous = [json.loads(row['body']) for row in db.execute(
+                    "SELECT body FROM runs WHERE json_extract(body,'$.execution_route_sha256')=?",
+                    (run['execution_route_sha256'],))]
+                active = next((row for row in previous if row['status'] in {'RESERVED', 'RUNNING', 'COMPLETED'}), None)
+                require(active is None, 'Execution policy: observe or recover existing run ' + (active or {}).get('id', ''))
+                require(len(previous) < contract['execution_policy']['max_attempts'],
+                        'Execution policy: unchanged route reached max_attempts; retained failures are not a scientific impossibility claim')
             if spec.get("control_id"):
                 require(db.execute("SELECT 1 FROM runs WHERE id=?", (spec["control_id"],)).fetchone() is not None, "Unknown control ID")
+            if "maintenance" in spec:
+                run['maintenance_review'] = self._maintenance_review(contract, spec['maintenance'], spec['argv'])
+                uses, used = self._maintenance_spend(db)
+                require(uses < contract['maintenance_allowance']['max_uses'], 'Maintenance allowance is exhausted')
+                cap = contract['maintenance_allowance']['wall_seconds']
+                require(cap > 0 and used + estimates['wall_seconds'] <= cap + 1e-9,
+                        'Maintenance wall estimate exceeds the frozen maintenance_allowance.wall_seconds total')
+                db.execute("INSERT INTO events(body) VALUES (?)",
+                           (canonical({"kind": "MAINTENANCE_USE", "run_id": run_id,
+                                       "manifest_sha256": digest(spec), 'wall_seconds': estimates['wall_seconds'],
+                                       'review': run['maintenance_review'], **spec["maintenance"]}),))
             for resource, amount in estimates.items():
                 row = db.execute("SELECT * FROM budget WHERE resource=?", (resource,)).fetchone()
                 require(row["spent"] + row["charged"] + row["reserved"] + amount <= row["cap"] + 1e-9, f"Insufficient {resource} budget")
@@ -445,6 +654,7 @@ class ProjectStore:
                 key = self._output_key(path)
                 require(key not in claims, "Output is already claimed by another run")
                 db.execute("INSERT INTO output_claims VALUES (?,?)", (key, run_id))
+            self._campaign_deadline(db, contract, admit=True)
             for resource, amount in estimates.items():
                 db.execute("UPDATE budget SET reserved=reserved+? WHERE resource=?", (amount, resource))
             db.execute("INSERT INTO runs VALUES (?,?,?)", (run_id, "RESERVED", canonical(run)))
@@ -470,6 +680,8 @@ class ProjectStore:
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             run = self._run(db, run_id)
+            if 'execution_policy' in self._contract(db) and (run['status'] != 'RESERVED' or run['attempt_id'] is not None):
+                return self._observe(db, run)
             require(run["status"] == "RESERVED" and run["attempt_id"] is None, "Run already dispatched or started; recover never reruns it")
             self._check_start(db, run)
             run["attempt_id"] = uuid.uuid4().hex
@@ -497,18 +709,60 @@ class ProjectStore:
             return current
         return self._execute_claim(run_id, run["attempt_id"])
 
+    def _observe(self, db, run):
+        """Existing operational evidence only; never launch, refund or infer scientific success."""
+        contract = self._contract(db)
+        bindings, errors = self._bindings(contract)
+        require(not errors, '; '.join(errors))
+        row = db.execute('SELECT body,sha256 FROM receipts WHERE run_id=?', (run['id'],)).fetchone()
+        if row is None:
+            require(run['status'] not in TERMINAL, 'Existing terminal run has no owned receipt; inspect retained state')
+            return {**run, 'execution_started': False, 'policy_observation': 'Existing attempt; inspect or recover it'}
+        receipt = json.loads(row['body'])
+        require(receipt.get('sha256') == row['sha256'] == digest({key: value for key, value in receipt.items() if key != 'sha256'}),
+                'Existing receipt integrity failure')
+        require(receipt.get('manifest_sha256') == run['manifest_sha256'] and receipt.get('attempt_id') == run['attempt_id'],
+                'Existing receipt differs from its run')
+        require(receipt.get('run_id') == run['id'] and receipt.get('process_status') == run['status']
+                and receipt.get('argv') == run['manifest']['argv'] and receipt.get('executor_sha256') == run['executor_sha256'],
+                'Existing receipt operation differs from its owned run')
+        require(db.execute("SELECT 1 FROM events WHERE json_extract(body,'$.kind')='ATTEMPT_FINISHED' "
+                           "AND json_extract(body,'$.run_id')=? AND json_extract(body,'$.sha256')=?",
+                           (run['id'], receipt['sha256'])).fetchone() is not None,
+                'Existing receipt has no matching owned completion event')
+        if receipt.get('run_status') == 'SUCCEEDED':
+            require(receipt.get('bindings_before') == bindings == receipt.get('bindings_after'),
+                    'Existing successful receipt input bindings differ')
+            inventory = {entry['path']: entry['sha256'] for entry in receipt.get('artifacts', [])}
+            for output in run['manifest']['outpaths']:
+                path = self._path(output, True, contract)
+                require(output in inventory and path.is_file() and file_sha(path) == inventory[output],
+                        'Existing successful output unavailable or changed: ' + output)
+        return {**receipt, 'execution_started': False, 'policy_observation': 'Retained receipt; scientific assessment is unchanged'}
+
     def _execute_claim(self, run_id, attempt_id):
         attempt_start = time.monotonic()
+        admission_error = None
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             run = self._run(db, run_id)
             require(run["status"] == "RESERVED" and run["attempt_id"] == attempt_id, "Run cannot be started twice")
-            self._check_start(db, run)
-            run.update(status="RUNNING", worker_pid=os.getpid(), started_at=time.time())
-            if run["scheduler"]:
-                run["scheduler"]["status"] = "RUNNING"
-            self._save(db, run)
+            try:
+                self._check_start(db, run)
+            except ValueError as exc:
+                if 'stop_policy' not in self._contract(db) and 'maintenance' not in run['manifest']:
+                    raise
+                admission_error = str(exc)
+            if admission_error is None:
+                run.update(status="RUNNING", worker_pid=os.getpid(), started_at=time.time())
+                if run["scheduler"]:
+                    run["scheduler"]["status"] = "RUNNING"
+                self._save(db, run)
             contract = self._contract(db)
+        if admission_error is not None:
+            return self._finish(run_id, attempt_id, 'FAILED', None, time.monotonic() - attempt_start,
+                                False, [admission_error], stop_reason='CAMPAIGN_DEADLINE'
+                                if admission_error == 'Stop policy: CAMPAIGN_DEADLINE' else None)
         before, errors = self._bindings(contract)
         with self._db() as db:
             current = self._run(db, run_id)
@@ -536,8 +790,13 @@ class ProjectStore:
         process = job = None
         started = False
         timeout = False
+        stop_reason = None
         exit_code = None
-        status = "FAILED"
+        progress = contract.get("stop_policy", {}).get("progress")
+        policy_deadline = None
+        stream_bytes = [(work / "stdout.bin").stat().st_size if (work / "stdout.bin").exists() else 0,
+                        (work / "stderr.bin").stat().st_size if (work / "stderr.bin").exists() else 0]
+        samples = [(start, sum(stream_bytes))]
         try:
             with (work / "stdout.bin").open("xb") as out, (work / "stderr.bin").open("xb") as err:
                 flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
@@ -548,6 +807,9 @@ class ProjectStore:
                     require(current["status"] == "RUNNING" and current["attempt_id"] == attempt_id
                             and current["pid"] is None, "Run cannot be started twice")
                     self._check_start(db, current)
+                    deadline = self._campaign_deadline(db, contract)
+                    if deadline is not None:
+                        policy_deadline = time.monotonic() + max(0.0, deadline - time.time())
                     process = subprocess.Popen(argv, cwd=self.root, shell=False, stdin=subprocess.DEVNULL,
                                                stdout=out, stderr=err, creationflags=flags, start_new_session=os.name != "nt")
                     started = True
@@ -564,11 +826,33 @@ class ProjectStore:
                         timeout = True
                         job.stop()
                         break
+                    now = time.monotonic()
+                    if policy_deadline is not None and now >= policy_deadline:
+                        stop_reason = "CAMPAIGN_DEADLINE"
+                        job.stop()
+                        break
+                    if progress is not None:
+                        total = sum(path.stat().st_size if path.exists() else 0
+                                    for path in ((work / "stdout.bin"), (work / "stderr.bin")))
+                        samples.append((now, total))
+                        cutoff = now - progress["window_seconds"]
+                        # Keep exactly one baseline sample at or before the cutoff.
+                        while len(samples) > 2 and samples[1][0] <= cutoff:
+                            del samples[0]
+                        baseline = samples[0]
+                        if now - baseline[0] >= progress["window_seconds"] and total - baseline[1] < progress["min_bytes"]:
+                            stop_reason = "PROGRESS_NO_GROWTH"
+                            job.stop()
+                            break
                     time.sleep(min(0.05, max(0.001, run["manifest"]["timeout_seconds"] - elapsed)))
                 exit_code = process.wait()
-                status = "COMPLETED" if exit_code == 0 and not timeout else "FAILED"
+                if not timeout and stop_reason is None and policy_deadline is not None and time.monotonic() >= policy_deadline:
+                    stop_reason = 'CAMPAIGN_DEADLINE'
+                status = "COMPLETED" if exit_code == 0 and not timeout and not stop_reason else "FAILED"
                 if timeout:
                     errors.append("Process timeout")
+                elif stop_reason:
+                    errors.append(f"Stop policy: {stop_reason}")
                 elif exit_code != 0:
                     errors.append(f"Nonzero process exit: {exit_code}")
         except BaseException as exc:
@@ -579,14 +863,17 @@ class ProjectStore:
                     process.kill()
                 exit_code = process.wait()
             status = "INTERRUPTED" if isinstance(exc, (KeyboardInterrupt, SystemExit)) else "FAILED"
+            if str(exc) == 'Stop policy: CAMPAIGN_DEADLINE':
+                stop_reason = 'CAMPAIGN_DEADLINE'
             errors.append(f"Execution interrupted: {type(exc).__name__}: {exc}")
         finally:
             if job:
                 job.close()
         return self._finish(run_id, attempt_id, status, exit_code, time.monotonic() - attempt_start,
-                            started, errors, before, timeout)
+                            started, errors, before, timeout, stop_reason=stop_reason)
 
-    def _finish(self, run_id, attempt_id, status, exit_code, wall, started, errors, before=None, timeout=False, only_unstarted=False, recovering=False):
+    def _finish(self, run_id, attempt_id, status, exit_code, wall, started, errors, before=None, timeout=False,
+                only_unstarted=False, recovering=False, stop_reason=None):
         with self._db() as db:
             run = self._run(db, run_id)
             contract = self._contract(db)
@@ -640,6 +927,12 @@ class ProjectStore:
                    # RDS attempt lifecycle, not a query of the OS task's current state.
                    "errors": errors, "scheduler": ({**run["scheduler"], "status": status}
                                                      if run["scheduler"] else None)}
+        if stop_reason is not None:
+            receipt["stop_reason"] = stop_reason
+        if run["manifest"].get("maintenance") is not None:
+            receipt["maintenance"] = True
+            receipt['maintenance_review'] = run['maintenance_review']
+            receipt["assessment"] = {"task_gain": "UNKNOWN", "mechanism": "UNKNOWN", "purpose": "MAINTENANCE"}
         receipt["sha256"] = digest(receipt)
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -698,6 +991,145 @@ class ProjectStore:
             found, errors = self._bindings(contract)
             snapshot["binding_check"] = {"files": found, "errors": errors}
         return snapshot
+
+    def _receipt_result(self, receipt):
+        """Read the primary metric value from one receipt's declared output artifact.
+
+        The receipt itself carries no metric; the value is read from the run's
+        recorded project_output artifact, whose sha256 the receipt binds.
+        """
+        out = next((a for a in receipt.get("artifacts", []) if a.get("kind") == "project_output"), None)
+        require(out is not None, f"Run {receipt.get('run_id')} has no recorded project_output artifact")
+        path = self.root / out["path"]
+        try:
+            raw = path.read_bytes()
+        except OSError as exc:
+            raise ValueError(f"Output artifact missing: {out['path']}: {exc}") from exc
+        require(hashlib.sha256(raw).hexdigest() == out["sha256"], f"Output artifact hash mismatch: {out['path']}")
+        metric_name = self.snapshot()["contract"].get("primary_metric", {}).get("name")
+        try:
+            payload = json.loads(raw)
+        except (ValueError, UnicodeError) as exc:
+            raise ValueError(f"Output artifact is not readable JSON: {out['path']}") from exc
+        require(isinstance(payload, dict), f"Output artifact is not a JSON object: {out['path']}")
+        if metric_name:
+            require(metric_name in payload, f"Output artifact lacks metric '{metric_name}': {out['path']}")
+            value = payload[metric_name]
+        else:
+            require("mse" in payload or "mean" in payload,
+                    "Output artifact has no metric and the contract declares no primary_metric")
+            value = payload.get("mse", payload.get("mean"))
+        require(_is_rational_literal(value), f"Metric value must be a finite rational literal, got {value!r}")
+        if isinstance(value, float):
+            require(math.isfinite(value), "Metric value must be finite")
+            value = repr(value)
+        return _parse_rational_string(str(value), "metric value")
+
+    def next_move(self):
+        """Derive the single next actionable step from recorded ledger state only.
+
+        Pure function of the snapshot; carries no advice beyond recorded facts.
+        """
+        if not self.path.is_file():
+            raise ValueError("Project contract has not been initialized; run: python -B scripts/rds_cli.py project init --contract <contract.json>")
+        snap = self.snapshot()
+        runs = snap["runs"]
+        receipts = {r["run_id"]: r for r in snap["receipts"]}
+        live = [r for r in runs if r["status"] == "RUNNING"]
+        failed = [r for r in runs if r["status"] in ("FAILED", "INTERRUPTED")]
+        executed = [r["id"] for r in runs if r["id"] in receipts]
+        arms = {rid: (receipts[rid].get("arm"), receipts[rid].get("control_id")) for rid in executed}
+        control_id = next((rid for rid, (arm, _) in arms.items() if arm == "control"), None)
+        treatment_id = next((rid for rid, (_, cid) in arms.items() if cid is not None), None)
+        if failed:
+            run = failed[0]
+            return {"next_move": "recover the failed run to a terminal recorded state",
+                    "command": f"python -B scripts/rds_cli.py --root {self.root} project recover --id {run['id']}"}
+        if live:
+            run = live[0]
+            return {"next_move": "wait for the running attempt, then re-check status",
+                    "command": f"python -B scripts/rds_cli.py --root {self.root} project status --brief"}
+        if not executed:
+            if not runs:
+                return {"next_move": "register the control arm from its manifest",
+                        "command": f"python -B scripts/rds_cli.py --root {self.root} project create --manifest <control-manifest.json>"}
+            pending = next((r for r in runs if r["id"] not in executed), None)
+            return {"next_move": f"execute run {pending['id']}",
+                    "command": f"python -B scripts/rds_cli.py --root {self.root} project execute --id {pending['id']}"}
+        if control_id is None or treatment_id is None:
+            pending = next((r for r in runs if r["id"] not in executed), None)
+            if pending is not None:
+                bound = pending.get("control_id")
+                label = f"treatment arm, control {bound}" if bound else f"run {pending['id']}"
+                return {"next_move": f"execute {label}",
+                        "command": f"python -B scripts/rds_cli.py --root {self.root} project execute --id {pending['id']}"}
+            return {"next_move": "register the remaining arm bound to the recorded control",
+                    "command": f"python -B scripts/rds_cli.py --root {self.root} project create --manifest <treatment-manifest.json>"}
+        verdict = self.compare()
+        if verdict is None:
+            return {"next_move": "resolve the missing arm state before comparison",
+                    "command": f"python -B scripts/rds_cli.py --root {self.root} project status --brief"}
+        if verdict.get("status") == "UNKNOWN":
+            return {"next_move": "resolve the recorded comparison blocker, then re-run project compare",
+                    "command": f"python -B scripts/rds_cli.py --root {self.root} project compare", "comparison": verdict}
+        if self._latest_project_checkpoint() is None:
+            return {"next_move": "record the decision with the kernel comparison as evidence",
+                    "command": (f"python -B scripts/rds_cli.py --root {self.root} checkpoint save "
+                                f"--kind project --id <decision-id> --decision '<decision; see project compare>'"),
+                    "comparison": verdict}
+        return {"next_move": "campaign reached a recorded decision; archive outputs or propose the next delta",
+                "command": f"python -B scripts/rds_cli.py --root {self.root} project status",
+                "comparison": verdict}
+
+    def _latest_project_checkpoint(self):
+        with self._db(True) as db:
+            table = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='checkpoints'").fetchone()
+            if not table:
+                return None
+            rows = db.execute("SELECT sha,body FROM checkpoints ORDER BY rowid DESC").fetchall()
+        for row in rows:
+            if hashlib.sha256(row["body"].encode("utf-8")).hexdigest() != row["sha"]:
+                require(False, "Checkpoint integrity failure")
+            body = json.loads(row["body"])
+            if body.get("kind") == "project":
+                return body
+        return None
+
+    def compare(self):
+        """Kernel-computed control/treatment verdict against the precommitted delta.
+
+        Returns None when the comparison is not yet derivable. The verdict is
+        exact over the recorded rational values; it never rounds a loss into a win.
+        """
+        contract = self.snapshot()["contract"]
+        metric = contract.get("primary_metric")
+        if not metric:
+            return {"status": "UNKNOWN", "reason": "contract declares no primary_metric"}
+        runs = {r["id"]: r for r in self.snapshot()["runs"]}
+        receipts = {r["run_id"]: r for r in self.snapshot()["receipts"]}
+        pairs = [(rid, r.get("arm"), r.get("control_id")) for rid, r in receipts.items()]
+        control_id = next((rid for rid, arm, _ in pairs if arm == "control"), None)
+        treatment_id = next((rid for rid, arm, cid in pairs if cid is not None and cid == control_id), None)
+        if control_id is None or treatment_id is None:
+            return None
+        try:
+            control = self._receipt_result(receipts[control_id])
+            treatment = self._receipt_result(receipts[treatment_id])
+        except (ValueError, OSError) as exc:
+            return {"status": "UNKNOWN", "reason": str(exc)}
+        if runs.get(control_id, {}).get("run_status") != "SUCCEEDED" or runs.get(treatment_id, {}).get("run_status") != "SUCCEEDED":
+            return None
+        delta = treatment - control
+        threshold = _parse_rational_string(metric["min_useful_delta"], "primary_metric.min_useful_delta")
+        useful = delta <= -threshold if metric["direction"] == "min" else delta >= threshold
+        harmful = delta > 0 if metric["direction"] == "min" else delta < 0
+        verdict = "GAIN_CONFIRMED" if useful else ("NOT_CONFIRMED" if harmful else "BELOW_RESOLUTION")
+        return {"status": verdict, "metric": metric["name"], "direction": metric["direction"],
+                "control": {"run_id": control_id, "value": str(control)},
+                "treatment": {"run_id": treatment_id, "value": str(treatment)},
+                "delta": str(delta), "min_useful_delta": metric["min_useful_delta"],
+                "receipt_sha256": {control_id: receipts[control_id].get("sha256"),
+                                   treatment_id: receipts[treatment_id].get("sha256")}}
 
     def _schedule(self, run):
         pythonw = Path(sys.executable).with_name("pythonw.exe")

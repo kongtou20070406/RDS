@@ -1,11 +1,14 @@
 """Public CLI acceptance for low-friction entry, ambiguity and preserved evidence."""
 from contextlib import closing
 import copy
+import concurrent.futures
 import hashlib
 import json
 import os
 from pathlib import Path
 import sqlite3
+import shutil
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -55,6 +58,305 @@ class QuickTests(unittest.TestCase):
         self.context_path.write_text(json.dumps(self.context), encoding='utf-8')
         self.graph_path.write_text(json.dumps(self.graph), encoding='utf-8')
 
+    def initialize_policy_ledger(self, max_attempts=1):
+        self.initialize_ledger()
+        old = self.ledger
+        contract = ProjectStore(old).snapshot()['contract']
+        self.ledger = self.root / 'policy-ledger'
+        self.ledger.mkdir()
+        for binding in contract['bindings']:
+            target = self.ledger / binding['path']
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(old / binding['path'], target)
+        contract['execution_policy'] = {'schema': 1, 'max_attempts': max_attempts}
+        ProjectStore(self.ledger).initialize(contract)
+
+    def policy_options(self):
+        return ['--context', str(self.context_path), '--graph', str(self.graph_path), '--ledger', str(self.ledger)]
+
+    def test_policy_failed_dispatch_cannot_reset_with_names_facts_ids_or_timeout(self):
+        self.initialize_policy_ledger()
+        marker = self.root / 'launch-marker'
+        self.script(f'from pathlib import Path\nPath({str(marker)!r}).write_text("started")\nraise SystemExit(7)\n')
+        self.call('checkpoint', 'save', '--id', 'before-policy', root=self.ledger)
+        failed = self.job('failed-one', False, *self.policy_options())
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertEqual(marker.read_text(), 'started')
+        before = ProjectStore(self.ledger).snapshot()['budget']
+        marker.unlink()
+        self.context['decision']['id'] = 'renamed-decision'
+        self.context['decision']['goal_revision'] = 'unverified-renamed-revision'
+        self.context['facts']['x']['note'] = 'claimed new evidence without changed bound bytes'
+        self.graph['nodes'][0]['id'] = 'renamed-node'
+        self.graph['nodes'][0]['executable']['decisions'] = ['renamed-decision']
+        self.graph['nodes'][0]['executable']['action']['id'] = 'renamed-action'
+        self.graph['nodes'][0]['executable']['action']['operation'] = 'renamed-operation-with-identical-execution'
+        self.graph['nodes'][0]['executable']['action']['target'] = 'renamed-target-with-identical-execution'
+        self.context_path.write_text(json.dumps(self.context), encoding='utf-8')
+        self.graph_path.write_text(json.dumps(self.graph), encoding='utf-8')
+        blocked = self.job('renamed-two', False, *self.policy_options(), '--timeout', '3')
+        self.assertNotEqual(blocked.returncode, 0)
+        self.assertIn('max_attempts', blocked.stderr)
+        self.assertFalse(marker.exists())
+        self.assertFalse((self.root / '.rds/exec/renamed-two').exists())
+        self.assertEqual(ProjectStore(self.ledger).snapshot()['budget'], before)
+        self.call('checkpoint', 'restore', '--id', 'before-policy', root=self.ledger)
+        self.assertEqual(ProjectStore(self.ledger).snapshot()['budget'], before)
+
+    def test_policy_explicit_two_attempts_keep_both_failures_and_refuse_the_third(self):
+        self.initialize_policy_ledger(max_attempts=2)
+        marker = self.root / 'two-attempts-marker'
+        self.script(f'from pathlib import Path\nwith Path({str(marker)!r}).open("a") as f: f.write("launch\\n")\nraise SystemExit(7)\n')
+        before = ProjectStore(self.ledger).snapshot()['budget']['wall_seconds']['charged_estimate']
+        for name in ('allowed-one', 'allowed-two'):
+            result = self.job(name, False, *self.policy_options())
+            self.assertNotEqual(result.returncode, 0)
+            saved = json.loads(Path(json.loads(result.stdout)['record']).read_text(encoding='utf-8'))
+            self.assertEqual(saved['receipt']['run_status'], 'FAILED')
+        self.assertEqual(marker.read_text().splitlines(), ['launch', 'launch'])
+        charged = ProjectStore(self.ledger).snapshot()['budget']
+        self.assertEqual(charged['wall_seconds']['charged_estimate'], before + 10)
+        rejected = self.job('third-refused', False, *self.policy_options())
+        self.assertIn('max_attempts', rejected.stderr)
+        self.assertEqual(marker.read_text().splitlines(), ['launch', 'launch'])
+        self.assertFalse((self.root / '.rds/exec/third-refused').exists())
+        self.assertEqual(ProjectStore(self.ledger).snapshot()['budget'], charged)
+
+    def test_policy_same_content_script_rename_does_not_reopen_failure(self):
+        self.initialize_policy_ledger()
+        marker = self.root / 'alias-marker'
+        self.script(f'from pathlib import Path\nPath({str(marker)!r}).write_text("first")\nraise SystemExit(7)\n')
+        self.job('original-script', False, *self.policy_options())
+        marker.unlink()
+        (self.root / 'same-code.py').write_bytes((self.root / 'probe.py').read_bytes())
+        before = ProjectStore(self.ledger).snapshot()['budget']
+        failed = self.call('exec', '--name', 'script-renamed', '--timeout', '5', *self.policy_options(),
+                           '--', sys.executable, '-B', 'same-code.py', ok=False)
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertIn('max_attempts', failed.stderr)
+        self.assertFalse(marker.exists())
+        self.assertEqual(ProjectStore(self.ledger).snapshot()['budget'], before)
+
+    def test_policy_new_actual_bound_evidence_bytes_reopen(self):
+        self.initialize_policy_ledger()
+        marker = self.root / 'evidence-marker'
+        self.script(f'from pathlib import Path\nPath({str(marker)!r}).write_text(Path("evidence.json").read_text())\n')
+        evidence = self.root / 'evidence.json'
+        evidence.write_text('first')
+        options = self.policy_options() + ['--bind', 'data=evidence.json']
+        self.job('evidence-one', True, *options)
+        before = ProjectStore(self.ledger).snapshot()['budget']['wall_seconds']['charged_estimate']
+        evidence.write_text('second')
+        self.job('evidence-two', True, *options)
+        self.assertEqual(marker.read_text(), 'second')
+        self.assertEqual(ProjectStore(self.ledger).snapshot()['budget']['wall_seconds']['charged_estimate'], before + 5)
+
+    def test_policy_concurrent_duplicate_cli_only_launches_and_charges_once(self):
+        self.initialize_policy_ledger()
+        marker = self.root / 'concurrent-marker'
+        self.script(f'from pathlib import Path\nimport time\nwith Path({str(marker)!r}).open("a") as f: f.write("launch\\n")\ntime.sleep(0.2)\n')
+        before = ProjectStore(self.ledger).snapshot()['budget']['wall_seconds']['charged_estimate']
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            list(pool.map(lambda name: self.job(name, False, *self.policy_options()), ('race-one', 'race-two')))
+        self.assertEqual(marker.read_text().splitlines(), ['launch'])
+        self.assertEqual(ProjectStore(self.ledger).snapshot()['budget']['wall_seconds']['charged_estimate'], before + 5)
+        with ProjectStore(self.ledger)._db(True) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM events WHERE json_extract(body,'$.kind')='EXTERNAL_RUN_ALLOWANCE'").fetchone()[0], 1)
+
+    def test_policy_success_alias_observes_verified_output_and_missing_output_refuses(self):
+        self.initialize_policy_ledger()
+        marker = self.root / 'success-marker'
+        self.script(f'from pathlib import Path\nPath({str(marker)!r}).write_text("launched")\nPath("outputs/result").write_text("original")\n')
+        options = self.policy_options() + ['--output', 'outputs/result']
+        first = self.job('success-one', True, *options)
+        job_root = Path(json.loads(Path(json.loads(first.stdout)['record']).read_text())['job_root'])
+        before = ProjectStore(self.ledger).snapshot()['budget']
+        marker.unlink()
+        second = self.job('success-renamed', True, *options)
+        self.assertEqual(json.loads(second.stdout)['status'], 'EXISTING_JOB')
+        self.assertFalse(marker.exists())
+        self.assertFalse((self.root / '.rds/exec/success-renamed').exists())
+        self.assertEqual(ProjectStore(self.ledger).snapshot()['budget'], before)
+        (job_root / 'outputs/result').unlink()
+        rejected = self.job('missing-output-reuse', False, *options)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn('output unavailable', rejected.stderr)
+        self.assertFalse(marker.exists())
+        self.assertEqual(ProjectStore(self.ledger).snapshot()['budget'], before)
+
+    def test_policy_same_name_recovery_requires_exact_parent_allowance(self):
+        self.initialize_policy_ledger()
+        marker = self.root / 'owned-child-marker'
+        self.script(f'from pathlib import Path\nPath({str(marker)!r}).write_text("launched")\n')
+        first = self.job('owned-child', True, *self.policy_options())
+        saved = json.loads(Path(json.loads(first.stdout)['record']).read_text(encoding='utf-8'))
+        before = ProjectStore(self.ledger).snapshot()['budget']
+        marker.unlink()
+        repeated = self.job('owned-child', True, *self.policy_options())
+        retained = json.loads(Path(json.loads(repeated.stdout)['record']).read_text(encoding='utf-8'))
+        self.assertEqual(retained['receipt']['sha256'], saved['receipt']['sha256'])
+        self.assertFalse(marker.exists())
+        self.assertEqual(ProjectStore(self.ledger).snapshot()['budget'], before)
+        copied_root = self.root / 'other-source'
+        copied_root.mkdir()
+        shutil.copyfile(self.root / 'probe.py', copied_root / 'probe.py')
+        copied_child = copied_root / '.rds/exec/owned-child'
+        shutil.copytree(saved['job_root'], copied_child)
+        refused = self.call('exec', '--name', 'owned-child', '--timeout', '5', *self.policy_options(),
+                            '--', sys.executable, '-B', 'probe.py', root=copied_root, ok=False)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn('no matching parent allowance', refused.stderr)
+        self.assertFalse(marker.exists())
+        self.assertEqual(ProjectStore(self.ledger).snapshot()['budget'], before)
+
+    def test_policy_same_name_failure_is_observed_without_another_charge(self):
+        self.initialize_policy_ledger()
+        marker = self.root / 'failed-child-marker'
+        self.script(f'from pathlib import Path\nPath({str(marker)!r}).write_text("launched")\nraise SystemExit(7)\n')
+        first = self.job('retained-failure', False, *self.policy_options())
+        saved = json.loads(Path(json.loads(first.stdout)['record']).read_text(encoding='utf-8'))
+        marker.unlink()
+        before = ProjectStore(self.ledger).snapshot()['budget']
+        repeated = self.job('retained-failure', False, *self.policy_options())
+        retained = json.loads(Path(json.loads(repeated.stdout)['record']).read_text(encoding='utf-8'))
+        self.assertNotEqual(repeated.returncode, 0)
+        self.assertEqual(retained['receipt']['sha256'], saved['receipt']['sha256'])
+        self.assertFalse(marker.exists())
+        self.assertEqual(ProjectStore(self.ledger).snapshot()['budget'], before)
+
+    def test_policy_executor_changed_after_charge_is_refused_before_launch(self):
+        self.initialize_policy_ledger()
+        runtime = self.root / 'disposable-runtime'
+        runtime.mkdir()
+        executor = runtime / Path(sys.executable).name
+        if os.name == 'nt':
+            shutil.copy2(sys.executable, executor)
+            for dll in Path(sys.executable).parent.glob('python*.dll'):
+                shutil.copyfile(dll, runtime / dll.name)
+        else:
+            executor.write_text('#!/bin/sh\nexec ' + shlex.quote(sys.executable) + ' "$@"\n')
+            executor.chmod(0o700)
+        original_executor = executor.read_bytes()
+        expected = hashlib.sha256(original_executor).hexdigest()
+        env = {**self.env, 'PYTHONHOME': sys.base_prefix}
+        runnable = subprocess.run([str(executor), '-B', '-c', 'print("disposable executor")'],
+                                  capture_output=True, text=True, env=env, timeout=10)
+        self.assertEqual(runnable.returncode, 0, runnable.stderr)
+        marker = self.root / 'executor-marker'
+        self.script(f'from pathlib import Path\nPath({str(marker)!r}).write_text("launched")\n')
+        before = ProjectStore(self.ledger).snapshot()['budget']['wall_seconds']['charged_estimate']
+        harness = '''import pathlib, sys
+sys.path.insert(0, sys.argv.pop(1))
+import rds_cli, rds_quick
+charge = rds_quick._charge_ledger
+def changed_after_charge(*args, **kwargs):
+    result = charge(*args, **kwargs)
+    if result is None and kwargs.get('dispatch', True):
+        with pathlib.Path(args[2]['argv'][0]).open('ab') as handle:
+            handle.write(b'actual-executor-change-after-charge')
+    return result
+rds_quick._charge_ledger = changed_after_charge
+sys.argv[0] = rds_cli.__file__
+raise SystemExit(rds_cli.main())
+'''
+        refused = subprocess.run([sys.executable, '-B', '-c', harness, str(ROOT / 'scripts'),
+                                 '--root', str(self.root), 'exec', '--name', 'changed-executor', '--timeout', '5',
+                                 *self.policy_options(), '--', str(executor), '-B', 'probe.py'],
+                                capture_output=True, text=True, encoding='utf-8', env=env, timeout=25)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn('changed before registration', refused.stderr)
+        self.assertNotEqual(hashlib.sha256(executor.read_bytes()).hexdigest(), expected)
+        self.assertFalse(marker.exists())
+        state = ProjectStore(self.root / '.rds/exec/changed-executor').snapshot()
+        self.assertFalse(state['runs'])
+        self.assertEqual(state['budget']['wall_seconds']['reserved'], 0)
+        charged = ProjectStore(self.ledger).snapshot()['budget']
+        self.assertEqual(charged['wall_seconds']['charged_estimate'], before + 5)
+        # Restore the original route; the incomplete charged child must still block it.
+        executor.write_bytes(original_executor)
+        repeated = self.call('exec', '--name', 'after-executor-crash', '--timeout', '5', *self.policy_options(),
+                             '--', str(executor), '-B', 'probe.py', ok=False)
+        self.assertIn('incomplete or ambiguous run', repeated.stderr)
+        self.assertFalse(marker.exists())
+        self.assertEqual(ProjectStore(self.ledger).snapshot()['budget'], charged)
+
+    def test_policy_charged_crash_without_child_does_not_refund_or_relaunch(self):
+        from rds_advisor import _loop_route
+        from rds_project import file_sha
+        from rds_quick import _charge_ledger, choice
+        self.initialize_policy_ledger()
+        self.script('print("not launched")\n')
+        selected = choice(json.loads(self.advise().stdout), self.context)
+        request = {'argv': [sys.executable, '-B', 'probe.py'], 'inputs': [
+            {'path': 'probe.py', 'roles': ['code'], 'sha256': file_sha(self.root / 'probe.py')}], 'outputs': [], 'timeout': 5}
+        _charge_ledger(self.ledger, self.root / '.rds/exec/crashed-child', request, 5,
+                       route=_loop_route(selected['candidate']), source_root=self.root)
+        before = ProjectStore(self.ledger).snapshot()['budget']
+        failed = self.job('after-charge-crash', False, *self.policy_options())
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertIn('charged child state is unavailable', failed.stderr)
+        self.assertFalse((self.root / '.rds/exec/after-charge-crash').exists())
+        self.assertEqual(ProjectStore(self.ledger).snapshot()['budget'], before)
+
+    def test_policy_guarded_success_reuses_original_review_and_missing_review_refuses(self):
+        self.initialize_policy_ledger()
+        marker = self.root / 'guard-launch-marker'
+        comparison = {'question_id': 'fixture', 'goal_revision': 'fixed', 'scope': {'domain': 'fixture'},
+                      'metric_definition': 'score', 'unit': 'ratio', 'cohort': 'fixed', 'protocol': 'fixed'}
+        baseline = self.root / 'baseline.json'
+        baseline.write_text(json.dumps({'status': 'PASS', 'comparison': comparison, 'score': '1'}), encoding='utf-8')
+        policy = {'schema': 1, 'wall_seconds': 1, 'comparison': comparison, 'metrics': [
+            {'name': 'score', 'direction': 'max', 'pointer': '/score', 'candidate': 'outputs/candidate.json',
+             'baseline': {'path': 'baseline.json', 'sha256': hashlib.sha256(baseline.read_bytes()).hexdigest()}}]}
+        (self.root / 'guard.json').write_text(json.dumps(policy), encoding='utf-8')
+        self.script(f'from pathlib import Path\nPath({str(marker)!r}).write_text("launched")\n'
+                    'Path("outputs/candidate.json").write_bytes(Path("baseline.json").read_bytes())\n')
+        options = self.policy_options() + ['--guard', 'guard.json', '--output', 'outputs/candidate.json']
+        first = self.job('guard-one', True, *options)
+        saved = json.loads(Path(json.loads(first.stdout)['record']).read_text(encoding='utf-8'))
+        child = ProjectStore(saved['job_root'])
+        before = ProjectStore(self.ledger).snapshot()['budget']
+        marker.unlink()
+        second = self.job('guard-renamed', True, *options)
+        reused = json.loads(Path(json.loads(second.stdout)['record']).read_text(encoding='utf-8'))
+        self.assertEqual(reused['regression_review'], saved['regression_review'])
+        self.assertEqual(reused['receipt']['sha256'], saved['receipt']['sha256'])
+        self.assertFalse(marker.exists())
+        self.assertEqual(ProjectStore(self.ledger).snapshot()['budget'], before)
+        with child._db() as db:
+            # Model the post-command/pre-review crash window in this disposable ledger.
+            db.execute('DROP TRIGGER events_no_delete')
+            db.execute("DELETE FROM events WHERE json_extract(body,'$.kind')='QUICK_EXEC_REGRESSION_REVIEW'")
+        rejected = self.job('guard-unfinished', False, *options)
+        self.assertIn('Guard review is unfinished', rejected.stderr)
+        self.assertFalse(marker.exists())
+        self.assertFalse((self.root / '.rds/exec/guard-unfinished').exists())
+        self.assertEqual(ProjectStore(self.ledger).snapshot()['budget'], before)
+
+    def test_policy_source_owner_applies_without_context_and_cannot_be_replaced(self):
+        self.initialize_policy_ledger()
+        marker = self.root / 'raw-owner-marker'
+        (self.ledger / 'raw-fail.py').write_text(
+            f'from pathlib import Path\nPath({str(marker)!r}).write_text("launched")\nraise SystemExit(7)\n', encoding='utf-8')
+        first = self.call('exec', '--name', 'raw-one', '--timeout', '5', '--', sys.executable, '-B', 'raw-fail.py',
+                          root=self.ledger, ok=False)
+        self.assertNotEqual(first.returncode, 0)
+        self.assertEqual(marker.read_text(), 'launched')
+        marker.unlink()
+        before = ProjectStore(self.ledger).snapshot()['budget']
+        second = self.call('exec', '--name', 'raw-renamed', '--timeout', '3', '--', sys.executable, '-B', 'raw-fail.py',
+                           root=self.ledger, ok=False)
+        self.assertIn('max_attempts', second.stderr)
+        self.assertFalse(marker.exists())
+        self.assertFalse((self.ledger / '.rds/exec/raw-renamed').exists())
+        different = self.root / '.rds/exec/ledger'
+        switched = self.call('exec', '--name', 'switched-owner', '--timeout', '3', '--context', str(self.context_path),
+                            '--graph', str(self.graph_path), '--ledger', str(different), '--', sys.executable, '-B', 'raw-fail.py',
+                            root=self.ledger, ok=False)
+        self.assertIn('cannot be replaced', switched.stderr)
+        self.assertFalse(marker.exists())
+        self.assertEqual(ProjectStore(self.ledger).snapshot()['budget'], before)
+
     def advise(self, *tail, ok=True):
         return self.call('advise', '--context', str(self.context_path), '--graph', str(self.graph_path), *tail, root=self.ledger, ok=ok)
 
@@ -76,6 +378,36 @@ class QuickTests(unittest.TestCase):
         collision = self.job('collide', False, '--output', 'probe.py')
         self.assertNotEqual(collision.returncode, 0)
         self.assertIn('overwrites bound input', collision.stderr)
+
+    def test_invalid_output_binding_is_rejected_before_parent_charge_or_child_creation(self):
+        self.initialize_policy_ledger()
+        marker = self.root / 'collision-launched'
+        self.script(f'from pathlib import Path\nPath({str(marker)!r}).write_text("launched")\n')
+        before_budget = ProjectStore(self.ledger).snapshot()['budget']
+        before_children = set((self.root / '.rds/exec').iterdir())
+
+        for name, output in [('collision-retry', 'probe.py'), ('nested-collision-retry', 'probe.py/child.json'), ('traversal-retry', '../escape.json')]:
+            first = self.job(name, False, *self.policy_options(), '--output', output)
+            second = self.job(name, False, *self.policy_options(), '--output', output)
+            self.assertNotEqual(first.returncode, 0)
+            self.assertNotEqual(second.returncode, 0)
+            self.assertFalse((self.root / '.rds/exec' / name).exists())
+
+        self.assertEqual(set((self.root / '.rds/exec').iterdir()), before_children)
+        self.assertEqual(ProjectStore(self.ledger).snapshot()['budget'], before_budget)
+        self.assertFalse(marker.exists())
+    def test_native_objective_without_operational_contract_keeps_quick_compatibility(self):
+        from rds_math import bind_objective
+        from test_rds_native_research import GOAL
+        goal = bind_objective(self.root, json.dumps(GOAL).encode('utf-8'))
+        self.script('print("native objective, no operational owner yet")\n')
+        result = json.loads(self.job('objective-only').stdout)
+        self.assertEqual(result['run_status'], 'SUCCEEDED')
+        saved = json.loads(Path(result['record']).read_text(encoding='utf-8'))
+        state = ProjectStore(saved['job_root']).snapshot(check_bindings=True)
+        self.assertFalse(state['binding_check']['errors'])
+        self.assertEqual(state['contract']['objective_sha256'], goal['asset']['sha256'])
+        self.assertEqual(saved['scientific_support'], 'UNKNOWN')
 
     def test_prospective_theory_choice_preserves_outputs_without_claiming_proof(self):
         self.initialize_ledger()
@@ -518,6 +850,240 @@ class QuickTests(unittest.TestCase):
         self.assertEqual(rejected['status'], 'RECORDED_REJECTION')
         output = json.loads(self.advise('--brief').stdout)
         self.assertIn('REPEAT_REJECTED_ROUTE', output['flags'])
+
+    def test_rejections_recorded_for_the_same_goal_survive_renamed_questions(self):
+        from rds_checkpoints import save_checkpoint
+        self.initialize_ledger()
+        goal = [{'fact': 'long_gain', 'op': 'gte', 'value': 0.05}]
+        witness = self.root / 'witness.json'
+        witness.write_text('{"long_gain": -0.6}', encoding='utf-8')
+
+        def write(question, parameters, goal_conditions=goal, scope=None, kind='PAIRED_TEST', operation='train', revision='growth-v1'):
+            self.context = {'research_mode': 'theory' if kind == 'OBLIGATION_CHECK' else 'empirical',
+                            'decision': {'id': question, 'goal_revision': revision, 'goal_conditions': goal_conditions,
+                                         'scope': scope or {'domain': 'synthetic'}},
+                            'facts': {'long_gain': {'value': None, 'source': 'unmeasured-current-scope.json'}}}
+            if goal_conditions is None:
+                self.context['decision'].pop('goal_conditions')
+            action = {'id': 'recipe', 'kind': kind, 'description': 'Train a scoped recipe and measure the declared gain',
+                      'operation': operation, 'target': 'Measure long gain', 'parameters': parameters,
+                      'goal_contribution': {'target': 'long_gain', 'path': ['Measure long gain'], 'source': 'protocol.json'},
+                      'competing_explanations': ['recipe-capacity', 'training-premise'], 'required_observables': ['long_gain'],
+                      'outcomes': [{'observation': 'gain', 'next_decision': 'confirm'},
+                                   {'observation': 'no gain', 'next_decision': 'revise'}]}
+            if kind == 'OBLIGATION_CHECK':
+                action.pop('competing_explanations')
+                action.update(claim='A scoped implication', outcomes=[{'observation': label, 'next_decision': label}
+                              for label in ('verified', 'counterexample', 'unresolved')])
+            self.graph = {'nodes': [{'id': 'route', 'sources': ['fixture'], 'executable': {
+                'decisions': [question], 'preconditions': [], 'action': action}}], 'edges': []}
+            self.context_path.write_text(json.dumps(self.context), encoding='utf-8')
+            self.graph_path.write_text(json.dumps(self.graph), encoding='utf-8')
+
+        def full():
+            advice = json.loads(self.advise().stdout)
+            search = next(r['search'] for r in advice['recommendations'] if r.get('type') == 'EXECUTABLE_DIRECTION_SEARCH')
+            flags = {f['kind']: f for f in search.get('loop_review', {}).get('flags', [])}
+            return search, flags, search['selection_review'].get('next_move', {}).get('kind')
+
+        write('round-1', {'gain': 16})
+        first = json.loads(self.advise('--brief').stdout)
+        self.assertEqual(first['next_move'], 'RESOLVE_PREMISE')  # A first unmeasured attempt need not jump.
+        self.advise('--record', 'round-1-choice')
+        self.call('reject', '--reason', 'locked final gain failed', '--evidence', str(witness), root=self.ledger)
+
+        # A renamed question that only adds a knob: still allowed, but the recorded rejection reaches the next move.
+        write('round-2', {'gain': 16, 'tau': 0.5})
+        before = ProjectStore(self.ledger).snapshot()
+        search, flags, move = full()
+        self.assertEqual(ProjectStore(self.ledger).snapshot(), before)
+        self.assertEqual([c['status'] for c in search['candidates']], ['READY'])
+        self.assertEqual(flags['GOAL_ROUTES_REJECTED']['rejected_routes'], 1)
+        self.assertEqual(flags['GOAL_ROUTES_REJECTED']['question_ids'], ['round-1'])
+        self.assertEqual(flags['GOAL_ROUTES_REJECTED']['candidate_ids'], [search['candidates'][0]['id']])
+        self.assertEqual(move, 'REFORMULATE')
+        reason = search['selection_review']['next_move']['reason']
+        self.assertIn('changes only parameters', reason)
+        self.assertIn('not a capacity bound', reason)
+        self.assertEqual(search['selection_review']['next_move']['authorization'], 'UNCHANGED')
+        brief = json.loads(self.advise('--brief').stdout)
+        self.assertEqual(brief['next_move'], 'REFORMULATE')
+        self.assertIn('GOAL_ROUTES_REJECTED', brief['flags'])
+        self.assertEqual(json.loads(self.advise('--record', 'round-2-choice', '--brief').stdout)['checkpoint'], 'round-2-choice')
+
+        # Renaming the question does not reopen the unchanged rejected route.
+        write('round-3', {'gain': 16})
+        search, flags, move = full()
+        self.assertEqual(search['candidates'], [])
+        self.assertEqual(search['blocked_candidates'][0]['status'], 'BLOCKED_REJECTED_ROUTE')
+        self.assertEqual(flags['REPEAT_REJECTED_ROUTE']['recorded_question_id'], 'round-1')
+        self.assertNotIn('GOAL_ROUTES_REJECTED', flags)
+
+        # A changed scope reopens the same route for review; it is not called another variant.
+        write('round-3', {'gain': 16}, scope={'domain': 'synthetic', 'data': 'wider'})
+        search, flags, move = full()
+        self.assertEqual(search['candidates'][0]['loop_review']['kind'], 'REOPEN_REVIEW')
+        self.assertNotIn('GOAL_ROUTES_REJECTED', flags)
+        self.assertEqual(move, 'RESOLVE_PREMISE')
+
+        # A changed operation, other predicates, another revision or no predicates share no variant history.
+        for options in ({'operation': 'distill'}, {'goal_conditions': [{'fact': 'long_gain', 'op': 'gte', 'value': 0.1}]},
+                        {'revision': 'growth-v2'}, {'goal_conditions': None}):
+            with self.subTest(options=options):
+                write('round-4', {'gain': 16, 'tau': 0.9}, **options)
+                search, flags, move = full()
+                self.assertEqual([c['status'] for c in search['candidates']], ['READY'])
+                self.assertNotIn('GOAL_ROUTES_REJECTED', flags)
+                self.assertNotEqual(move, 'REFORMULATE')
+
+        # Predicate order does not change goal identity.
+        write('round-4', {'gain': 8}, goal_conditions=[{'value': 0.05, 'op': 'gte', 'fact': 'long_gain'}])
+        self.assertIn('GOAL_ROUTES_REJECTED', full()[1])
+
+        # A healthy scoped obligation check is not interrupted by the history prompt.
+        write('round-5', {'gain': 32}, kind='OBLIGATION_CHECK')
+        rejected_obligation = {'question_id': 'round-0', 'goal_revision': 'growth-v1', 'goal_conditions': goal,
+            'scope': {'domain': 'synthetic'}, 'candidate': {'id': 'route:recipe', 'status': 'READY',
+            'action': {**self.graph['nodes'][0]['executable']['action'], 'parameters': {'gain': 4}}},
+            'outcome': 'rejected', 'evidence': copy.deepcopy(self.context['facts'])}  # Same relevant evidence as this check.
+        save_checkpoint(self.ledger, 'rejected-obligation', ProjectStore(self.ledger).snapshot(check_bindings=True),
+                        kind='project', decision=rejected_obligation)
+        search, flags, move = full()
+        self.assertIn('GOAL_ROUTES_REJECTED', flags)
+        self.assertEqual(move, 'RESOLVE_PREMISE')
+
+        # Another question's malformed record cannot block this question, and partial same-goal history is not applied.
+        write('round-6', {'gain': 16, 'tau': 0.7})
+        self.assertEqual(full()[2], 'REFORMULATE')
+        save_checkpoint(self.ledger, 'malformed-other', ProjectStore(self.ledger).snapshot(check_bindings=True),
+                        kind='project', decision={**rejected_obligation, 'question_id': 'other', 'outcome': 'unknown-label'})
+        search, flags, move = full()
+        self.assertNotIn('LOOP_HISTORY_REVIEW_ERROR', flags)
+        self.assertEqual(flags['GOAL_HISTORY_SKIPPED']['checkpoint_ids'], ['malformed-other'])
+        self.assertNotIn('GOAL_ROUTES_REJECTED', flags)
+        self.assertEqual(move, 'RESOLVE_PREMISE')
+        self.assertIn('GOAL_HISTORY_SKIPPED', json.loads(self.advise('--brief').stdout)['flags'])
+        self.assertEqual(json.loads(self.advise('--record', 'round-6-choice', '--brief').stdout)['checkpoint'], 'round-6-choice')
+
+    def test_latest_same_goal_choice_supersedes_a_recorded_rejection(self):
+        from test_rds_advisor import LedgerLoopTests
+        from rds_checkpoints import save_checkpoint
+        helper = LedgerLoopTests()
+        helper.setUp()
+        self.addCleanup(helper.doCleanups)
+        context = copy.deepcopy(helper.context)
+        context['decision']['goal_conditions'] = [{'fact': 'goal', 'value': True}]
+        context['facts']['goal'] = {'value': None, 'source': 'unmeasured.json'}
+        graph = copy.deepcopy(helper.graph)
+        graph['nodes'][0]['executable']['action']['parameters'] = {'p': 2}
+        variant = helper.search(context=context, graph=graph)['search']['candidates'][0]
+        rejected = copy.deepcopy(variant)
+        rejected['action']['parameters'] = {'p': 1}
+
+        def save(identity, outcome):
+            decision = context['decision']
+            save_checkpoint(helper.root, identity, helper.store.snapshot(), kind='project', decision={
+                'question_id': 'earlier-question', 'goal_revision': decision['goal_revision'],
+                'goal_conditions': decision['goal_conditions'], 'scope': decision['scope'], 'candidate': rejected,
+                'outcome': outcome, 'evidence': context['facts']})
+
+        save('earlier-rejection', 'rejected')
+        search = helper.search(context=context, graph=graph)['search']
+        self.assertEqual([c['status'] for c in search['candidates']], ['READY'])
+        self.assertIn('GOAL_ROUTES_REJECTED', {f['kind'] for f in search['loop_review']['flags']})
+        # History lifts the unknown-goal pause; this undeclared action then needs its goal link first.
+        self.assertEqual(search['selection_review']['next_move']['kind'], 'REVIEW_GOAL_LINK')
+        for outcome in ('plan_locked', 'accepted'):
+            with self.subTest(outcome=outcome):
+                save('later-' + outcome, outcome)
+                search = helper.search(context=context, graph=graph)['search']
+                self.assertEqual([c['status'] for c in search['candidates']], ['READY'])
+                self.assertNotIn('GOAL_ROUTES_REJECTED', {f['kind'] for f in search['loop_review']['flags']})
+                self.assertEqual(search['selection_review']['next_move']['kind'], 'RESOLVE_PREMISE')
+
+    def goal_ledger(self):
+        from test_rds_advisor import LedgerLoopTests
+        from rds_checkpoints import save_checkpoint
+        helper = LedgerLoopTests()
+        helper.setUp()
+        self.addCleanup(helper.doCleanups)
+        context = copy.deepcopy(helper.context)
+        context['decision']['goal_conditions'] = [{'fact': 'goal', 'value': True}]
+        context['facts']['goal'] = {'value': None, 'source': 'unmeasured.json'}
+        graph = copy.deepcopy(helper.graph)
+        graph['nodes'][0]['executable']['action']['parameters'] = {'p': 1}
+
+        def save(identity, question, candidate, outcome, scope=None):
+            decision = context['decision']
+            save_checkpoint(helper.root, identity, helper.store.snapshot(), kind='project', decision={
+                'question_id': question, 'goal_revision': decision['goal_revision'],
+                'goal_conditions': decision['goal_conditions'], 'scope': scope or decision['scope'],
+                'candidate': candidate, 'outcome': outcome, 'evidence': context['facts']})
+
+        def advise(context=context, graph=graph):
+            search = helper.search(context=context, graph=graph)['search']
+            return search, {f['kind']: f for f in search['loop_review']['flags']}
+        return helper.search(context=context, graph=graph)['search']['candidates'][0], context, graph, save, advise
+
+    def test_latest_same_goal_decision_wins_across_current_and_renamed_questions(self):
+        # Returning to an older question cannot bypass a later rejection recorded under a renamed one.
+        candidate, context, graph, save, advise = self.goal_ledger()
+        save('current-accepted', 'choose', candidate, 'accepted')
+        save('renamed-rejected', 'renamed', candidate, 'rejected')
+        search, flags = advise()
+        self.assertEqual(search['candidates'], [])
+        self.assertEqual([c['status'] for c in search['blocked_candidates']], ['BLOCKED_REJECTED_ROUTE'])
+        self.assertEqual(flags['REPEAT_REJECTED_ROUTE']['checkpoint_id'], 'renamed-rejected')
+        self.assertEqual(flags['REPEAT_REJECTED_ROUTE']['recorded_question_id'], 'renamed')
+        # The existing scope and evidence reopening rules still apply to that later rejection.
+        moved = copy.deepcopy(context)
+        moved['decision']['scope'] = {'dataset': 'independent-new-scope'}
+        changed = copy.deepcopy(context)
+        changed['facts']['x']['binding'] = {'run_id': 'new-run'}
+        for variant in (moved, changed):
+            with self.subTest(variant=variant['decision']['scope']):
+                search, flags = advise(context=variant)
+                self.assertEqual([c['status'] for c in search['candidates']], ['READY'])
+                self.assertEqual(flags['REOPEN_REVIEW']['checkpoint_id'], 'renamed-rejected')
+                self.assertNotIn('REPEAT_REJECTED_ROUTE', flags)
+
+        # A later acceptance under the renamed question supersedes this question's older rejection.
+        candidate, context, graph, save, advise = self.goal_ledger()
+        save('current-rejected', 'choose', candidate, 'rejected')
+        save('renamed-accepted', 'renamed', candidate, 'accepted')
+        search, flags = advise()
+        self.assertEqual([c['status'] for c in search['candidates']], ['READY'])
+        self.assertEqual(search.get('blocked_candidates', []), [])
+        self.assertNotIn('REPEAT_REJECTED_ROUTE', flags)
+        self.assertNotIn('REOPEN_REVIEW', flags)
+
+    def test_parameter_variant_hint_applies_only_in_the_rejected_scope_and_evidence(self):
+        candidate, context, graph, save, advise = self.goal_ledger()
+        save('earlier-rejection', 'earlier', candidate, 'rejected')
+        variant_graph = copy.deepcopy(graph)
+        variant_graph['nodes'][0]['executable']['action']['parameters'] = {'p': 2}
+        search, flags = advise(graph=variant_graph)
+        self.assertEqual([c['status'] for c in search['candidates']], ['READY'])
+        self.assertEqual(flags['GOAL_ROUTES_REJECTED']['checkpoint_ids'], ['earlier-rejection'])
+        unrelated = copy.deepcopy(context)
+        unrelated['facts']['unrelated'] = {'value': 3, 'source': 'other.json'}
+        self.assertIn('GOAL_ROUTES_REJECTED', advise(context=unrelated, graph=variant_graph)[1])
+
+        # The new scope or relevant evidence has not failed: no stagnation hint and no forced reformulation.
+        moved = copy.deepcopy(context)
+        moved['decision']['scope'] = {'dataset': 'independent-new-scope'}
+        changed = copy.deepcopy(context)
+        changed['facts']['x']['binding'] = {'run_id': 'new-run'}
+        for variant in (moved, changed):
+            with self.subTest(variant=variant['decision']['scope']):
+                search, flags = advise(context=variant, graph=variant_graph)
+                self.assertEqual([c['status'] for c in search['candidates']], ['READY'])
+                self.assertNotIn('GOAL_ROUTES_REJECTED', flags)
+                self.assertEqual(search['selection_review']['next_move']['kind'], 'RESOLVE_PREMISE')
+
+        # A later acceptance recorded in another scope does not supersede the rejection in this scope.
+        save('other-scope-accepted', 'earlier', candidate, 'accepted', scope={'dataset': 'independent-new-scope'})
+        self.assertEqual(advise(graph=variant_graph)[1]['GOAL_ROUTES_REJECTED']['checkpoint_ids'], ['earlier-rejection'])
 
     def test_prospective_job_cannot_reset_the_parent_budget(self):
         self.initialize_ledger()

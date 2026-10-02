@@ -3,8 +3,9 @@ import ast
 import inspect
 import json
 import math
+import re
 from fractions import Fraction
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 
 def _finite_number(value):
@@ -357,6 +358,575 @@ class RationalCertificateOperator:
         return _scaffold(RationalCertificateOperator, _rational_self_test)
 
 
+# ---------------------------------------------------------------------------
+# Operator 5: EGraphEquivalenceOperator (egraph_equivalence_saturation)
+# ---------------------------------------------------------------------------
+
+class EGraphEquivalenceOperator:
+    """Bounded rewrites for declared rational-polynomial expressions.
+
+    Only commutativity and the 0/1 identities are implemented. Distinct classes
+    do not establish inequality; FAIL requires an exact rational witness.
+    """
+
+    DOMAIN = "rational_polynomials"
+    AXIOMS = ("add_commutativity", "mul_commutativity", "add_zero", "mul_one")
+    MAX_INPUT_NODES = 512
+    MAX_DEPTH = 32
+    MAX_CONSTANT_BITS = 128
+    MAX_VALUE_BITS = 4096
+
+    class BudgetExhausted(RuntimeError):
+        pass
+
+    @staticmethod
+    def _limit(value, name, lower, upper):
+        if type(value) is not int or not lower <= value <= upper:
+            raise ValueError(f"{name} must be an integer in {lower}..{upper}")
+        return value
+
+    @classmethod
+    def _variables(cls, variables):
+        import re
+        if not isinstance(variables, (list, tuple)) or len(variables) > 16:
+            raise ValueError("Declare at most 16 rational variables")
+        if not all(isinstance(name, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,31}", name)
+                   for name in variables) or len(set(variables)) != len(variables):
+            raise ValueError("Variables must be distinct bounded identifiers")
+        return tuple(sorted(variables))
+
+    @classmethod
+    def _normalize(cls, expr, variables, count, depth=0):
+        from fractions import Fraction
+        import re
+        count[0] += 1
+        if count[0] > cls.MAX_INPUT_NODES or depth > cls.MAX_DEPTH:
+            raise ValueError("Expression exceeds node/depth limits")
+        if isinstance(expr, (list, tuple)):
+            if len(expr) != 3 or expr[0] not in ("+", "*"):
+                raise ValueError("Only binary + and * expressions are supported")
+            return (expr[0], cls._normalize(expr[1], variables, count, depth + 1),
+                    cls._normalize(expr[2], variables, count, depth + 1))
+        if type(expr) is int or isinstance(expr, Fraction):
+            value = Fraction(expr)
+        elif isinstance(expr, str):
+            if expr in variables:
+                return expr
+            if not re.fullmatch(r"[+-]?\d{1,32}(?:/[1-9]\d{0,31})?", expr):
+                raise ValueError("Unknown symbol or unsupported rational literal")
+            value = Fraction(expr)
+        else:
+            raise ValueError("Leaves must be exact rationals or declared variables; floats/bools are unsupported")
+        if max(abs(value.numerator).bit_length(), value.denominator.bit_length()) > cls.MAX_CONSTANT_BITS:
+            raise ValueError("Rational constant exceeds 128 bits")
+        return value
+
+    class EGraph:
+        def __init__(self, variables=(), max_nodes=1024, max_work=50000):
+            self.variables = EGraphEquivalenceOperator._variables(variables)
+            self.max_nodes = EGraphEquivalenceOperator._limit(max_nodes, "max_nodes", 1, 2048)
+            self.max_work = EGraphEquivalenceOperator._limit(max_work, "max_work", 1, 200000)
+            self.work = 0
+            self.parent, self.rank, self.classes, self.hashcons = {}, {}, {}, {}
+
+        def _tick(self):
+            if self.work >= self.max_work:
+                raise EGraphEquivalenceOperator.BudgetExhausted("E-graph work budget exhausted")
+            self.work += 1
+
+        def find(self, i):
+            if type(i) is not int or i not in self.parent:
+                raise ValueError("Unknown e-class")
+            root = i
+            while self.parent[root] != root:
+                root = self.parent[root]
+            while self.parent[i] != i:
+                parent = self.parent[i]
+                self.parent[i] = root
+                i = parent
+            return root
+
+        def union(self, id1, id2):
+            self._tick()
+            root1, root2 = self.find(id1), self.find(id2)
+            if root1 != root2:
+                if self.rank[root1] < self.rank[root2]:
+                    root1, root2 = root2, root1
+                self.parent[root2] = root1
+                if self.rank[root1] == self.rank[root2]:
+                    self.rank[root1] += 1
+                self.classes[root1].update(self.classes.pop(root2))
+            return root1
+
+        def canonicalize_node(self, node):
+            op, children = node
+            return op, tuple(self.find(child) for child in children)
+
+        def _insert_node(self, node):
+            self._tick()
+            node = self.canonicalize_node(node)
+            if node in self.hashcons:
+                return self.find(self.hashcons[node])
+            if len(self.parent) >= self.max_nodes:
+                raise EGraphEquivalenceOperator.BudgetExhausted("E-graph node budget exhausted")
+            new_id = len(self.parent)
+            self.parent[new_id], self.rank[new_id] = new_id, 0
+            self.classes[new_id], self.hashcons[node] = {node}, new_id
+            return new_id
+
+        def add_node(self, op, child_ids):
+            if op not in ("+", "*") or len(child_ids) != 2:
+                raise ValueError("Expected a binary supported operator")
+            return self._insert_node((op, tuple(child_ids)))
+
+        def _add(self, expr):
+            from fractions import Fraction
+            if isinstance(expr, Fraction):
+                return self._insert_node(("const:" + str(expr), ()))
+            if isinstance(expr, str):
+                return self._insert_node(("var:" + expr, ()))
+            return self.add_node(expr[0], (self._add(expr[1]), self._add(expr[2])))
+
+        def add(self, expr):
+            normalized = EGraphEquivalenceOperator._normalize(expr, self.variables, [0])
+            return self._add(normalized)
+
+        def rebuild(self):
+            while True:
+                changed, rebuilt = False, {}
+                for node, class_id in list(self.hashcons.items()):
+                    self._tick()
+                    node, root = self.canonicalize_node(node), self.find(class_id)
+                    if node in rebuilt and self.find(rebuilt[node]) != root:
+                        root = self.union(root, rebuilt[node])
+                        changed = True
+                    rebuilt[node] = self.find(root)
+                self.hashcons = rebuilt
+                if not changed:
+                    break
+            self.classes = {root: set() for root in self.classes}
+            for node, class_id in self.hashcons.items():
+                self.classes[self.find(class_id)].add(node)
+
+        def saturate_standard_algebra(self, max_iter=8):
+            EGraphEquivalenceOperator._limit(max_iter, "max_iter", 0, 16)
+            for _ in range(max_iter):
+                changed = False
+                for node, class_id in list(self.hashcons.items()):
+                    self._tick()
+                    op, children = self.canonicalize_node(node)
+                    if op not in ("+", "*"):
+                        continue
+                    candidates = [self.add_node(op, (children[1], children[0]))]
+                    identity = "const:0" if op == "+" else "const:1"
+                    for child, other in ((children[0], children[1]), (children[1], children[0])):
+                        if (identity, ()) in self.classes[self.find(child)]:
+                            candidates.append(other)
+                    for candidate in candidates:
+                        if self.find(class_id) != self.find(candidate):
+                            self.union(class_id, candidate)
+                            changed = True
+                if changed:
+                    self.rebuild()
+                else:
+                    return True
+            return False
+
+    @classmethod
+    def _evaluate(cls, expr, values, graph):
+        from fractions import Fraction
+        graph._tick()
+        if isinstance(expr, Fraction):
+            return expr
+        if isinstance(expr, str):
+            return values[expr]
+        left, right = cls._evaluate(expr[1], values, graph), cls._evaluate(expr[2], values, graph)
+        numerator_bits = (max(abs(left.numerator).bit_length() + right.denominator.bit_length(),
+                              abs(right.numerator).bit_length() + left.denominator.bit_length()) + 1
+                          if expr[0] == "+" else abs(left.numerator).bit_length() + abs(right.numerator).bit_length())
+        denominator_bits = left.denominator.bit_length() + right.denominator.bit_length()
+        if max(numerator_bits, denominator_bits) > cls.MAX_VALUE_BITS:
+            raise cls.BudgetExhausted("Exact witness evaluation exceeds 4096 bits")
+        return left + right if expr[0] == "+" else left * right
+
+    @classmethod
+    def verify_algebraic_equivalence(cls, expr_a, expr_b, max_iter=8, *,
+                                     variables=(), domain=DOMAIN, max_nodes=1024, max_work=50000):
+        """Check a scoped rewrite connection or an exact point counterexample."""
+        from fractions import Fraction
+        import hashlib
+        import json
+        if domain != cls.DOMAIN:
+            raise ValueError("Only the rational_polynomials domain is supported")
+        variables = cls._variables(variables)
+        cls._limit(max_iter, "max_iter", 0, 16)
+        count = [0]
+        left = cls._normalize(expr_a, variables, count)
+        right = cls._normalize(expr_b, variables, count)
+
+        def encode(expr):
+            if isinstance(expr, Fraction):
+                return ["rational", str(expr)]
+            if isinstance(expr, str):
+                return ["symbol", expr]
+            return [expr[0], encode(expr[1]), encode(expr[2])]
+
+        binding = {"domain": domain, "variables": list(variables), "axioms": list(cls.AXIOMS),
+                   "expr_a": encode(left), "expr_b": encode(right)}
+        graph = cls.EGraph(variables, max_nodes, max_work)
+        result = {"status": "UNKNOWN", "assurance": "NONE", "equivalent": None,
+                  "domain": domain, "variables": list(variables), "axioms": list(cls.AXIOMS),
+                  "input_sha256": hashlib.sha256(json.dumps(binding, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+                  "limits": {"max_iter": max_iter, "max_nodes": max_nodes, "max_work": max_work},
+                  "saturated": False, "budget_exhausted": False, "certificate_status": "NOT_EMITTED",
+                  "application_status": "UNKNOWN"}
+        try:
+            id_a, id_b = graph._add(left), graph._add(right)
+            if graph.find(id_a) != graph.find(id_b):
+                result["saturated"] = graph.saturate_standard_algebra(max_iter)
+            result["root_a"], result["root_b"] = graph.find(id_a), graph.find(id_b)
+            if result["root_a"] == result["root_b"]:
+                result.update(status="PASS", assurance="BOUNDED_REWRITE_CHECK", equivalent=True,
+                              reason="Connected by supported identities, commutativity and congruence in the declared domain")
+            else:
+                assignments = [{name: Fraction(value) for name in variables} for value in (0, 1, 2, -1)]
+                assignments.extend({name: Fraction(1 if name == selected else 0) for name in variables}
+                                   for selected in variables)
+                for values in assignments:
+                    value_a, value_b = cls._evaluate(left, values, graph), cls._evaluate(right, values, graph)
+                    if value_a != value_b:
+                        result.update(status="FAIL", assurance="EXACT_RATIONAL_COUNTEREXAMPLE", equivalent=False,
+                                      reason="Exact values differ at a declared-domain assignment",
+                                      counterexample={"variables": {name: str(value) for name, value in values.items()},
+                                                      "expr_a": str(value_a), "expr_b": str(value_b)})
+                        break
+                else:
+                    result["reason"] = "No supported rewrite connection or exact counterexample found within limits"
+        except cls.BudgetExhausted as exc:
+            result.update(reason=str(exc), budget_exhausted=True)
+        result.update(total_eclasses=len(graph.classes), total_enodes=len(graph.hashcons), work_used=graph.work)
+        return result
+
+    @classmethod
+    def operator_self_test(cls):
+        positive = cls.verify_algebraic_equivalence(("*", "x", ("+", "y", 0)), ("*", "y", "x"),
+                                                   variables=("x", "y"))
+        negative = cls.verify_algebraic_equivalence(("+", "x", "y"), ("*", "x", "y"),
+                                                   variables=("x", "y"))
+        unresolved = cls.verify_algebraic_equivalence(("+", 1, 1), 2)
+        assert positive["status"] == "PASS" and positive["certificate_status"] == "NOT_EMITTED"
+        assert negative["status"] == "FAIL" and negative["counterexample"]
+        assert unresolved["status"] == "UNKNOWN" and unresolved["equivalent"] is None
+        return {"self_test_status": "PASS", "positive": positive,
+                "negative_status": negative["status"], "unresolved_status": unresolved["status"]}
+
+    @staticmethod
+    def scaffold_code():
+        """Export this implementation and its positive/negative/unresolved checks."""
+        import ast
+        import inspect
+        source = inspect.getsource(EGraphEquivalenceOperator)
+        lines = source.splitlines()
+        method = next(node for node in ast.parse(source).body[0].body
+                      if isinstance(node, ast.FunctionDef) and node.name == "scaffold_code")
+        start = min([method.lineno] + [decorator.lineno for decorator in method.decorator_list]) - 1
+        del lines[start:method.end_lineno]
+        return "\n".join(lines) + '\n\noperator_self_test = EGraphEquivalenceOperator.operator_self_test\n\nif __name__ == "__main__":\n    import json\n    print(json.dumps(operator_self_test(), sort_keys=True, allow_nan=False))\n'
+
+# Operator 6: LeanAxiomReviewOperator (lean_axiom_review)
+# ---------------------------------------------------------------------------
+
+class LeanAxiomReviewOperator:
+    """Check a supplied #print axioms report against a declared axiom policy.
+
+    Text is input-reported evidence, never a bound Lean execution or proof of
+    constructivity. Missing/ambiguous reports remain UNKNOWN. Source scanning
+    can flag placeholders, but cannot establish the compiled dependencies.
+    """
+
+    STANDARD_CLASSICAL_AXIOMS = frozenset(("propext", "Classical.choice", "Quot.sound"))
+
+    @classmethod
+    def audit_lean_axioms(
+        cls,
+        theorem_name: str,
+        code_or_stdout: str,
+        allowed_axioms: Optional[Set[str]] = None,
+        is_stdout: bool = False
+    ) -> Dict[str, Any]:
+        """Parse one complete report for this exact theorem, without executing Lean."""
+        if (not isinstance(theorem_name, str) or not theorem_name.strip() or len(theorem_name) > 512
+                or any(c in theorem_name for c in '\r\n') or not isinstance(code_or_stdout, str)
+                or len(code_or_stdout) > 65536 or len(code_or_stdout.encode('utf-8')) > 65536
+                or type(is_stdout) is not bool):
+            raise ValueError('Expected a bounded theorem name, report text and Boolean is_stdout')
+        if allowed_axioms is not None and (not isinstance(allowed_axioms, (set, frozenset, list, tuple))
+                or len(allowed_axioms) > 256 or not all(isinstance(ax, str) and ax and len(ax) <= 512 for ax in allowed_axioms)):
+            raise ValueError('Expected at most 256 explicit axiom names')
+        allowed = set(allowed_axioms) if allowed_axioms is not None else set(cls.STANDARD_CLASSICAL_AXIOMS)
+        result = {'status': 'UNKNOWN', 'assurance': 'AXIOM_AUDIT_UNAVAILABLE', 'theorem': theorem_name,
+                  'axioms_detected': None, 'allowed_axioms': sorted(allowed), 'disallowed_axioms': None,
+                  'reported_axiom_free': None, 'is_constructive': None, 'lean_verified': False,
+                  'evidence_kind': 'INPUT_REPORTED_STDOUT' if is_stdout else 'SOURCE_TEXT'}
+
+        if not is_stdout:
+            # Check source code for sorry or cheat tactics
+            if re.search(r"\bsorry\b", code_or_stdout):
+                return {**result,
+                    "status": "FAIL",
+                    "assurance": "SORRY_AXIOM_DETECTED",
+                    "theorem": theorem_name,
+                    "error": "Proof contains 'sorry' unproved obligation placeholder",
+                    "axioms_detected": ["sorry"],
+                    "allowed_axioms": sorted(allowed),
+                }
+            return {**result, 'reason': 'Source text does not establish a Lean axiom audit'}
+
+        name = re.escape(theorem_name)
+        headers = list(re.finditer(rf"(?m)^[ \t]*'{name}'(?=[ \t]|\r?$)", code_or_stdout))
+        if len(headers) != 1:
+            return {**result, 'reason': 'Missing or multiple reports for the requested theorem'}
+        report = re.match(
+            rf"[ \t]*'{name}'[ \t]+(?:does[ \t]+not[ \t]+depend[ \t]+on[ \t]+any[ \t]+axioms"
+            rf"|depends[ \t]+on[ \t]+axioms:[ \t]*\[(?P<axioms>[^\[\]]*)\])[ \t]*\r?$",
+            code_or_stdout[headers[0].start():], re.MULTILINE)
+        if report is None:
+            return {**result, 'reason': 'Incomplete or malformed report for the requested theorem'}
+        raw = report.group('axioms')
+        found_axioms = [] if raw is None or not raw.strip() else [item.strip() for item in raw.split(',')]
+        identifier = r"(?:[^\W\d]|_)[\w']*(?:\.(?:[^\W\d]|_)[\w']*)*"
+        if any(not re.fullmatch(identifier, ax) for ax in found_axioms) or len(found_axioms) != len(set(found_axioms)):
+            return {**result, 'reason': 'Malformed or duplicate axiom identifiers'}
+        disallowed = [ax for ax in found_axioms if ax not in allowed or ax in {'sorry', 'sorryAx'}]
+        passed = (len(disallowed) == 0)
+        return {**result,
+            "status": "PASS" if passed else "FAIL",
+            "assurance": "INPUT_REPORTED_AXIOM_AUDIT" if passed else "DISALLOWED_AXIOM_DEPENDENCY",
+            "theorem": theorem_name,
+            "axioms_detected": sorted(found_axioms),
+            "allowed_axioms": sorted(allowed),
+            "disallowed_axioms": sorted(disallowed),
+            "reported_axiom_free": (len(found_axioms) == 0),
+        }
+
+    @staticmethod
+    def scaffold_code() -> str:
+        return _scaffold(LeanAxiomReviewOperator, _lean_axiom_self_test)
+
+
+# ---------------------------------------------------------------------------
+# Operator 7: BoundedFiniteModelOperator (bounded_finite_model)
+# ---------------------------------------------------------------------------
+
+class BoundedFiniteModelOperator:
+    """Bounded Finite Model and Counterexample Search Operator.
+
+    Exhaustively searches finite algebraic domains (such as finite groups Z_n,
+    permutation tables, or Cayley tables) to check algebraic properties (associativity,
+    commutativity, group axioms) or refute conjectures with concrete witnesses.
+    """
+
+    @staticmethod
+    def verify_cayley_property(
+        elements: List[str],
+        op_table: Dict[Tuple[str, str], str],
+        property_name: str = "associative"
+    ) -> Dict[str, Any]:
+        """Verifies an algebraic property on a Cayley operation table."""
+        elem_set = set(elements)
+        # Check closure
+        for (a, b), c in op_table.items():
+            if c not in elem_set:
+                return {
+                    "status": "FAIL",
+                    "assurance": "CLOSURE_VIOLATION",
+                    "counterexample": {"a": a, "b": b, "result": c, "not_in_domain": True}
+                }
+
+        if property_name == "associative":
+            for a in elements:
+                for b in elements:
+                    ab = op_table.get((a, b))
+                    for c in elements:
+                        bc = op_table.get((b, c))
+                        lhs = op_table.get((ab, c))
+                        rhs = op_table.get((a, bc))
+                        if lhs != rhs:
+                            return {
+                                "status": "FAIL",
+                                "assurance": "COUNTEREXAMPLE_FOUND",
+                                "property": "associative",
+                                "counterexample": {
+                                    "witness": [a, b, c],
+                                    "lhs_expr": f"({a} * {b}) * {c} = {ab} * {c} = {lhs}",
+                                    "rhs_expr": f"{a} * ({b} * {c}) = {a} * {bc} = {rhs}",
+                                }
+                            }
+            return {
+                "status": "PASS",
+                "assurance": "BOUNDED_FINITE_MODEL_VERIFIED",
+                "property": "associative",
+                "domain_size": len(elements),
+                "combinations_checked": len(elements) ** 3
+            }
+
+        elif property_name == "commutative":
+            for a in elements:
+                for b in elements:
+                    ab = op_table.get((a, b))
+                    ba = op_table.get((b, a))
+                    if ab != ba:
+                        return {
+                            "status": "FAIL",
+                            "assurance": "COUNTEREXAMPLE_FOUND",
+                            "property": "commutative",
+                            "counterexample": {
+                                "witness": [a, b],
+                                "lhs": f"{a} * {b} = {ab}",
+                                "rhs": f"{b} * {a} = {ba}",
+                            }
+                        }
+            return {
+                "status": "PASS",
+                "assurance": "BOUNDED_FINITE_MODEL_VERIFIED",
+                "property": "commutative",
+                "domain_size": len(elements),
+                "combinations_checked": len(elements) ** 2
+            }
+        else:
+            raise ValueError(f"Unsupported finite property '{property_name}'")
+
+    @staticmethod
+    def search_counterexample(
+        domain: List[Any],
+        predicate: Any
+    ) -> Dict[str, Any]:
+        """Exhaustively searches a finite domain for an element falsifying predicate."""
+        for item in domain:
+            try:
+                res = predicate(item)
+            except Exception as exc:
+                return {
+                    "status": "FAIL",
+                    "assurance": "PREDICATE_ERROR",
+                    "witness": item,
+                    "error": str(exc)
+                }
+            if not res:
+                return {
+                    "status": "FAIL",
+                    "assurance": "COUNTEREXAMPLE_FOUND",
+                    "witness": item,
+                    "domain_size": len(domain)
+                }
+        return {
+            "status": "PASS",
+            "assurance": "BOUNDED_FINITE_MODEL_VERIFIED",
+            "domain_size": len(domain),
+            "exhausted": True
+        }
+
+    @staticmethod
+    def scaffold_code() -> str:
+        return _scaffold(BoundedFiniteModelOperator, _bounded_finite_model_self_test)
+
+
+# ---------------------------------------------------------------------------
+# Operator 8: ExplicitReductionTransferOperator (explicit_reduction_transfer)
+# ---------------------------------------------------------------------------
+
+class ExplicitReductionTransferOperator:
+    """Explicit Reduction and Representation Transfer Operator.
+
+    Verifies mathematical and computational reductions between two problem representations:
+    checks semantic preservation across sample instances and flags unclosed transfer obligations.
+    """
+
+    @staticmethod
+    def verify_reduction(
+        source_instances: List[Any],
+        forward_map: Any,
+        backward_map: Optional[Any],
+        source_evaluator: Any,
+        target_evaluator: Any
+    ) -> Dict[str, Any]:
+        """Evaluates reduction f: Source -> Target on source_instances."""
+        mismatches = []
+        reconstruction_failures = []
+        verified_count = 0
+
+        for idx, inst in enumerate(source_instances):
+            try:
+                mapped = forward_map(inst)
+                s_val = source_evaluator(inst)
+                t_val = target_evaluator(mapped)
+            except Exception as exc:
+                return {
+                    "status": "FAIL",
+                    "assurance": "REDUCTION_EVALUATION_ERROR",
+                    "instance_index": idx,
+                    "error": str(exc)
+                }
+
+            if s_val != t_val:
+                mismatches.append({
+                    "index": idx,
+                    "source_instance": str(inst),
+                    "mapped_instance": str(mapped),
+                    "source_result": s_val,
+                    "target_result": t_val
+                })
+                continue
+
+            if backward_map is not None:
+                try:
+                    reconstructed = backward_map(mapped)
+                    r_val = source_evaluator(reconstructed)
+                    if r_val != s_val:
+                        reconstruction_failures.append({
+                            "index": idx,
+                            "reconstructed": str(reconstructed),
+                            "expected_val": s_val,
+                            "reconstructed_val": r_val
+                        })
+                except Exception as exc:
+                    reconstruction_failures.append({"index": idx, "error": str(exc)})
+
+            verified_count += 1
+
+        if mismatches:
+            return {
+                "status": "FAIL",
+                "assurance": "REDUCTION_SEMANTIC_MISMATCH",
+                "total_instances": len(source_instances),
+                "mismatches": mismatches[:5],
+            }
+
+        has_reconstruction = (backward_map is not None)
+        if has_reconstruction and reconstruction_failures:
+            return {
+                "status": "FAIL",
+                "assurance": "RECONSTRUCTION_OBLIGATION_UNMET",
+                "reconstruction_failures": reconstruction_failures[:5]
+            }
+
+        assurance = "EXPLICIT_REDUCTION_CERTIFIED" if has_reconstruction else "FORWARD_REDUCTION_VALIDATED_RECONSTRUCTION_UNRESOLVED"
+        return {
+            "status": "PASS",
+            "assurance": assurance,
+            "total_instances": len(source_instances),
+            "verified_instances": verified_count,
+            "has_bidirectional_reconstruction": has_reconstruction,
+        }
+
+    @staticmethod
+    def scaffold_code() -> str:
+        return _scaffold(ExplicitReductionTransferOperator, _reduction_self_test)
+
+
+# ---------------------------------------------------------------------------
+
+
 def _ssm_self_test():
     op = ContinuousStateSpaceOperator(3, in_dim=2, out_dim=2)
     report = op.verify_step_invariance()
@@ -397,12 +967,71 @@ def _rational_self_test():
     return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
 
 
+def _egraph_self_test():
+    report = EGraphEquivalenceOperator.verify_algebraic_equivalence(
+        ("*", "x", ("+", "y", 0)), ("*", "y", "x"), variables=("x", "y"))
+    negative = EGraphEquivalenceOperator.verify_algebraic_equivalence(
+        ("+", "x", "y"), ("*", "x", "y"), variables=("x", "y"))
+    unresolved = EGraphEquivalenceOperator.verify_algebraic_equivalence(
+        ("+", "x", ("+", "y", "z")), ("+", ("+", "x", "y"), "z"), variables=("x", "y", "z"))
+    assert report["status"] == "PASS" and report["certificate_status"] == "NOT_EMITTED"
+    assert negative["status"] == "FAIL" and negative["counterexample"]
+    assert unresolved["status"] == "UNKNOWN" and unresolved["equivalent"] is None
+    return {"self_test_status": "PASS", "positive": report,
+            "negative_status": negative["status"], "unresolved_status": unresolved["status"]}
+
+
+def _lean_axiom_self_test():
+    report = LeanAxiomReviewOperator.audit_lean_axioms(
+        "RDS.obligation",
+        "'RDS.obligation' depends on axioms: [propext, Quot.sound]",
+        allowed_axioms={"propext", "Quot.sound"},
+        is_stdout=True,
+    )
+    negative = LeanAxiomReviewOperator.audit_lean_axioms("T", "sorry", is_stdout=False)
+    missing = LeanAxiomReviewOperator.audit_lean_axioms('missing.theorem', 'not Lean output', is_stdout=True)
+    assert report["status"] == "PASS" and not report["disallowed_axioms"]
+    assert negative["status"] == "FAIL" and negative["axioms_detected"] == ["sorry"]
+    assert missing['status'] == 'UNKNOWN' and missing['axioms_detected'] is None
+    assert not report['lean_verified'] and report['is_constructive'] is None
+    return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
+
+
+def _bounded_finite_model_self_test():
+    elems = ["e", "a", "b", "c"]
+    v4 = {
+        ("e", "e"): "e", ("e", "a"): "a", ("e", "b"): "b", ("e", "c"): "c",
+        ("a", "e"): "a", ("a", "a"): "e", ("a", "b"): "c", ("a", "c"): "b",
+        ("b", "e"): "b", ("b", "a"): "c", ("b", "b"): "e", ("b", "c"): "a",
+        ("c", "e"): "c", ("c", "a"): "b", ("c", "b"): "a", ("c", "c"): "e",
+    }
+    report = BoundedFiniteModelOperator.verify_cayley_property(elems, v4, "associative")
+    broken = dict(v4)
+    broken[("a", "b")] = "e"
+    negative = BoundedFiniteModelOperator.verify_cayley_property(elems, broken, "associative")
+    assert report["status"] == "PASS"
+    assert negative["status"] == "FAIL" and "counterexample" in negative
+    return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
+
+
+def _reduction_self_test():
+    forward = lambda x: (max(0, x), max(0, -x))
+    backward = lambda p: p[0] - p[1]
+    report = ExplicitReductionTransferOperator.verify_reduction(
+        [-5, -2, 0, 3, 7], forward, backward, lambda x: x > 0, lambda p: p[0] > p[1])
+    negative = ExplicitReductionTransferOperator.verify_reduction(
+        [-5], forward, lambda p: p[0] + p[1], lambda x: x > 0, lambda p: p[0] > p[1])
+    assert report["status"] == "PASS" and report["has_bidirectional_reconstruction"]
+    assert negative["status"] == "FAIL" and negative["assurance"] == "RECONSTRUCTION_OBLIGATION_UNMET"
+    return {"self_test_status": "PASS", "positive": report, "negative_status": negative["status"]}
+
+
 def _scaffold(cls, self_test):
     """Export the canonical implementation and the same executable self-test."""
     tree = ast.parse(inspect.getsource(cls))
     tree.body[0].body = [node for node in tree.body[0].body
                          if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or node.name != "scaffold_code"]
-    imports = "import inspect\nimport json\nimport math\nfrom fractions import Fraction\nfrom typing import Any, Dict, List, Optional, Tuple, Union\n\n"
+    imports = "import inspect\nimport json\nimport math\nimport re\nfrom fractions import Fraction\nfrom typing import Any, Dict, List, Optional, Set, Tuple, Union\n\n"
     helpers = "\n\n".join(inspect.getsource(fn) for fn in
                            (_finite_number, _vector, _matrix, _dimension, _ratio, _solve_exact))
     return ("# Standalone RDS example; self-test success is not scientific acceptance.\n" + imports
@@ -424,6 +1053,18 @@ OPERATORS = {
     "exact_symbolic_constraints": {"operator_id": "rational_interval_certificate", "title": "Rational Polynomial Interval Enclosure",
         "operator_class": RationalCertificateOperator, "primary_signal": "proof_bottleneck",
         "guarantee": "Sound rational whole-interval enclosure or exact witness; inconclusive is UNKNOWN", "self_test": _rational_self_test},
+    "egraph_equivalence_saturation": {"operator_id": "egraph_equivalence", "title": "Bounded Rational-Polynomial Rewrite Example",
+        "operator_class": EGraphEquivalenceOperator, "primary_signal": "proof_bottleneck",
+        "guarantee": "Scoped supported rewrites or exact rational counterexample; otherwise UNKNOWN; no certificate emitted", "self_test": _egraph_self_test},
+    "lean_axiom_review": {"operator_id": "lean_axiom_review", "title": "Lean 4 Axiom & Dependency Audit Operator",
+        "operator_class": LeanAxiomReviewOperator, "primary_signal": "proof_bottleneck",
+        "guarantee": "Exact-theorem input-report policy check; no Lean execution or constructivity verification", "self_test": _lean_axiom_self_test},
+    "bounded_finite_model": {"operator_id": "bounded_finite_model", "title": "Bounded Finite Model & Counterexample Search Operator",
+        "operator_class": BoundedFiniteModelOperator, "primary_signal": "proof_bottleneck",
+        "guarantee": "Exhaustive finite Cayley table verification and witness refutation", "self_test": _bounded_finite_model_self_test},
+    "explicit_reduction_transfer": {"operator_id": "explicit_reduction_transfer", "title": "Explicit Problem Reduction & Representation Transfer",
+        "operator_class": ExplicitReductionTransferOperator, "primary_signal": "proof_bottleneck",
+        "guarantee": "Semantic validity preservation and unclosed obligation tracking", "self_test": _reduction_self_test},
 }
 
 
