@@ -295,11 +295,86 @@ def analyze_hypergraph(spec):
             "reported_hyperedges": deepcopy(spec["hyperedges"])}
 
 
+def trace_support_cone(spec, node_id):
+    """Trace upstream justified derivation cone (nodes and rules) supporting a derived node."""
+    nodes, edges, _, _ = _validate(spec)
+    _require(isinstance(node_id, str) and node_id in nodes, "node_id not found in spec")
+    closure, derivations, _ = _supported_closure(nodes, edges)
+    if node_id not in closure:
+        return {"node_id": node_id, "supported": False, "derivation_rule": None,
+                "support_cone_nodes": [node_id], "support_cone_rules": []}
+    edge_index = {edge["id"]: edge for edge in edges}
+    cone_nodes = {node_id}
+    cone_rules = set()
+    queue = [node_id]
+    visited = set()
+    while queue:
+        curr = queue.pop(0)
+        if curr in visited:
+            continue
+        visited.add(curr)
+        rule_id = derivations.get(curr)
+        if rule_id is not None and rule_id in edge_index:
+            cone_rules.add(rule_id)
+            for premise in edge_index[rule_id]["premises"]:
+                cone_nodes.add(premise)
+                if premise not in visited:
+                    queue.append(premise)
+    return {"node_id": node_id, "supported": True, "derivation_rule": derivations.get(node_id),
+            "support_cone_nodes": sorted(cone_nodes), "support_cone_rules": sorted(cone_rules)}
+
+
+def cascade_revoke(spec, contradicted_node_ids=None, contradicted_rule_ids=None):
+    """Non-monotonic truth maintenance: re-evaluate closure upon retraction or refutation."""
+    nodes, edges, _, _ = _validate(spec)
+    rev_nodes = set(contradicted_node_ids or [])
+    rev_rules = set(contradicted_rule_ids or [])
+    for nid in rev_nodes:
+        _require(nid in nodes, f"unknown node id to revoke: {nid}")
+    edge_ids = {edge["id"] for edge in edges}
+    for rid in rev_rules:
+        _require(rid in edge_ids, f"unknown rule id to revoke: {rid}")
+
+    orig_closure, orig_derivations, _ = _supported_closure(nodes, edges)
+
+    mod_spec = deepcopy(spec)
+    for node in mod_spec["nodes"]:
+        if node["id"] in rev_nodes:
+            node["status"] = "CONTRADICTED"
+    for edge in mod_spec["hyperedges"]:
+        if edge["id"] in rev_rules:
+            edge["status"] = "CONTRADICTED"
+
+    mod_nodes, mod_edges, _, _ = _validate(mod_spec)
+    new_closure, new_derivations, new_conflicts = _supported_closure(mod_nodes, mod_edges)
+
+    revoked = orig_closure - new_closure
+    retained = new_closure
+    alt_derivations = {
+        n: {"previous_rule": orig_derivations[n], "active_rule": new_derivations[n]}
+        for n in retained
+        if n in orig_derivations and n in new_derivations and orig_derivations[n] != new_derivations[n]
+    }
+
+    return {"assurance": "TMS_NON_MONOTONIC_CASCADE_REVOCATION",
+            "retracted_nodes": sorted(rev_nodes),
+            "retracted_rules": sorted(rev_rules),
+            "original_closure": sorted(orig_closure),
+            "updated_closure": sorted(new_closure),
+            "revoked_nodes": sorted(revoked),
+            "retained_nodes": sorted(retained),
+            "alternative_derivations": alt_derivations,
+            "active_contradictions": sorted(new_conflicts)}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", required=True)
     parser.add_argument("--output")
     parser.add_argument("--audit-files", action="store_true")
+    parser.add_argument("--trace-cone")
+    parser.add_argument("--cascade-revoke-nodes", nargs="*")
+    parser.add_argument("--cascade-revoke-rules", nargs="*")
     args = parser.parse_args()
     path = Path(args.input)
     _require(path.stat().st_size <= 8 * 1024 * 1024, "input file exceeds 8 MiB")
@@ -307,6 +382,13 @@ def main():
     result = analyze_hypergraph(spec)
     if args.audit_files:
         result["source_file_audit"] = audit_sources(spec, path.parent)
+    if args.trace_cone:
+        result["tms_support_cone"] = trace_support_cone(spec, args.trace_cone)
+    if args.cascade_revoke_nodes or args.cascade_revoke_rules:
+        result["tms_cascade_revocation"] = cascade_revoke(
+            spec,
+            contradicted_node_ids=args.cascade_revoke_nodes,
+            contradicted_rule_ids=args.cascade_revoke_rules)
     text = json.dumps(result, ensure_ascii=False, indent=2)
     if args.output:
         with Path(args.output).open("x", encoding="utf-8") as stream:

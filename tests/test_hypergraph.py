@@ -9,7 +9,13 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from rds_hypergraph import ASSURANCE, analyze_hypergraph, audit_sources
+from rds_hypergraph import (
+    ASSURANCE,
+    analyze_hypergraph,
+    audit_sources,
+    cascade_revoke,
+    trace_support_cone,
+)
 import rds_hypergraph as hypergraph
 
 
@@ -291,6 +297,60 @@ class HypergraphTests(unittest.TestCase):
             self.assertFalse(audit_sources(spec, directory)["all_requested_files_match"])
             spec["limits"] = {"max_source_bytes": 1}
             self.assertEqual(audit_sources(spec, directory)["audits"][0]["status"], "BYTE_LIMIT_EXCEEDED")
+
+    def test_tms_trace_support_cone_axiom_and_derived(self):
+        spec = graph(
+            {"base": "SUPPORTED", "derived_step1": "UNKNOWN", "derived_goal": "UNKNOWN", "unrelated": "UNKNOWN"},
+            [("r1", ["base"], "derived_step1", "SUPPORTED"),
+             ("r2", ["derived_step1"], "derived_goal", "SUPPORTED")],
+            ["derived_goal"]
+        )
+        base_cone = trace_support_cone(spec, "base")
+        self.assertTrue(base_cone["supported"])
+        self.assertIsNone(base_cone["derivation_rule"])
+        self.assertEqual(base_cone["support_cone_nodes"], ["base"])
+        self.assertEqual(base_cone["support_cone_rules"], [])
+
+        goal_cone = trace_support_cone(spec, "derived_goal")
+        self.assertTrue(goal_cone["supported"])
+        self.assertEqual(goal_cone["derivation_rule"], "r2")
+        self.assertEqual(goal_cone["support_cone_nodes"], ["base", "derived_goal", "derived_step1"])
+        self.assertEqual(goal_cone["support_cone_rules"], ["r1", "r2"])
+
+        unrelated_cone = trace_support_cone(spec, "unrelated")
+        self.assertFalse(unrelated_cone["supported"])
+        self.assertEqual(unrelated_cone["support_cone_nodes"], ["unrelated"])
+        self.assertEqual(unrelated_cone["support_cone_rules"], [])
+
+    def test_tms_cascade_revoke_prunes_dependent_derivations(self):
+        spec = graph(
+            {"A": "SUPPORTED", "B": "UNKNOWN", "C": "UNKNOWN", "Goal": "UNKNOWN"},
+            [("r1", ["A"], "B", "SUPPORTED"),
+             ("r2", ["B"], "C", "SUPPORTED"),
+             ("r3", ["C"], "Goal", "SUPPORTED")],
+            ["Goal"]
+        )
+        revocation = cascade_revoke(spec, contradicted_node_ids=["A"])
+        self.assertEqual(revocation["assurance"], "TMS_NON_MONOTONIC_CASCADE_REVOCATION")
+        self.assertEqual(revocation["original_closure"], ["A", "B", "C", "Goal"])
+        self.assertEqual(revocation["revoked_nodes"], ["A", "B", "C", "Goal"])
+        self.assertEqual(revocation["updated_closure"], [])
+        self.assertEqual(revocation["retained_nodes"], [])
+
+    def test_tms_cascade_revoke_preserves_alternative_derivation(self):
+        spec = graph(
+            {"A": "SUPPORTED", "D": "SUPPORTED", "C": "UNKNOWN"},
+            [("r_primary", ["A"], "C", "SUPPORTED"),
+             ("r_backup", ["D"], "C", "SUPPORTED")],
+            ["C"]
+        )
+        revocation = cascade_revoke(spec, contradicted_node_ids=["A"])
+        self.assertEqual(revocation["revoked_nodes"], ["A"])
+        self.assertEqual(revocation["retained_nodes"], ["C", "D"])
+        self.assertEqual(revocation["updated_closure"], ["C", "D"])
+        self.assertIn("C", revocation["alternative_derivations"])
+        self.assertEqual(revocation["alternative_derivations"]["C"]["previous_rule"], "r_primary")
+        self.assertEqual(revocation["alternative_derivations"]["C"]["active_rule"], "r_backup")
 
 
 if __name__ == "__main__":
