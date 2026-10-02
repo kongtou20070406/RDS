@@ -636,12 +636,14 @@ def _receipt_audits(records, context):
         found = read_project_receipt(root_text, digest_sha)
         body = found.get("body")
         if found["status"] == "RECEIPT_FOUND" and not (isinstance(body, dict) and body.get("sha256") == digest_sha):
-            found = {"status": "RECEIPT_NOT_FOUND", "reason": "stored body does not carry the declared sha256"}
+            found = {"status": "RECEIPT_BODY_MISMATCH"}
         if found["status"] != "RECEIPT_FOUND":
             audits[root_text, digest_sha] = found
             continue
+        # The ledger writes stop_reason only when a stop policy fired, so its presence alone records a cap.
         stop = body.get("stop_reason")
-        cap = "TIMEOUT" if body.get("timeout") is True else stop if _text(stop, 64) else None
+        cap = ("TIMEOUT" if body.get("timeout") is True else None if stop is None
+               else stop if _text(stop, 64) else "STOP_POLICY")
         audits[root_text, digest_sha] = {
             "status": "RECEIPT_FOUND", "run_id": body.get("run_id"), "run_status": body.get("run_status"),
             "execution_cap": cap, "assurance": "RECEIPT_EXECUTION_NOT_STATEMENT_VERIFICATION"}
@@ -721,8 +723,9 @@ def _obstruction_review(records, context, goal):
             entry["source"] = deepcopy(record["source"])
         audit = None
         if "receipt" in record:
-            entry["receipt"] = deepcopy(record["receipt"])
-            audit = audits[record["receipt"]["project_root"], record["receipt"]["sha256"].lower()]
+            key = record["receipt"]["project_root"], record["receipt"]["sha256"].lower()
+            entry["receipt"] = dict(zip(("project_root", "sha256"), key))
+            audit = audits[key]
             entry["receipt_audit"] = deepcopy(audit)
         entry.update(assurance="INPUT_REPORTED_OBSTRUCTION_NOT_DIAGNOSIS", authorization="UNCHANGED")
         obligation = record["obligation"]

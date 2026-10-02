@@ -194,14 +194,14 @@ class ObstructionReceiptCLITests(unittest.TestCase):
                 self.assertNotIn('Traceback', proc.stderr)
 
 
-def stopped_ledger(root, stop_reason, sha):
+def stopped_ledger(root, sha, **fields):
     """A minimal project ledger whose one receipt records a stop policy (shape of a real FAILED receipt)."""
     (root / '.rds').mkdir(parents=True)
     db = sqlite3.connect(root / '.rds' / 'project.sqlite3')
     db.executescript('CREATE TABLE contract(id INTEGER PRIMARY KEY,sha256 TEXT NOT NULL,body TEXT NOT NULL);'
                      'CREATE TABLE receipts(run_id TEXT PRIMARY KEY,sha256 TEXT NOT NULL,body TEXT NOT NULL);')
     body = {'schema': 1, 'run_id': 'r1', 'sha256': sha, 'run_status': 'FAILED', 'timeout': False,
-            'stop_reason': stop_reason}
+            'stop_reason': 'PROGRESS_NO_GROWTH', **fields}
     db.execute("INSERT INTO contract VALUES (1,'x','{}')")
     db.execute('INSERT INTO receipts VALUES (?,?,?)', ('r1', sha, json.dumps(body)))
     db.commit()
@@ -214,20 +214,22 @@ class ObstructionReceiptReviewTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name) / 'project'
-        stopped_ledger(self.root, 'PROGRESS_NO_GROWTH', self.SHA)
+        stopped_ledger(self.root, self.SHA)
 
     def tearDown(self):
         self.tmp.cleanup()
 
-    def review(self, records, scope='synthetic'):
+    def review(self, records, scope='synthetic', audit=True):
         goal = DEEP_LEARNING[0]
         ctx = context(*DEEP_LEARNING, scope=scope)
-        ctx.update(obstructions=records, audit_receipts=True)
+        ctx.update(obstructions=records, audit_receipts=audit)
+        if scope is None:
+            del ctx['decision']['scope']
         return advisor_review(ctx, route(goal))['selection_review']
 
-    def capped(self, **extra):
+    def capped(self, root=None, **extra):
         record = obstruction(DEEP_LEARNING[0], 'EXECUTION_CAP',
-                             receipt={'project_root': str(self.root), 'sha256': self.SHA.upper()})
+                             receipt={'project_root': str(root or self.root), 'sha256': self.SHA.upper()})
         record.update(extra)
         return record
 
@@ -282,6 +284,59 @@ class ObstructionReceiptReviewTests(unittest.TestCase):
             entries = self.review(records)['obstruction_review']
         self.assertEqual(calls, [(str(self.root), self.SHA)])
         self.assertTrue(all(e['receipt_audit']['status'] == 'RECEIPT_FOUND' for e in entries))
+        self.assertTrue(all(e['receipt'] == {'project_root': str(self.root), 'sha256': self.SHA} for e in entries))
+
+    def test_without_the_true_opt_in_nothing_is_read(self):
+        import rds_hypergraph
+        for audit in (False, 'yes', 1):
+            with self.subTest(audit=audit), mock.patch.object(rds_hypergraph, 'read_project_receipt') as read:
+                entry = self.review([self.capped(), self.gap()], audit=audit)['obstruction_review'][0]
+                read.assert_not_called()
+                self.assertEqual(entry['receipt_audit'], {'status': 'NOT_AUDITED'})
+
+    def test_any_recorded_stop_reason_is_a_cap_even_when_malformed(self):
+        for stop, label in (('X' * 65, 'STOP_POLICY'), (7, 'STOP_POLICY'), ('   ', 'STOP_POLICY'),
+                            ('CAMPAIGN_DEADLINE', 'CAMPAIGN_DEADLINE')):
+            with self.subTest(stop=stop):
+                root = Path(self.tmp.name) / f'stop-{len(str(stop))}-{type(stop).__name__}'
+                stopped_ledger(root, self.SHA, stop_reason=stop)
+                entries = self.review([self.capped(root=root, cause='MISSING_INPUT', requirement=REQUIREMENT),
+                                        self.gap()])['obstruction_review']
+                self.assertEqual(entries[0]['receipt_audit']['execution_cap'], label)
+                self.assertEqual(entries[1]['response'], 'DISCRIMINATING_CHECK')
+                self.assertIn('records an execution cap', entries[1]['reason'])
+
+    def test_receipt_without_a_cap_or_stop_adds_no_cause(self):
+        root = Path(self.tmp.name) / 'plain-failure'
+        stopped_ledger(root, self.SHA, stop_reason=None)
+        entries = self.review([self.capped(root=root, cause='ADAPTER_MISMATCH')])['obstruction_review']
+        self.assertIsNone(entries[0]['receipt_audit']['execution_cap'])
+        self.assertEqual(entries[0]['response'], 'ADAPTER_REPAIR')  # A nonzero exit is execution, not a reason.
+
+    def test_a_body_that_does_not_carry_its_sha256_fails_closed(self):
+        root = Path(self.tmp.name) / 'mismatch'
+        stopped_ledger(root, self.SHA, sha256='c' * 64)
+        entry = self.review([self.capped(root=root)])['obstruction_review'][0]
+        self.assertEqual(entry['receipt_audit'], {'status': 'RECEIPT_BODY_MISMATCH'})
+        self.assertEqual((entry['response'], entry['cause_status']), ('DISCRIMINATING_CHECK', 'UNKNOWN'))
+
+    def test_a_symlink_loop_root_is_an_unavailable_ledger_not_a_crash(self):
+        loop_a, loop_b = Path(self.tmp.name) / 'loop-a', Path(self.tmp.name) / 'loop-b'
+        try:
+            loop_a.symlink_to(loop_b)
+            loop_b.symlink_to(loop_a)
+        except (OSError, NotImplementedError):
+            self.skipTest('symlinks are unavailable here')
+        entry = self.review([self.capped(root=loop_a)])['obstruction_review'][0]
+        self.assertEqual(entry['receipt_audit']['status'], 'LEDGER_UNAVAILABLE')
+        self.assertEqual(entry['response'], 'DISCRIMINATING_CHECK')
+
+    def test_a_cap_on_a_record_of_unknown_applicability_still_holds_back_others(self):
+        # Matches the existing rule: only a ruled-out (NOT_APPLICABLE) record is ignored.
+        entries = self.review([self.capped(scope={'domain': 'synthetic'}), self.gap()], scope=None)['obstruction_review']
+        self.assertEqual(entries[0]['status'], 'UNKNOWN')
+        self.assertEqual(entries[1]['response'], 'DISCRIMINATING_CHECK')
+        self.assertIn('records an execution cap', entries[1]['reason'])
 
 
 if __name__ == '__main__':

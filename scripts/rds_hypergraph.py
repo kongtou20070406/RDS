@@ -188,7 +188,8 @@ def read_project_receipt(root_text, digest_sha):
         if hit is None:
             return {"status": "RECEIPT_NOT_FOUND"}
         return {"status": "RECEIPT_FOUND", "body": json.loads(hit["body"])}
-    except (ValueError, FileNotFoundError, OSError, sqlite3.Error) as exc:
+    except (ValueError, FileNotFoundError, OSError, RuntimeError, sqlite3.Error) as exc:
+        # RuntimeError: Path.resolve() on a symlink loop; the ledger is unreadable, not a crash.
         return {"status": "LEDGER_UNAVAILABLE", "reason": type(exc).__name__}
 
 
