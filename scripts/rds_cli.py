@@ -990,7 +990,8 @@ def cmd_advise(args, rds):
         require(isinstance(manual.get("costs", {}), dict), "Research context costs must be an object")
         for key in ("decision", "targets", "budget", "max_depth", "max_candidates", "target_types", "templates", "frontier", "frontier_proposals", "resources",
                     "dependency_map", "objective_binding", "method_constraints", "research_mode", "require_goal_link", "scope",
-                    "audit_receipts", "audit_files"):
+                    "audit_receipts", "audit_files",
+                    "obstructions"):
             if key in manual:
                 context[key] = manual[key]
         facts = dict(context.get("facts", {}))
@@ -1093,6 +1094,10 @@ def cmd_project(args):
         return store.execute(args.id, background=args.background)
     if args.action == "recover":
         return store.recover(args.id)
+    if args.action == "next":
+        return store.next_move()
+    if args.action == "compare":
+        return store.compare()
     if args.action == "costs":
         from rds_costs import summarize_costs
         return summarize_costs(store.snapshot().get("receipts", []))
@@ -1375,6 +1380,8 @@ def parser():
     pr_exec.add_argument("--id", required=True)
     pr_exec.add_argument("--background", action="store_true", help="Use a tool-owned Windows Task Scheduler task")
     pr_actions.add_parser("recover").add_argument("--id", required=True)
+    pr_actions.add_parser("next", help="Print the single next actionable project step and its command")
+    pr_actions.add_parser("compare", help="Compare recorded arms against the precommitted min_useful_delta")
     pr_actions.add_parser("status").add_argument("--brief", "--digest", action="store_true")
     pr_actions.add_parser("costs")
     pr_control = pr_actions.add_parser("control-check")

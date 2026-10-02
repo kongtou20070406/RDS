@@ -25,6 +25,30 @@ import uuid
 
 TERMINAL = {"COMPLETED", "FAILED", "INTERRUPTED"}
 ROLES = {"code", "config", "data", "evaluator", "protocol"}
+
+
+def _is_rational_literal(value):
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, float):
+        return math.isfinite(value)
+    return isinstance(value, (int, str)) and bool(str(value).strip()) and "e" not in str(value).lower()
+
+
+def _parse_rational_string(value, name):
+    """Parse an exact decimal or integer string; reject floats, exponents and junk."""
+    require(isinstance(value, str) and value.strip(), f"{name} must be a nonempty rational string")
+    text = value.strip()
+    require("e" not in text and "E" not in text, f"{name} must not use exponent notation")
+    try:
+        from fractions import Fraction
+        parsed = Fraction(text)
+    except (ValueError, ZeroDivisionError) as exc:
+        raise ValueError(f"{name} must be an exact rational string such as '1/100' or '0.5'") from exc
+    require(parsed >= 0, f"{name} must be nonnegative")
+    return parsed
+
+
 IDENTITY = ("code_sha256", "config_sha256", "data_sha256", "data_split",
             "init", "seed", "checkpoint", "schedule", "sample_work", "numeric_protocol")
 
@@ -369,7 +393,14 @@ class ProjectStore:
         require(isinstance(contract, dict) and type(contract.get("schema")) is int
                 and contract["schema"] == 1, "Project contract schema must be 1")
         require(set(contract) <= {"schema", "bindings", "allowed_commands", "output_roots", "budget", "description",
-                                  "objective_sha256", "execution_policy", "stop_policy", "maintenance_allowance"}, "Unknown contract fields")
+                                  "primary_metric", "objective_sha256", "execution_policy", "stop_policy", "maintenance_allowance"}, "Unknown contract fields")
+        if "primary_metric" in contract:
+            metric = contract["primary_metric"]
+            require(isinstance(metric, dict) and set(metric) == {"name", "direction", "min_useful_delta"},
+                    "primary_metric must define name, direction and min_useful_delta")
+            require(isinstance(metric["name"], str) and metric["name"], "primary_metric.name must be a nonempty string")
+            require(metric["direction"] in ("min", "max"), "primary_metric.direction must be 'min' or 'max'")
+            _parse_rational_string(metric["min_useful_delta"], "primary_metric.min_useful_delta")
         if "stop_policy" in contract:
             policy = contract["stop_policy"]
             require(isinstance(policy, dict) and set(policy) == {"schema", "wall_seconds", "progress"},
@@ -951,6 +982,145 @@ class ProjectStore:
             found, errors = self._bindings(contract)
             snapshot["binding_check"] = {"files": found, "errors": errors}
         return snapshot
+
+    def _receipt_result(self, receipt):
+        """Read the primary metric value from one receipt's declared output artifact.
+
+        The receipt itself carries no metric; the value is read from the run's
+        recorded project_output artifact, whose sha256 the receipt binds.
+        """
+        out = next((a for a in receipt.get("artifacts", []) if a.get("kind") == "project_output"), None)
+        require(out is not None, f"Run {receipt.get('run_id')} has no recorded project_output artifact")
+        path = self.root / out["path"]
+        try:
+            raw = path.read_bytes()
+        except OSError as exc:
+            raise ValueError(f"Output artifact missing: {out['path']}: {exc}") from exc
+        require(hashlib.sha256(raw).hexdigest() == out["sha256"], f"Output artifact hash mismatch: {out['path']}")
+        metric_name = self.snapshot()["contract"].get("primary_metric", {}).get("name")
+        try:
+            payload = json.loads(raw)
+        except (ValueError, UnicodeError) as exc:
+            raise ValueError(f"Output artifact is not readable JSON: {out['path']}") from exc
+        require(isinstance(payload, dict), f"Output artifact is not a JSON object: {out['path']}")
+        if metric_name:
+            require(metric_name in payload, f"Output artifact lacks metric '{metric_name}': {out['path']}")
+            value = payload[metric_name]
+        else:
+            require("mse" in payload or "mean" in payload,
+                    "Output artifact has no metric and the contract declares no primary_metric")
+            value = payload.get("mse", payload.get("mean"))
+        require(_is_rational_literal(value), f"Metric value must be a finite rational literal, got {value!r}")
+        if isinstance(value, float):
+            require(math.isfinite(value), "Metric value must be finite")
+            value = repr(value)
+        return _parse_rational_string(str(value), "metric value")
+
+    def next_move(self):
+        """Derive the single next actionable step from recorded ledger state only.
+
+        Pure function of the snapshot; carries no advice beyond recorded facts.
+        """
+        if not self.path.is_file():
+            raise ValueError("Project contract has not been initialized; run: python -B scripts/rds_cli.py project init --contract <contract.json>")
+        snap = self.snapshot()
+        runs = snap["runs"]
+        receipts = {r["run_id"]: r for r in snap["receipts"]}
+        live = [r for r in runs if r["status"] == "RUNNING"]
+        failed = [r for r in runs if r["status"] in ("FAILED", "INTERRUPTED")]
+        executed = [r["id"] for r in runs if r["id"] in receipts]
+        arms = {rid: (receipts[rid].get("arm"), receipts[rid].get("control_id")) for rid in executed}
+        control_id = next((rid for rid, (arm, _) in arms.items() if arm == "control"), None)
+        treatment_id = next((rid for rid, (_, cid) in arms.items() if cid is not None), None)
+        if failed:
+            run = failed[0]
+            return {"next_move": "recover the failed run to a terminal recorded state",
+                    "command": f"python -B scripts/rds_cli.py --root {self.root} project recover --id {run['id']}"}
+        if live:
+            run = live[0]
+            return {"next_move": "wait for the running attempt, then re-check status",
+                    "command": f"python -B scripts/rds_cli.py --root {self.root} project status --brief"}
+        if not executed:
+            if not runs:
+                return {"next_move": "register the control arm from its manifest",
+                        "command": f"python -B scripts/rds_cli.py --root {self.root} project create --manifest <control-manifest.json>"}
+            pending = next((r for r in runs if r["id"] not in executed), None)
+            return {"next_move": f"execute run {pending['id']}",
+                    "command": f"python -B scripts/rds_cli.py --root {self.root} project execute --id {pending['id']}"}
+        if control_id is None or treatment_id is None:
+            pending = next((r for r in runs if r["id"] not in executed), None)
+            if pending is not None:
+                bound = pending.get("control_id")
+                label = f"treatment arm, control {bound}" if bound else f"run {pending['id']}"
+                return {"next_move": f"execute {label}",
+                        "command": f"python -B scripts/rds_cli.py --root {self.root} project execute --id {pending['id']}"}
+            return {"next_move": "register the remaining arm bound to the recorded control",
+                    "command": f"python -B scripts/rds_cli.py --root {self.root} project create --manifest <treatment-manifest.json>"}
+        verdict = self.compare()
+        if verdict is None:
+            return {"next_move": "resolve the missing arm state before comparison",
+                    "command": f"python -B scripts/rds_cli.py --root {self.root} project status --brief"}
+        if verdict.get("status") == "UNKNOWN":
+            return {"next_move": "resolve the recorded comparison blocker, then re-run project compare",
+                    "command": f"python -B scripts/rds_cli.py --root {self.root} project compare", "comparison": verdict}
+        if self._latest_project_checkpoint() is None:
+            return {"next_move": "record the decision with the kernel comparison as evidence",
+                    "command": (f"python -B scripts/rds_cli.py --root {self.root} checkpoint save "
+                                f"--kind project --id <decision-id> --decision '<decision; see project compare>'"),
+                    "comparison": verdict}
+        return {"next_move": "campaign reached a recorded decision; archive outputs or propose the next delta",
+                "command": f"python -B scripts/rds_cli.py --root {self.root} project status",
+                "comparison": verdict}
+
+    def _latest_project_checkpoint(self):
+        with self._db(True) as db:
+            table = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='checkpoints'").fetchone()
+            if not table:
+                return None
+            rows = db.execute("SELECT sha,body FROM checkpoints ORDER BY rowid DESC").fetchall()
+        for row in rows:
+            if hashlib.sha256(row["body"].encode("utf-8")).hexdigest() != row["sha"]:
+                require(False, "Checkpoint integrity failure")
+            body = json.loads(row["body"])
+            if body.get("kind") == "project":
+                return body
+        return None
+
+    def compare(self):
+        """Kernel-computed control/treatment verdict against the precommitted delta.
+
+        Returns None when the comparison is not yet derivable. The verdict is
+        exact over the recorded rational values; it never rounds a loss into a win.
+        """
+        contract = self.snapshot()["contract"]
+        metric = contract.get("primary_metric")
+        if not metric:
+            return {"status": "UNKNOWN", "reason": "contract declares no primary_metric"}
+        runs = {r["id"]: r for r in self.snapshot()["runs"]}
+        receipts = {r["run_id"]: r for r in self.snapshot()["receipts"]}
+        pairs = [(rid, r.get("arm"), r.get("control_id")) for rid, r in receipts.items()]
+        control_id = next((rid for rid, arm, _ in pairs if arm == "control"), None)
+        treatment_id = next((rid for rid, arm, cid in pairs if cid is not None and cid == control_id), None)
+        if control_id is None or treatment_id is None:
+            return None
+        try:
+            control = self._receipt_result(receipts[control_id])
+            treatment = self._receipt_result(receipts[treatment_id])
+        except (ValueError, OSError) as exc:
+            return {"status": "UNKNOWN", "reason": str(exc)}
+        if runs.get(control_id, {}).get("run_status") != "SUCCEEDED" or runs.get(treatment_id, {}).get("run_status") != "SUCCEEDED":
+            return None
+        delta = treatment - control
+        threshold = _parse_rational_string(metric["min_useful_delta"], "primary_metric.min_useful_delta")
+        useful = delta <= -threshold if metric["direction"] == "min" else delta >= threshold
+        harmful = delta > 0 if metric["direction"] == "min" else delta < 0
+        verdict = "GAIN_CONFIRMED" if useful else ("NOT_CONFIRMED" if harmful else "BELOW_RESOLUTION")
+        return {"status": verdict, "metric": metric["name"], "direction": metric["direction"],
+                "control": {"run_id": control_id, "value": str(control)},
+                "treatment": {"run_id": treatment_id, "value": str(treatment)},
+                "delta": str(delta), "min_useful_delta": metric["min_useful_delta"],
+                "receipt_sha256": {control_id: receipts[control_id].get("sha256"),
+                                   treatment_id: receipts[treatment_id].get("sha256")}}
 
     def _schedule(self, run):
         pythonw = Path(sys.executable).with_name("pythonw.exe")

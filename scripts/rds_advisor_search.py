@@ -8,8 +8,50 @@ from itertools import combinations
 import hashlib
 import json
 import math
+import re
 
 TRUE, FALSE, UNKNOWN = "TRUE", "FALSE", "UNKNOWN"
+# A declared obstruction selects a bounded response; it is never a diagnosis or permission.
+MOVE_PRESERVE_CLAUSES = ("Preserve the original goal, scope, revision, budget and method constraints in the referenced inputs. "
+                         "Respect an explicitly chosen route; this suggestion does not interrupt it or authorize execution. "
+                         "Unknown evidence or a scoped failure does not establish a capacity lower bound.")
+# Guidance text is static; record fields stay data and are referenced, never spliced into sentences.
+OBSTRUCTION_RESPONSES = {
+    "MISSING_INPUT": ("EVIDENCE_REPAIR", "Obtain or measure the missing input named in this record's requirement.input under "
+                      "the same scope and source binding; no capability gap or scientific failure is established."),
+    "EXECUTION_CAP": ("INCOMPLETE_COMPUTATION", "The computation stopped at a configured cap, timeout or truncation; it is "
+                      "incomplete, not a refutation or a capability deficit. Narrow the bounded scope or request an authorized cap change."),
+    "DEPENDENCY_UNAVAILABLE": ("DEPENDENCY_REPORT", "Report the unavailable dependency named in this record as a concrete blocker or "
+                               "select a compatible available backend; nothing is installed and availability is not inferred."),
+    "ADAPTER_MISMATCH": ("ADAPTER_REPAIR", "Repair or validate the adapter/implementation on a known case; the scientific "
+                         "claim remains UNKNOWN, not refuted."),
+    "UNSUPPORTED_OPERATION": ("CAPABILITY_REQUIRED", "Propose the smallest reusable adaptation, composition or new operation that meets "
+                              "this input/operation/output contract, with a checker, and compare it with the smallest repair; "
+                              "the shortlist covers only the bounded catalogue."),
+}
+OBSTRUCTION_CAUSES = tuple(sorted(set(OBSTRUCTION_RESPONSES) | {"UNDETERMINED"}))
+OBSTRUCTION_FIELDS = ("cause", "dependency", "id", "obligation", "requirement", "scope", "signals", "source")
+SOURCE_LOCATOR_KEYS = ("locator", "path", "receipt_id", "url")
+UNDETERMINED_NEXT = ("The cause is not established; choose the smallest check that distinguishes missing input, adapter fault, "
+                     "execution cap and unsupported operation before treating it as a capability gap.")
+OBSTRUCTION_MOVE_TEXT = (
+    "Answer each declared obstruction referenced in obstructions with its stated response: evidence repair, incomplete "
+    "computation, dependency report, adapter repair, a discriminating check, or for a capability requirement a reusable "
+    "operation meeting its input/operation/output contract with a checker, compared with the smallest repair. Declared "
+    "obstructions are input-reported, not a diagnosis, and authorize neither execution nor installation. ")
+# A sourced capability requirement supersedes only a generic jump move, or a goal-evidence step whose every
+# UNKNOWN predicate it covers; integrity, input, search-scope, goal-link and discriminator moves keep precedence.
+CAPABILITY_SUPERSEDES = ("REFORMULATE", "REVIEW_ALTERNATIVE")
+GOAL_EVIDENCE_REASON = "The original goal has unresolved evidence; no scientific failure is established."
+SPECIFY_CAPABILITY_REASON = ("A sourced unsupported operation blocks an open goal obligation and no other cause is declared "
+                             "for it; the reusable operation it requires is the next step.")
+SPECIFY_CAPABILITY_TEXT = (
+    "Specify the smallest reusable adaptation, composition or new operation that meets each referenced required_capability "
+    "input/operation/output contract, with a checker on a known case, and compare it with the smallest repair; routes "
+    "recorded as rejected stay rejected. The shortlist covers only the bounded catalogue; availability and prerequisites "
+    "are not assessed. Goal predicates stay UNKNOWN or FALSE until the checker's result is recorded. Answer any other "
+    "referenced obstruction with its stated response. Declared obstructions are input-reported, not a diagnosis, and "
+    "authorize neither execution nor installation. ")
 
 
 def _evidence_status(record):
@@ -344,13 +386,18 @@ def _mapped_path(spec, dependency, action):
             "reason": "The path is connected in the supplied map; AND premises, proposed rules and source validity still need evidence."}
 
 
-def _goal_contribution(action, context, dependency=None):
-    """Review a declared path to an existing goal, never its scientific validity."""
+def _goal_targets(context):
     decision = context.get("decision", {})
     goals = decision.get("goal_conditions", []) if isinstance(decision, dict) else []
     targets = {g["fact"] for g in goals if isinstance(g, dict) and isinstance(g.get("fact"), str)} if isinstance(goals, list) else set()
     if isinstance(context.get("objective_binding"), dict) and context["objective_binding"]:
         targets.add("completion_standard")
+    return targets
+
+
+def _goal_contribution(action, context, dependency=None):
+    """Review a declared path to an existing goal, never its scientific validity."""
+    targets = _goal_targets(context)
     if not targets and "goal_contribution" not in action:
         return None
     report = {"status": "UNDECLARED", "assurance": "DECLARED_LINK_NOT_SCIENTIFIC_PROOF",
@@ -382,6 +429,212 @@ def _goal_contribution(action, context, dependency=None):
     return result
 
 
+def _text(value, limit=512):
+    return isinstance(value, str) and bool(value.strip()) and len(value) <= limit
+
+
+def _obstruction_records(context):
+    """Validate declared obstructions with field-level repair messages; nothing is inferred."""
+    records = context["obstructions"]
+    if not isinstance(records, list) or not 1 <= len(records) <= 8:
+        raise ValueError("advisor_context.obstructions must be a list of 1 to 8 records")
+    seen = set()
+    for index, record in enumerate(records):
+        field = f"advisor_context.obstructions[{index}]"
+        if not isinstance(record, dict):
+            raise ValueError(f"{field} must be an object")
+        unknown = sorted(set(record) - set(OBSTRUCTION_FIELDS))
+        if unknown:
+            raise ValueError(f"{field} has unknown field(s): {', '.join(unknown)}; allowed: {', '.join(OBSTRUCTION_FIELDS)}")
+        if not _text(record.get("id"), 128):
+            raise ValueError(f"{field}.id must be nonempty text of at most 128 characters")
+        if record["id"] in seen:
+            raise ValueError(f"{field}.id duplicates an earlier obstruction id")
+        seen.add(record["id"])
+        if not _text(record.get("obligation")):
+            raise ValueError(f"{field}.obligation must name a goal predicate or completion_standard in at most 512 characters")
+        if "source" in record:
+            source = record["source"]
+            if isinstance(source, dict):
+                valid = bool(source) and set(source) <= set(SOURCE_LOCATOR_KEYS) and all(_text(v) for v in source.values())
+            else:
+                valid = _text(source)
+            if not valid:
+                raise ValueError(f"{field}.source must be locator text of at most 512 characters or an object "
+                                 f"with only {', '.join(SOURCE_LOCATOR_KEYS)} text fields")
+        if record.get("cause") not in OBSTRUCTION_CAUSES:
+            raise ValueError(f"{field}.cause must be one of {', '.join(OBSTRUCTION_CAUSES)}")
+        if "requirement" in record:
+            requirement = record["requirement"]
+            if not isinstance(requirement, dict) or set(requirement) != {"input", "operation", "output"}:
+                raise ValueError(f"{field}.requirement must have exactly input, operation and output")
+            for key in ("input", "operation", "output"):
+                if not _text(requirement[key]):
+                    raise ValueError(f"{field}.requirement.{key} must be nonempty text of at most 512 characters")
+        if "dependency" in record:
+            if record["cause"] != "DEPENDENCY_UNAVAILABLE":
+                raise ValueError(f"{field}.dependency is only valid for DEPENDENCY_UNAVAILABLE")
+            if not _text(record["dependency"], 128):
+                raise ValueError(f"{field}.dependency must be nonempty text of at most 128 characters")
+        if "signals" in record:
+            if record["cause"] != "UNSUPPORTED_OPERATION":
+                raise ValueError(f"{field}.signals is only valid for UNSUPPORTED_OPERATION")
+            signals = record["signals"]
+            if not (isinstance(signals, list) and 1 <= len(signals) <= 8 and all(
+                    isinstance(s, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", s) for s in signals)):
+                raise ValueError(f"{field}.signals must be 1 to 8 lowercase theory-tool tags such as proof_bottleneck")
+        if "scope" in record and not isinstance(record["scope"], dict):
+            raise ValueError(f"{field}.scope must be an object compared with the current decision scope")
+    return records
+
+
+def _catalogue_shortlist(signals):
+    """Read the bounded theory-tool catalogue by explicit tags only; never scan or run tools."""
+    report = {"coverage": "BOUNDED_CATALOGUE_NOT_EXHAUSTIVE", "prerequisites": "NOT_ASSESSED"}
+    if not signals:
+        return {**report, "status": "NOT_SEARCHED", "searched": [], "shortlist": [],
+                "reason": "No theory-tool signals were declared."}
+    try:
+        from rds_theory_tools import shortlist
+        found = shortlist(signals, limit=3)
+    except (ImportError, OSError, ValueError, KeyError, TypeError) as exc:
+        return {**report, "status": UNKNOWN, "searched": [], "shortlist": [], "reason": str(exc)[:200]}
+    return {**report, "status": "SEARCHED", "searched": ["references/theory-tools.json"],
+            "catalogue_sha256": found["catalogue_sha256"], "unmatched_signal_count": found["unmatched_signal_count"],
+            "shortlist": [{key: card[key] for key in ("id", "locator", "matched_tags", "runnable_operator")}
+                          for card in found["cards"]]}
+
+
+def _obstruction_response(record):
+    cause, requirement = record["cause"], record.get("requirement")
+    if not _source(record):
+        why = "No source locator was declared for this obstruction."
+    elif cause == "UNDETERMINED":
+        why = "The declared cause is undetermined."
+    elif cause == "UNSUPPORTED_OPERATION" and requirement is None:
+        why = "An unsupported operation needs requirement input/operation/output before it can become a capability requirement."
+    elif cause == "DEPENDENCY_UNAVAILABLE" and "dependency" not in record:
+        why = "An unavailable dependency needs its dependency name."
+    else:
+        why = None
+    if why is not None:
+        return {"response": "DISCRIMINATING_CHECK", "cause_status": UNKNOWN, "reason": why, "next": UNDETERMINED_NEXT}
+    response, text = OBSTRUCTION_RESPONSES[cause]
+    result = {"response": response, "cause_status": "INPUT_REPORTED", "next": text}
+    if cause == "DEPENDENCY_UNAVAILABLE":
+        from rds_capabilities import CAPABILITIES
+        dependency = record["dependency"]
+        # Only a fixed supported name forms a command; other names stay data.
+        result.update(dependency=dependency, live_check=(
+            "python -B scripts/rds_cli.py exec --timeout 10 -- python -B scripts/rds_capabilities.py --capability " + dependency
+            if dependency in CAPABILITIES else None))
+    elif cause == "UNSUPPORTED_OPERATION":
+        result["required_capability"] = {
+            "obligation": record["obligation"], **deepcopy(requirement), "source_ref": "source",
+            "status": "REQUIRED_AVAILABILITY_UNKNOWN", "catalogue": _catalogue_shortlist(record.get("signals"))}
+    if requirement is not None and cause != "UNSUPPORTED_OPERATION":
+        result["requirement"] = deepcopy(requirement)
+    return result
+
+
+def _canonical(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _obstruction_review(records, context, goal):
+    """Map declared obstructions on open goal obligations to bounded responses."""
+    targets = _goal_targets(context)
+    truths = {}
+    for condition in (goal or {}).get("conditions", []):
+        truths.setdefault(condition["fact"], []).append(condition["truth"])
+    decision = context.get("decision")
+    # The ledger keys loop history by decision.scope; the context-level scope is the documented fallback.
+    scope = decision["scope"] if isinstance(decision, dict) and "scope" in decision else context.get("scope")
+    entries = []
+    for record in records:
+        entry = {"id": record["id"], "obligation": record["obligation"], "cause": record["cause"]}
+        if "source" in record:
+            entry["source"] = deepcopy(record["source"])
+        entry.update(assurance="INPUT_REPORTED_OBSTRUCTION_NOT_DIAGNOSIS", authorization="UNCHANGED")
+        obligation = record["obligation"]
+        if obligation not in targets:
+            status, reason = "NOT_APPLICABLE", "The obligation is not an existing goal predicate or bound completion_standard."
+        elif "scope" in record and scope is None:
+            status, reason = UNKNOWN, "No current scope is declared, so this scoped obstruction cannot be matched to it."
+        elif "scope" in record and _canonical(record["scope"]) != _canonical(scope):
+            status, reason = "NOT_APPLICABLE", "The declared scope differs from the current scope; this obstruction was not observed here."
+        elif truths.get(obligation) and all(truth == TRUE for truth in truths[obligation]):
+            status, reason = "NOT_APPLICABLE", "The obligation's current goal predicates are satisfied; the obstruction no longer applies."
+        else:
+            entries.append({**entry, "status": "APPLICABLE", **_obstruction_response(record)})
+            continue
+        entries.append({**entry, "status": status, "reason": reason})
+    # No cause is established while a different cause is declared for the same open obligation, including one
+    # whose applicability is unknown; only a cause ruled out (NOT_APPLICABLE) is ignored. Same-cause records
+    # do not conflict. Declared contracts, dependency names and live checks stay as data for the check.
+    causes = {}
+    for entry in entries:
+        if entry["status"] in {"APPLICABLE", UNKNOWN}:
+            causes.setdefault(entry["obligation"], set()).add(entry["cause"])
+    for record, entry in zip(records, entries):
+        others = sorted(causes.get(entry["obligation"], set()) - {entry["cause"]})
+        if entry["status"] != "APPLICABLE" or entry["response"] == "DISCRIMINATING_CHECK" or not others:
+            continue
+        entry.pop("required_capability", None)
+        if record.get("requirement") is not None:
+            entry["requirement"] = deepcopy(record["requirement"])
+        entry.update(response="DISCRIMINATING_CHECK", cause_status=UNKNOWN, next=UNDETERMINED_NEXT,
+                     reason="Co-declared " + ", ".join(others) + " on this obligation must be resolved or ruled out "
+                            "before this cause is treated as established.")
+    return entries
+
+
+def _specify_capability(move, review, entries, integrity):
+    """Whether the applicable capability requirements supersede the existing move kind."""
+    capability = {e["obligation"] for e in entries if e["status"] == "APPLICABLE" and e["response"] == "CAPABILITY_REQUIRED"}
+    goal = review.get("goal") or {}
+    # A satisfied goal is not blocked; a loop-history move before the goal check must not become a capability step.
+    if integrity or not capability or goal.get("status") == TRUE:
+        return False
+    unknown = {c["fact"] for c in goal.get("conditions", []) if c["truth"] == UNKNOWN}
+    # Any UNKNOWN goal predicate must be covered, whichever branch produced the move, so recorded
+    # rejections never make superseding easier than the plain goal-evidence step.
+    if not unknown <= capability:
+        return False
+    return (move["kind"] in CAPABILITY_SUPERSEDES or
+            (move["kind"] == "RESOLVE_PREMISE" and move["reason"] == GOAL_EVIDENCE_REASON and bool(unknown)))
+
+
+def review_obstructions(search, context):
+    """Validate and consume declared obstructions after every existing context check.
+
+    Responses are added to selection_review and referenced from the existing next_move. A move is
+    never created or removed and authorization is unchanged; an established capability requirement
+    turns only a generic jump or fully covered goal-evidence move into SPECIFY_CAPABILITY. Only the
+    Advisor entry calls this: direct search_directions callers neither validate nor receive obstruction_review.
+    """
+    records = _obstruction_records(context)
+    review = search.get("selection_review") if isinstance(search, dict) else None
+    if not isinstance(review, dict):
+        return None
+    review["obstruction_review"] = entries = _obstruction_review(records, context, review.get("goal"))
+    move = review.get("next_move")
+    applicable = [(index, entry) for index, entry in enumerate(entries) if entry["status"] == "APPLICABLE"]
+    if move is None or not applicable:
+        return entries
+    move["obstructions"] = [{"id": entry["id"], "response": entry["response"],
+                             "ref": f"selection_review.obstruction_review[{index}]"} for index, entry in applicable]
+    integrity = any(f.get("kind") == "LOOP_HISTORY_REVIEW_ERROR" for f in search.get("loop_review", {}).get("flags", []))
+    if _specify_capability(move, review, entries, integrity):
+        # The superseded kind and reason stay as data, so recorded rejections remain visible.
+        move.update(supersedes={"kind": move["kind"], "reason": move["reason"]}, kind="SPECIFY_CAPABILITY",
+                    reason=SPECIFY_CAPABILITY_REASON,
+                    prompt=SPECIFY_CAPABILITY_TEXT + MOVE_PRESERVE_CLAUSES)
+    elif not integrity and move["prompt"].endswith(MOVE_PRESERVE_CLAUSES):
+        move["prompt"] = move["prompt"][:-len(MOVE_PRESERVE_CLAUSES)] + OBSTRUCTION_MOVE_TEXT + MOVE_PRESERVE_CLAUSES
+    return entries
+
+
 def _next_move(review, search):
     """Suggest a bounded reasoning step from input review, without changing a route."""
     flags = {f["kind"] for f in review["flags"]}
@@ -411,6 +664,20 @@ def _next_move(review, search):
                     and not supported_route and goal.get("status") in {UNKNOWN, FALSE})
     if "LOOP_HISTORY_REVIEW_ERROR" in loop_flags:
         kind, reason = "RESOLVE_PREMISE", "Recorded history integrity is unresolved; inspect the existing loop review."
+    elif supported_route and goal.get("conditions") and any(
+            c["truth"] == UNKNOWN for c in goal.get("conditions", [])) and any(
+            c["basis"] == "CONDITIONAL_RIVAL_TEST" and not c["unresolved_pairs"]
+            for c in review["candidates"]):
+        # A supported discriminating observation that measures the unresolved
+        # predicate IS the evidence repair: name it instead of a generic premise step.
+        unresolved_facts = {c["fact"] for c in goal["conditions"] if c["truth"] == UNKNOWN}
+        measuring = [c["id"] for c in review["candidates"]
+                     if c["basis"] == "CONDITIONAL_RIVAL_TEST" and not c["unresolved_pairs"]]
+        kind, reason = "DESIGN_DISCRIMINATOR", (
+            "Local success does not measure the open application/transfer obligation; run the ready "
+            f"discriminating check ({', '.join(sorted(measuring))}) whose rival predictions resolve "
+            f"{', '.join(sorted(unresolved_facts))}. Replication and healthy local routes stay preserved; "
+            "another local qualification is not application progress.")
     elif (goal.get("status") == UNKNOWN or any(c["truth"] == UNKNOWN for c in goal.get("conditions", []))) and not goal_history:
         kind, reason = "RESOLVE_PREMISE", "The original goal has unresolved evidence; no scientific failure is established."
     elif ("PREDICTION_PREMISES_UNRESOLVED" in flags and not supported_route) or (not ready_ids and (pending or blocked)):
@@ -461,9 +728,7 @@ def _next_move(review, search):
     return {"kind": kind, "reason": reason, "basis": "INPUT_REVIEW_HEURISTIC_NOT_SCIENTIFIC_PROOF",
             "authorization": "UNCHANGED",
             "preserve_refs": ["search.decision", "context.budget", "context.resources", "context.method_constraints"],
-            "prompt": prompt + "Preserve the original goal, scope, revision, budget and method constraints in the referenced inputs. "
-                      "Respect an explicitly chosen route; this suggestion does not interrupt it or authorize execution. "
-                      "Unknown evidence or a scoped failure does not establish a capacity lower bound."}
+            "prompt": prompt + MOVE_PRESERVE_CLAUSES}
 
 
 def review_selection(search, context, *, _dependency=None, audit_receipts=False, audit_files=False):
