@@ -828,9 +828,10 @@ class ProjectTests(unittest.TestCase):
                 if path.is_file():
                     shutil.copyfile(path, Path(other) / path.name)
             other_store = ProjectStore(other)
-            other_store.initialize(self.contract)
-            with self.assertRaises(ValueError):
-                other_store.register(self.spec())
+            # The protocol freezes with the contract, so the conflict is refused before anything is frozen.
+            with self.assertRaisesRegex(ValueError, "data_sha256 must be"):
+                other_store.initialize(self.contract)
+            self.assertFalse((Path(other) / ".rds" / "project.sqlite3").exists())
 
     def test_existing_output_cannot_supply_stale_success(self):
         (self.root / "outputs").mkdir()
@@ -1462,7 +1463,7 @@ class StopPolicyAndMaintenanceTests(unittest.TestCase):
 
 
 class ProtocolIdentityMessageTests(unittest.TestCase):
-    """#154: a protocol/binding conflict names the role, the expected value and the rule."""
+    """#154: a protocol/binding conflict names the role, the expected value and the rule, while it can still be fixed."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="rds protocol identity ")
@@ -1478,54 +1479,68 @@ class ProtocolIdentityMessageTests(unittest.TestCase):
         return subprocess.run([sys.executable, "-B", str(Path(__file__).resolve().parents[1] / "scripts" / "rds_cli.py"),
                                "--root", str(root), *args], capture_output=True, text=True, env=self.env, timeout=60)
 
-    def project(self, name, protocol_edit=None, extra_code=False):
+    def project(self, name, extra_code=False):
         root = Path(self.prepare(Path(self.tmp.name) / name)["root"])
-        contract = json.loads((root / "contract.json").read_text(encoding="utf-8"))
         if extra_code:  # A second source file, as in most real projects.
             (root / "helper.py").write_text("HELPER = 1\n", encoding="utf-8")
+            contract = json.loads((root / "contract.json").read_text(encoding="utf-8"))
             contract["bindings"].append({"role": "code", "path": "helper.py", "sha256": file_sha(root / "helper.py")})
-        if protocol_edit:
-            protocol = json.loads((root / "protocol.json").read_text(encoding="utf-8"))
-            protocol.update(protocol_edit)
-            (root / "protocol.json").write_text(json.dumps(protocol), encoding="utf-8")
-            sha = file_sha(root / "protocol.json")
-            for binding in contract["bindings"]:
-                if binding["role"] == "protocol":
-                    binding["sha256"] = sha
-            manifest = json.loads((root / "control.json").read_text(encoding="utf-8"))
-            manifest["protocol"]["sha256"] = sha
-            (root / "control.json").write_text(json.dumps(manifest), encoding="utf-8")
-        (root / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
-        self.assertEqual(self.cli(root, "project", "init", "--contract", str(root / "contract.json")).returncode, 0)
+            (root / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
         return root
 
-    def create(self, root):
-        return self.cli(root, "project", "create", "--manifest", str(root / "control.json"))
+    def edit_protocol(self, root, **fields):
+        """Rewrite protocol.json and every reference to its SHA256, as an agent repairing the project would."""
+        protocol = json.loads((root / "protocol.json").read_text(encoding="utf-8"))
+        protocol.update(fields)
+        (root / "protocol.json").write_text(json.dumps(protocol), encoding="utf-8")
+        sha = file_sha(root / "protocol.json")
+        for name, refs in (("contract.json", lambda c: [b for b in c["bindings"] if b["role"] == "protocol"]),
+                           ("control.json", lambda m: [m["protocol"]])):
+            body = json.loads((root / name).read_text(encoding="utf-8"))
+            for ref in refs(body):
+                ref["sha256"] = sha
+            (root / name).write_text(json.dumps(body), encoding="utf-8")
 
-    def test_multi_file_role_rejection_states_the_digest_that_then_registers(self):
+    def init(self, root):
+        return self.cli(root, "project", "init", "--contract", str(root / "contract.json"))
+
+    def test_multi_file_conflict_is_refused_before_the_contract_freezes_and_is_fixable_in_place(self):
         root = self.project("multi", extra_code=True)
-        before = ProjectStore(root).snapshot()
-        rejected = self.create(root)
+        rejected = self.init(root)
         self.assertNotEqual(rejected.returncode, 0)
         expected = digest(sorted([{"path": "experiment.py", "sha256": file_sha(root / "experiment.py")},
                                   {"path": "helper.py", "sha256": file_sha(root / "helper.py")}], key=lambda b: b["path"]))
         message = rejected.stdout + rejected.stderr
         self.assertIn("Protocol identity conflicts with bindings: code_sha256 must be " + expected, message)
         self.assertIn("canonical digest of the 2 'code' bindings", message)
-        self.assertEqual(ProjectStore(root).snapshot(), before)
-        # Following the message on a fresh root is enough to register the run.
-        fixed = self.project("multi-fixed", protocol_edit={"code_sha256": expected}, extra_code=True)
-        registered = self.create(fixed)
+        self.assertIn("in protocol.json; the protocol is frozen with the contract", message)
+        self.assertFalse((root / ".rds" / "project.sqlite3").exists())
+        # Following the message in the same root initializes it and registers the run; no new root is needed.
+        self.edit_protocol(root, code_sha256=expected)
+        self.assertEqual(self.init(root).returncode, 0)
+        registered = self.cli(root, "project", "create", "--manifest", str(root / "control.json"))
         self.assertEqual(registered.returncode, 0, registered.stdout + registered.stderr)
-        self.assertEqual([run["id"] for run in ProjectStore(fixed).snapshot()["runs"]], ["control"])
+        self.assertEqual([run["id"] for run in ProjectStore(root).snapshot()["runs"]], ["control"])
 
-    def test_single_binding_rejection_names_the_file_hash(self):
-        root = self.project("single", protocol_edit={"config_sha256": "0" * 64})
-        rejected = self.create(root)
+    def test_single_binding_conflict_names_the_file_hash(self):
+        root = self.project("single")
+        self.edit_protocol(root, config_sha256="0" * 64)
+        rejected = self.init(root)
         self.assertNotEqual(rejected.returncode, 0)
         self.assertIn("config_sha256 must be " + file_sha(root / "config.json")
                       + " (the SHA256 of the one 'config' binding)", rejected.stdout + rejected.stderr)
+        self.assertFalse((root / ".rds" / "project.sqlite3").exists())
 
+    def test_protocol_files_without_identity_hashes_still_initialize(self):
+        root = self.project("prose")
+        (root / "protocol.md").write_text("# Protocol\nPrimary metric: mse.\n", encoding="utf-8")
+        (root / "partial.json").write_text(json.dumps({"seed": 3}), encoding="utf-8")
+        contract = json.loads((root / "contract.json").read_text(encoding="utf-8"))
+        contract["bindings"] += [{"role": "protocol", "path": name, "sha256": file_sha(root / name)}
+                                 for name in ("protocol.md", "partial.json")]
+        (root / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+        initialized = self.init(root)
+        self.assertEqual(initialized.returncode, 0, initialized.stdout + initialized.stderr)
 
 if __name__ == "__main__":
     unittest.main()
