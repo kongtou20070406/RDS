@@ -75,10 +75,13 @@ def _pointer(document, pointer):
     require(isinstance(pointer, str) and (pointer == "" or pointer.startswith("/")), "expected JSON pointer")
     segments = pointer.split("/")[1:] if pointer else []
     require(len(segments) <= 32, "pointer depth exceeds 32")
+    # RFC 6901: every '~' is followed by 0 or 1. Stripping escapes can rebuild one ('~~01' -> '~1'),
+    # so check each tilde directly; a malformed spelling would read a field under a second locator.
+    # Check the whole pointer before reading, so the reason does not depend on the document.
+    require(all(part[:1] in ("0", "1") for segment in segments for part in segment.split("~")[1:]),
+            "invalid JSON pointer escape")
     result = document
     for segment in segments:
-        # RFC 6901 escapes; malformed escapes cannot alias a different field.
-        require("~" not in segment.replace("~0", "").replace("~1", ""), "invalid JSON pointer escape")
         key = segment.replace("~1", "/").replace("~0", "~")
         if isinstance(result, list):
             # RFC 6901 indexes are ASCII; Unicode digits would alias one element under a second locator.
