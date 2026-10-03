@@ -644,6 +644,121 @@ class OwnedAdvisorCLITests(unittest.TestCase):
         self.assertEqual(state['budget']['cpu_seconds']['reserved'], 0)
         self.assertEqual(self.output('advise')['selected_run'], 'repair')
 
+    def test_late_duplicate_registration_cannot_block_identical_reserved_map_execution(self):
+        self.initialize('slownegative', mutate_policy=lambda value: value['context'].update(max_candidates=1))
+        gates = self.root / 'gates'
+        gates.mkdir()
+        wrapper = gates / 'advance.py'
+        # Only control timing at real method boundaries. Original save, locked
+        # callback, register/execute/admission and the public CLI remain in use.
+        wrapper.write_text(r'''
+import json, pathlib, sys, time
+sys.stdout.reconfigure(encoding='utf-8')
+sys.stderr.reconfigure(encoding='utf-8')
+source, role, root = pathlib.Path(sys.argv[1]).resolve(), sys.argv[2], pathlib.Path(sys.argv[3]).resolve()
+gates = root / 'gates'
+sys.path.insert(0, str(source / 'scripts'))
+import rds_cli, rds_project, rds_tms_store
+phase = False
+def wait(name):
+    deadline = time.monotonic() + 20
+    while not (gates / name).exists():
+        if time.monotonic() >= deadline:
+            raise RuntimeError('Synthetic gate timeout: ' + name)
+        time.sleep(.01)
+original_register = rds_project.ProjectStore.register
+def register(self, *args, **kwargs):
+    if role == 'B' and self.root == root:
+        (gates / 'b-waiting').touch()
+        wait('a-waiting')
+    return original_register(self, *args, **kwargs)
+rds_project.ProjectStore.register = register
+original_execute = rds_project.ProjectStore.execute
+def execute(self, *args, **kwargs):
+    global phase
+    phase = self.root == root
+    return original_execute(self, *args, **kwargs)
+rds_project.ProjectStore.execute = execute
+original_save = rds_tms_store.save
+def save(target, spec, **kwargs):
+    global phase
+    info = {'expected': kwargs['expected'], 'map': rds_project.digest(spec)}
+    if role == 'A' and phase and pathlib.Path(target) == root:
+        phase = False
+        (gates / 'a-waiting').touch()
+        wait('b-ended')
+        actual = rds_tms_store.current(root)
+        info.update(current=actual['sha256'], current_map=rds_project.digest(actual['dependency_map']))
+        (gates / 'a.json').write_text(json.dumps(info), encoding='utf-8')
+    result = original_save(target, spec, **kwargs)
+    if role == 'B' and pathlib.Path(target) == root and (gates / 'a-waiting').exists():
+        (gates / 'b.json').write_text(json.dumps({**info, 'published': result}), encoding='utf-8')
+    return result
+rds_tms_store.save = save
+sys.argv = [str(source / 'scripts/rds_cli.py'), '--root', str(root), 'project', 'advance']
+try:
+    sys.exit(rds_cli.main())
+finally:
+    if role == 'B':
+        (gates / 'b-ended').touch()
+''', encoding='utf-8')
+        children = []
+
+        def launch(role):
+            child = subprocess.Popen([sys.executable, '-B', str(wrapper), str(ROOT), role, str(self.root)],
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                     text=True, encoding='utf-8', env=self.env)
+            children.append(child)
+            return child
+
+        def wait(name, child):
+            deadline = time.monotonic() + 20
+            while not (gates / name).exists():
+                self.assertIsNone(child.poll(), 'CLI exited before gate ' + name)
+                self.assertLess(time.monotonic(), deadline, 'Synthetic gate timeout: ' + name)
+                time.sleep(.01)
+
+        try:
+            duplicate = launch('B')
+            wait('b-waiting', duplicate)
+            executor = launch('A')
+            wait('a-waiting', executor)
+            duplicate_out, duplicate_err = duplicate.communicate(timeout=30)
+            execution_out, execution_err = executor.communicate(timeout=30)
+            self.assertEqual(duplicate.returncode, 1, duplicate_out + duplicate_err)
+            self.assertIn('Run ID already exists', duplicate_err)
+            self.assertEqual(executor.returncode, 0, execution_out + execution_err)
+            self.assert_owned_receipt(json.loads(execution_out)['receipt'], 'baseline', 'SUCCEEDED')
+        finally:
+            for child in children:
+                if child.poll() is None:
+                    child.kill()
+                child.communicate(timeout=5)
+        a = json.loads((gates / 'a.json').read_text(encoding='utf-8'))
+        b = json.loads((gates / 'b.json').read_text(encoding='utf-8'))
+        self.assertEqual(a['expected'], b['expected'])
+        self.assertNotEqual(a['expected'], a['current'])
+        self.assertEqual(a['current'], b['published'])
+        self.assertEqual(a['map'], a['current_map'])
+        self.assertEqual(a['map'], b['map'])
+        self.assertEqual(self.starts(), ['baseline'])
+        state = self.snapshot()
+        self.assertEqual(len(state['runs']), 1)
+        self.assertIsNotNone(state['runs'][0]['attempt_id'])
+        self.assertEqual(len(state['receipts']), 1)
+        self.assertEqual(state['budget']['cpu_seconds']['charged_estimate'], 1)
+        self.assertEqual(state['budget']['cpu_seconds']['reserved'], 0)
+        self.assertEqual(state['budget']['wall_seconds']['reserved'], 0)
+        self.assertEqual(self.output('advise')['selected_run'], 'repair')
+        print(json.dumps({'case': 'identical-reserved-map-publication',
+                          'children': [{'role': 'B', 'returncode': duplicate.returncode,
+                                        'stdout': duplicate_out, 'stderr': duplicate_err},
+                                       {'role': 'A', 'returncode': executor.returncode,
+                                        'stdout': execution_out, 'stderr': execution_err}],
+                          'trace': {'A': a, 'B': b}, 'launches': self.starts(),
+                          'attempt_id': state['runs'][0]['attempt_id'],
+                          'receipt_count': len(state['receipts']), 'budget': state['budget']}))
+
     def test_new_dependency_revision_invalidates_admission_before_actual_launch(self):
         import rds_owned_advisor as owned
         self.initialize()
