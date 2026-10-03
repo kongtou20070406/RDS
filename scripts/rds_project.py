@@ -592,6 +592,8 @@ class ProjectStore:
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             contract = self._contract(db)
+            require('advisor_policy' not in contract,
+                    'Program-owned Advisor requires project advance/create/execute; theory allowance cannot bypass it')
             require('stop_policy' not in contract and 'maintenance_allowance' not in contract,
                     'Configured stop/maintenance policies require project create/execute; theory allowance cannot bypass them')
             require(db.execute("SELECT 1 FROM runs WHERE id=?", (run_id,)).fetchone() is None, "Run ID already exists")
