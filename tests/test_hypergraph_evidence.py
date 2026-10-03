@@ -1,5 +1,4 @@
 """Receipt-bound evidence and OR-surviving retraction in the bounded analyzer."""
-import hashlib
 import json
 from pathlib import Path
 import sqlite3
@@ -11,12 +10,21 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from rds_hypergraph import analyze_hypergraph, audit_receipts
+from rds_project import digest
 
-RECEIPT_SHA = hashlib.sha256(b"grounded receipt").hexdigest()
+
+def receipt_row(run_status):
+    """The writer's shape: the row and the body both carry the digest of the body without it (#118)."""
+    body = {"schema": 1, "run_id": "r9", "run_status": run_status}
+    sha = digest(body)
+    return sha, json.dumps({**body, "sha256": sha})
+
+
+RECEIPT_SHA = receipt_row("SUCCEEDED")[0]
 MISSING_SHA = "a" * 64
 
 
-def ledger(tmp, run_status="SUCCEEDED", sha=RECEIPT_SHA):
+def ledger(tmp, run_status="SUCCEEDED"):
     """A real project ledger whose frozen receipts table holds one receipt."""
     root = tmp / "project"
     (root / ".rds").mkdir(parents=True)
@@ -25,9 +33,8 @@ def ledger(tmp, run_status="SUCCEEDED", sha=RECEIPT_SHA):
         CREATE TABLE contract(id INTEGER PRIMARY KEY,sha256 TEXT NOT NULL,body TEXT NOT NULL);
         CREATE TABLE receipts(run_id TEXT PRIMARY KEY,sha256 TEXT NOT NULL,body TEXT NOT NULL);
     """)
-    body = {"schema": 1, "run_id": "r9", "sha256": sha, "run_status": run_status}
     db.execute("INSERT INTO contract VALUES (1,'x','{}')")
-    db.execute("INSERT INTO receipts VALUES ('r9',?,?)", (sha, json.dumps(body)))
+    db.execute("INSERT INTO receipts VALUES ('r9',?,?)", receipt_row(run_status))
     db.commit()
     db.close()
     return root
@@ -55,8 +62,8 @@ class ReceiptEvidenceTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def binding(self, root=None):
-        return {"receipt": {"project_root": str(root or self.default_root), "sha256": RECEIPT_SHA}}
+    def binding(self, root=None, run_status="SUCCEEDED"):
+        return {"receipt": {"project_root": str(root or self.default_root), "sha256": receipt_row(run_status)[0]}}
 
     @property
     def default_root(self):
@@ -64,18 +71,17 @@ class ReceiptEvidenceTests(unittest.TestCase):
             self._default_root = self.ledger()
         return self._default_root
 
-    def ledger(self, run_status="SUCCEEDED", sha=RECEIPT_SHA):
+    def ledger(self, run_status="SUCCEEDED"):
         """A real project ledger whose frozen receipts table holds one receipt."""
-        root = Path(self.tmp.name) / f"project-{run_status.lower()}-{sha[:8]}"
+        root = Path(self.tmp.name) / f"project-{run_status.lower()}"
         (root / ".rds").mkdir(parents=True)
         db = sqlite3.connect(root / ".rds" / "project.sqlite3")
         db.executescript("""
             CREATE TABLE contract(id INTEGER PRIMARY KEY,sha256 TEXT NOT NULL,body TEXT NOT NULL);
             CREATE TABLE receipts(run_id TEXT PRIMARY KEY,sha256 TEXT NOT NULL,body TEXT NOT NULL);
         """)
-        body = {"schema": 1, "run_id": "r9", "sha256": sha, "run_status": run_status}
         db.execute("INSERT INTO contract VALUES (1,'x','{}')")
-        db.execute("INSERT INTO receipts VALUES ('r9',?,?)", (sha, json.dumps(body)))
+        db.execute("INSERT INTO receipts VALUES ('r9',?,?)", receipt_row(run_status))
         db.commit()
         db.close()
         return root
@@ -140,7 +146,7 @@ class ReceiptEvidenceTests(unittest.TestCase):
 
     def test_failed_receipt_run_status_never_grounds(self):
         root = self.ledger(run_status="FAILED")
-        result = analyze_hypergraph(spec_with(node_evidence=self.binding(root)),
+        result = analyze_hypergraph(spec_with(node_evidence=self.binding(root, "FAILED")),
                                     audit_receipts_enabled=True)
         self.assertEqual(result["receipt_audit"]["audits"][0]["status"], "RECEIPT_NOT_SUCCEEDED")
         self.assertEqual(result["receipt_audit"]["audits"][0]["run_status"], "FAILED")

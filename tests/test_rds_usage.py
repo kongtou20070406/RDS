@@ -1,5 +1,6 @@
 """Local-day counts, concurrent processes, privacy and transparent log failures."""
 from concurrent.futures import ThreadPoolExecutor
+import argparse
 from contextlib import closing, redirect_stderr
 from datetime import datetime
 import json
@@ -116,6 +117,27 @@ class UsageTests(unittest.TestCase):
             rows = connection.execute("SELECT command,mode,exit_code FROM calls ORDER BY id").fetchall()
         self.assertEqual(rows, [("formal", "help", 0), ("other", "command", 2)])
         self.assertNotIn(secret, str(rows))
+
+    def test_usage_labels_cover_every_public_top_level_command(self):
+        import rds_cli
+        groups = [action for action in rds_cli.parser()._actions
+                  if isinstance(action, argparse._SubParsersAction)]
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(set(groups[0].choices), usage.COMMANDS)
+        for command in groups[0].choices:
+            with self.subTest(command=command):
+                self.assertEqual(usage._label([command]), (command, "command"))
+                self.assertEqual(usage._label([command, "--help"]), (command, "help"))
+
+    def test_real_host_hook_help_is_recorded_under_its_command(self):
+        result = self.cli("host-hook", "--help")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("coverage", result.stdout)
+        self.assertFalse((self.folder / ".rds").exists())
+        with closing(sqlite3.connect(self.path)) as connection:
+            rows = connection.execute(
+                "SELECT command,mode,exit_code FROM calls ORDER BY id").fetchall()
+        self.assertEqual(rows, [("host-hook", "help", 0)])
 
     def test_storage_failure_does_not_change_original_return_or_exception(self):
         with patch.dict(os.environ, {"RDS_USAGE_DB": str(self.folder)}):
