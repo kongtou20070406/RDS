@@ -1,8 +1,9 @@
 """Local-day counts, concurrent processes, privacy and transparent log failures."""
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import closing
+from contextlib import closing, redirect_stderr
 from datetime import datetime
 import json
+import io
 import os
 from pathlib import Path
 import sqlite3
@@ -14,7 +15,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from usage_cli_fixture import dual_sqlite_wait, ledger_snapshot, run_cli, wait_marker
+from usage_cli_fixture import count_diagnostics, dual_sqlite_wait, ledger_snapshot, run_cli, wait_marker
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -124,23 +125,103 @@ class UsageTests(unittest.TestCase):
         self.assertIsNotNone(usage._last_error)
 
     def test_concurrent_cli_processes_retain_all_calls(self):
-        self.assertEqual(self.cli("--version").returncode, 0)
+        warmup = self.cli("--version")
+        self.assertEqual(warmup.returncode, 0, count_diagnostics(self.path, [warmup]))
         with ThreadPoolExecutor(max_workers=8) as workers:
             results = list(workers.map(lambda _: self.cli("--version"), range(12)))
-        self.assertTrue(all(result.returncode == 0 for result in results), [r.stderr for r in results])
-        result = usage.summarize(days=1)
-        self.assertEqual(result["total_calls"], 13)
-        self.assertEqual(result["modes"], {"version": 13})
-        self.assertEqual(result["daily"][0]["successful"], 13)
+        children = [warmup, *results]
+        self.assertTrue(all(result.returncode == 0 for result in results), count_diagnostics(self.path, children))
+        try:
+            result = usage.summarize(days=1)
+        except Exception as exc:
+            exc.add_note(count_diagnostics(self.path, children))
+            raise
+        evidence = count_diagnostics(self.path, children, result)
+        self.assertEqual(result["total_calls"], 13, evidence)
+        self.assertEqual(result["modes"], {"version": 13}, evidence)
+        self.assertEqual(result["daily"][0]["successful"], 13, evidence)
 
     def test_first_concurrent_invocations_retain_all_calls(self):
         self.assertFalse(self.path.exists())
         with ThreadPoolExecutor(max_workers=8) as workers:
             results = list(workers.map(lambda _: self.cli("--version"), range(12)))
-        self.assertTrue(all(r.returncode == 0 for r in results), [r.stderr for r in results])
-        report = usage.summarize(days=1)
-        self.assertEqual(report['total_calls'], 12)
-        self.assertEqual(report['daily'][0]['successful'], 12)
+        self.assertTrue(all(r.returncode == 0 for r in results), count_diagnostics(self.path, results))
+        try:
+            report = usage.summarize(days=1)
+        except Exception as exc:
+            exc.add_note(count_diagnostics(self.path, results))
+            raise
+        evidence = count_diagnostics(self.path, results, report)
+        self.assertEqual(report['total_calls'], 12, evidence)
+        self.assertEqual(report['daily'][0]['successful'], 12, evidence)
+
+    def test_persistent_start_lock_reports_loss_but_preserves_real_cli_result(self):
+        warmup = self.cli("--version")
+        self.assertEqual(warmup.returncode, 0, warmup.stderr)
+        before = ledger_snapshot(self.path)
+        with closing(sqlite3.connect(self.path)) as blocker:
+            blocker.execute("BEGIN IMMEDIATE")
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                # Keep the real writer until the child reaches the existing bounded storage failure.
+                result = pool.submit(self.cli, "--version").result(timeout=45)
+            blocker.rollback()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, warmup.stdout)
+        self.assertIn("[RDS-USAGE-DEGRADED] start logging failed (OperationalError/SQLITE_BUSY)", result.stderr)
+        self.assertIn("start record not confirmed", result.stderr)
+        self.assertEqual(ledger_snapshot(self.path), before)
+        diagnostics = count_diagnostics(self.path, [warmup, result], usage.summarize(days=2))
+        evidence = json.loads(diagnostics)
+        self.assertEqual(evidence["children"][1]["stderr"], result.stderr)
+        self.assertGreaterEqual(evidence["children"][1]["elapsed_seconds"], 10)
+        self.assertEqual(evidence["ledger"], before)
+        # A missing start must still fail complete-count acceptance. The original
+        # child result, phase notice and raw dated row survive in that assertion.
+        with self.assertRaises(AssertionError) as incomplete:
+            self.assertEqual(evidence["report"]["total_calls"], 2, diagnostics)
+        self.assertIn("[RDS-USAGE-DEGRADED] start", str(incomplete.exception))
+        self.assertIn('"returncode": 0', str(incomplete.exception))
+        self.assertIn('"day":', str(incomplete.exception))
+        restored = self.cli("--version")
+        self.assertEqual(restored.returncode, 0, restored.stderr)
+        self.assertEqual(restored.stderr, "")
+        report = usage.summarize(days=2)
+        self.assertEqual(report["total_calls"], 2)
+        self.assertEqual(sum(row["successful"] for row in report["daily"]), 2)
+
+    def test_finish_lock_keeps_unfinished_row_and_original_exception_or_exit(self):
+        secret = "private-error-payload-never-print"
+        for raises in (False, True):
+            with self.subTest(raises=raises), closing(sqlite3.connect(self.path)) as blocker:
+                def command():
+                    blocker.execute("BEGIN IMMEDIATE")
+                    if raises:
+                        raise RuntimeError(secret)
+                    return 7
+                warning = io.StringIO()
+                with redirect_stderr(warning):
+                    if raises:
+                        with self.assertRaisesRegex(RuntimeError, secret):
+                            usage.run_logged(command, ["status", secret], "test")
+                    else:
+                        self.assertEqual(usage.run_logged(command, ["status", secret], "test"), 7)
+                blocker.rollback()
+            self.assertIn("[RDS-USAGE-DEGRADED] finish logging failed (OperationalError/SQLITE_BUSY)", warning.getvalue())
+            self.assertIn("exit record not confirmed", warning.getvalue())
+            self.assertNotIn(secret, warning.getvalue())
+            retained = ledger_snapshot(self.path)["calls"]
+            self.assertEqual(len(retained), 2 if raises else 1)
+            self.assertTrue(all(row["exit_code"] is None for row in retained))
+            self.assertNotIn(secret, json.dumps(retained))
+
+    def test_unavailable_warning_stream_never_replaces_original_result(self):
+        with patch.dict(os.environ, {"RDS_USAGE_DB": str(self.folder)}):
+            with patch("rds_usage.sys.stderr") as stream:
+                stream.write.side_effect = OSError("synthetic closed stderr")
+                self.assertEqual(usage.run_logged(lambda: 7, ["status"], "test"), 7)
+                with self.assertRaisesRegex(RuntimeError, "original"):
+                    usage.run_logged(lambda: (_ for _ in ()).throw(RuntimeError("original")), ["status"], "test")
+        self.assertIsNotNone(usage._last_error)
 
     def test_brief_lock_wait_preserves_call_and_existing_wal_mode(self):
         usage.run_logged(lambda: 0, ['status'], 'test')

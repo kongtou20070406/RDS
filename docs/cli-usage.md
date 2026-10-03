@@ -1,14 +1,20 @@
 # Local CLI usage log
 
-Every `rds_cli.py` invocation records its start and exit in a local SQLite log,
+Every `rds_cli.py` invocation attempts to record its start and exit in a local SQLite log,
 automatically. All updated checkouts share one log for the current user. Calls
 include help, version, invalid arguments, failed commands and statistics queries.
 
-SQLite waits up to two seconds per logging transaction for temporary contention;
+SQLite waits up to ten seconds per logging transaction for temporary contention;
 persistent failures leave the command's original result unchanged. Existing journal
 modes are retained, and fresh logs use SQLite's default mode without a first-use
-existence/PRAGMA race. Log errors remain visible through the usage report.
-Counts describe actual CLI invocations; API imports and loading Skill instructions
+existence/PRAGMA race. The invocation reports a logging failure to stderr as
+[RDS-USAGE-DEGRADED], naming the start/finish phase, exception type and available
+SQLite error code without printing paths or argument payloads. Its original result
+or exception remains unchanged even if the diagnostic stream is unavailable.
+An unconfirmed start can be absent from counts; an unconfirmed finish can leave
+an unfinished entry. The current process's logging=ENABLED is not proof that
+earlier invocations were completely recorded. Missing history is not reconstructed.
+Counts describe recorded CLI invocations; API imports and loading Skill instructions
 have their own evidence. No prompt, full argv, input path or credential is stored.
 
 Show recent daily counts (14 days by default):

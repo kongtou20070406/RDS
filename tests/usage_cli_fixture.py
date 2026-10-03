@@ -17,14 +17,15 @@ def ledger_snapshot(path):
     try:
         with closing(sqlite3.connect(Path(path).as_uri() + "?mode=ro", uri=True, timeout=.1)) as db:
             return {"status": "READ", "calls": [
-                dict(zip(("id", "command", "mode", "exit_code", "elapsed_ms"), row))
-                for row in db.execute("SELECT id,command,mode,exit_code,elapsed_ms FROM calls ORDER BY id")]}
+                dict(zip(("id", "started", "day", "command", "mode", "version", "exit_code", "elapsed_ms"), row))
+                for row in db.execute("SELECT id,started,day,command,mode,version,exit_code,elapsed_ms FROM calls ORDER BY id")]}
     except (OSError, sqlite3.Error, ValueError) as exc:
         return {"status": "UNKNOWN", "error": str(exc)}
 
 
 def run_cli(command, folder, ledger, *, watchdog=CLI_WATCHDOG_SECONDS, ready=None):
     began = time.monotonic()
+    started_at = time.time()
     child = subprocess.Popen(command, cwd=folder, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                              text=True, encoding="utf-8")
     try:
@@ -42,7 +43,10 @@ def run_cli(command, folder, ledger, *, watchdog=CLI_WATCHDOG_SECONDS, ready=Non
                 "stdout": stdout, "stderr": stderr, "ledger": ledger_snapshot(ledger),
             }, ensure_ascii=False))
             raise
-        return subprocess.CompletedProcess(command, child.returncode, stdout, stderr)
+        result = subprocess.CompletedProcess(command, child.returncode, stdout, stderr)
+        result.fixture_timing = {"pid": child.pid, "started_at": started_at, "finished_at": time.time(),
+                                 "elapsed_seconds": time.monotonic() - began}
+        return result
     finally:
         if child.poll() is None:
             child.kill()
@@ -50,6 +54,14 @@ def run_cli(command, folder, ledger, *, watchdog=CLI_WATCHDOG_SECONDS, ready=Non
         # communicate closes these normally; readiness failures need closure too.
         for stream in (child.stdout, child.stderr):
             stream.close()
+
+
+def count_diagnostics(ledger, results, report=None):
+    """Original synthetic child outputs and row dates expose loss/unfinished/filter failures."""
+    return json.dumps({"report": report, "ledger": ledger_snapshot(ledger), "children": [
+        {**getattr(result, "fixture_timing", {}), "returncode": result.returncode,
+         "stdout": result.stdout, "stderr": result.stderr} for result in results]},
+        ensure_ascii=True, sort_keys=True)
 
 
 def wait_marker(path, *, child=None, stop=None):
