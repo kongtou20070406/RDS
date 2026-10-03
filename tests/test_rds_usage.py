@@ -462,10 +462,8 @@ class UsageTests(unittest.TestCase):
         self.assertFalse(self.path.exists())
         with slow_schema_commits(self.folder, self.path) as probe:
             environment = {**os.environ, **probe["environment"]}
-            with ThreadPoolExecutor(max_workers=8) as workers:
-                children = list(workers.map(lambda _: subprocess.run(
-                    [sys.executable, "-B", str(ROOT / "scripts/rds_cli.py"), "--version"],
-                    cwd=self.folder, env=environment, capture_output=True, text=True, timeout=60), range(12)))
+            with patch.dict(os.environ, environment), ThreadPoolExecutor(max_workers=8) as workers:
+                children = list(workers.map(lambda _: self.cli("--version"), range(12)))
             delays = [json.loads(line) for path in probe["work"].glob("*.jsonl")
                       for line in path.read_text(encoding="utf-8").splitlines()]
         report = usage.summarize(days=1)
