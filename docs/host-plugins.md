@@ -1,0 +1,131 @@
+# Conversation plugins: Claude Code, Codex and OMP
+
+The plugins add a short invocation indication, such as `RDS | advise: running`.
+They use the same Skill and Python kernel as a normal checkout. They do not run
+experiments, change permissions, or create a research ledger to refresh a display.
+The [execution admission hook](host-hook.md) is a separate feature.
+
+## Build and load
+
+Prerequisites: Git and Python 3.11+ available as `python`; a supported host.
+From a Git checkout, build into a **new directory outside the checkout**:
+
+```text
+python -B scripts/build_plugins.py --output ../rds-host-packages
+```
+
+The builder uses files in the Git index and their current working-tree contents.
+Developers must stage new package files first. Untracked files, private `.rds/`
+state, caches and user configuration are excluded. Existing output is never
+overwritten. This is a local build, not a release or an installation.
+
+Each host gets an independent, relocatable package containing
+`skills/research-direction-selector/SKILL.md`, its Python scripts and resources.
+There are no symlinks back to the checkout and no copied user configuration.
+Separate packages prevent OMP from also loading the Claude lifecycle hooks.
+
+### Claude Code
+
+```text
+claude plugin validate ../rds-host-packages/claude/research-direction-selector
+claude --plugin-dir ../rds-host-packages/claude/research-direction-selector
+```
+
+For persistent discovery, add `../rds-host-packages/claude` as a local plugin
+marketplace, then install `research-direction-selector@rds-local` in Claude Code.
+The package uses `.claude-plugin/plugin.json`, a standard `skills/` directory,
+and its explicitly referenced `integrations/hooks.json`. It intentionally does
+not also create the default `hooks/hooks.json`, which would duplicate hooks.
+
+### Codex
+
+```text
+codex plugin marketplace add ../rds-host-packages/codex
+codex plugin add research-direction-selector@rds-local
+```
+
+The package supplies portable root `plugin.json` and a compatible
+`.codex-plugin/plugin.json` pointing to the same resources. The generated local
+marketplace is `.agents/plugins/marketplace.json`. In the desktop app, restart
+and select the **RDS local** marketplace in Plugins to install it.
+
+Installation does not trust hooks. Review the current definitions through the
+host's hooks controls (`/hooks` in Codex CLI); untrusted/disabled hooks do not
+run. This package never changes that decision. A later package edit can require
+another review. Both hook commands read the host-provided plugin-root environment
+variable in Python so installation paths never become interpolated shell code.
+
+### OMP (oh-my-pi)
+
+```text
+omp --extension ../rds-host-packages/omp/research-direction-selector
+```
+
+Alternatively, `omp plugin link ../rds-host-packages/omp/research-direction-selector`
+registers the local package. OMP loads `package.json`'s `omp.extensions` entry and
+the sibling Skill. The extension observes native tool execution events and calls
+`ctx.ui.setStatus` with one short line. It keeps per-session invocation IDs so
+concurrent calls and session changes do not leave an old “running” indication.
+It uses Python only for the shared bounded invocation recognizer; `RDS_PYTHON`
+can select a Python executable if `python` is not on the host's PATH.
+
+## What the line means
+
+- Loading a plugin or reading its Skill is not a kernel invocation.
+- Claude/Codex `PreToolUse` says **pending** (about to call), since execution can
+  still be refused. OMP's actual execution-start event says **running**.
+- A structured zero exit code says **returned** (the CLI call finished); nonzero
+  exit says **nonzero exit**, and a host error says **error**. For example, formal
+  verification uses nonzero exits for checked FAIL and UNKNOWN, not just software
+  errors. None of these invocation labels is a scientific verdict.
+- Missing structured completion data says **result unknown**. Background
+  jobs are not declared finished just because their dispatch command returned.
+- The Skill asks the agent to show a short line at meaningful changes. Hooks
+  supply context; they cannot guarantee that a model follows the wording. OMP
+  additionally renders a native footer in UI modes that support `setStatus`.
+
+Only direct `python`, `python3` or `py -3` calls to **this installed copy's**
+`scripts/rds_cli.py` are automatically recognized. Absolute paths and quoted
+paths with spaces work. `echo`, grep, other files named `rds_cli.py`, `python -c`,
+shell programs with `cd`/pipelines, or JavaScript orchestrators such as
+`functions.exec` are deliberately not interpreted as invocations. For those
+wrappers the Skill must report the actual tool result; absence of a hook line is
+not evidence that RDS was unused. Aliases can display the generic `CLI` label.
+
+Hook input is bounded; malformed input, timeouts and display failures add no
+authority or research-state changes. Hooks never copy raw commands, prompts,
+logs, paths or retrieved content into their additional instructions.
+
+## Using Advisor before a choice
+
+Calling Advisor on one preselected direction does not establish a comparison.
+The Skill now keeps this distinction in the entry point: for a material choice,
+use serious available alternatives and a decision-changing observation, inspect
+`selection_review`, and identify missing comparisons before claiming a route
+was selected by RDS. A fixed task or one scoped proof needs no invented rivals.
+This is behavioral guidance, not a claim that a hook can judge scientific depth.
+
+At this revision, saved dependency maps require `advise --saved-dependencies`;
+the plugin does not silently change the kernel's selection/admission policy.
+See [agent entry](agent-entry.md) for dependency binding and incomplete results.
+
+## Verification and limits
+
+The Python tests build all packages, relocate them, invoke the packaged CLI and
+Advisor resources, and run the manifest hook commands using synthetic host
+payloads. OMP's Node tests exercise event ordering, errors and session cleanup.
+These are package/runtime regression checks, not an evaluation of a model's
+research decisions or proof that every host UI displays context identically.
+
+```text
+python -B -m unittest discover -s tests -p test_rds_conversation_hook.py -v
+python -B -m unittest discover -s tests -p test_rds_plugin_package.py -v
+node --test tests/test_omp_status.mjs
+```
+
+Upstream contracts checked on 2026-10-03:
+[Claude plugin manifest](https://code.claude.com/docs/en/plugins-reference),
+[Claude hooks](https://code.claude.com/docs/en/hooks),
+[Codex packaging](https://developers.openai.com/plugins/build/plugins),
+[Codex hooks](https://learn.chatgpt.com/docs/hooks), and
+[OMP extensions](https://github.com/can1357/oh-my-pi/blob/main/docs/extensions.md).
