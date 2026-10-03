@@ -2,6 +2,7 @@
 
 ## 5.8.0 — Unreleased
 
+- After `math bind` on a root without `project init`, `advise --choose … --record`, `project status`, `project next` and other project-contract readers now reject with `Project contract has not been initialized`, as on an empty root (#135). `project next` keeps its `project init` hint. Before, they failed with `[RDS-ERROR] OperationalError: no such table: contract`, because the bound objective shares `.rds/project.sqlite3` and the contract reader did not check for the table. Nothing is written on the rejection, and the bound objective is unchanged. A contract table without a row is still `Project contract is missing`.
 - Record `host-hook` invocations under their public command instead of `other` (or generic `help` for help calls). Check the usage label catalog against the actual CLI parser and exercise the real help entry. This corrects command attribution only; it does not reconstruct older log rows or resolve #108's unknown original count-loss cause.
 - Normalize the Lean updater acceptance fixture's temporary root before comparing it with the updater's resolved root. Real Windows 8.3 aliases such as `RUNNER~1` name the same directory; a native alias regression retains all four upgrade-binding and no-build/commit/push assertions. The production updater and pinned Lean/Mathlib dependencies are unchanged.
 
