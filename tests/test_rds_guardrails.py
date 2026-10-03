@@ -324,6 +324,8 @@ class DomainTests(unittest.TestCase):
         self.script('print("must not launch")\n')
         result = self.job('blocked', False, '--context', str(self.context_path), '--graph', str(self.graph_path), '--ledger', str(self.ledger))
         self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Repair checkpoint integrity before executing a candidate: Declared-domain witness CAS integrity failure',
+                      result.stdout + result.stderr)
         self.assertFalse((self.root / '.rds/exec/blocked').exists())
 
     def test_invalid_or_inferred_domains_cannot_be_recorded_as_universal_falsification(self):

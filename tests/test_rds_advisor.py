@@ -373,6 +373,49 @@ class LedgerLoopTests(unittest.TestCase):
         self.assertEqual(output["loop_review"]["flags"][0]["kind"], "LOOP_HISTORY_REVIEW_ERROR")
         self.assertEqual(output["blocked_candidates"], [])
 
+    def checkpoint_ids(self):
+        db = sqlite3.connect(self.root / ".rds/project.sqlite3")
+        try:
+            return [row[0] for row in db.execute("SELECT id FROM checkpoints ORDER BY rowid")]
+        finally:
+            db.close()
+
+    def test_route_records_review_would_refuse_are_never_saved(self):
+        # #153: checkpoints are append-only, so a route record that review refuses would block the question for good.
+        candidate = self.search()["search"]["candidates"][0]
+        self.record("valid", candidate, "deferred")
+        before = self.checkpoint_ids()
+        bad = {"string": ("route-label", "deferred"),
+               "no-action": ({"id": "route", "description": "free-text plan"}, "deferred"),
+               "outcome": (candidate, "maybe")}
+        for name, (value, outcome) in bad.items():
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(ValueError, "Checkpoint decision for question choose would block loop-history review"):
+                    self.record("bad-" + name, value, outcome)
+                self.assertEqual(self.checkpoint_ids(), before)
+        output = self.search()["search"]
+        self.assertEqual(len(output["candidates"]), 1)
+        self.assertNotIn("LOOP_HISTORY_REVIEW_ERROR", [flag["kind"] for flag in output["loop_review"]["flags"]])
+
+    def test_cli_checkpoint_save_rejects_unreadable_route_records_and_keeps_opaque_notes(self):
+        import os, subprocess
+        cli = Path(__file__).resolve().parents[1] / "scripts" / "rds_cli.py"
+        env = {**os.environ, "RDS_USAGE_DB": str(self.root.parent / "usage.db")}
+        decision = {"question_id": "choose", "goal_revision": "g1", "scope": {"dataset": "dev"},
+                    "candidate": "route-label", "outcome": "deferred", "evidence": {}}
+        cases = [("bad", decision, False), ("note", {"question_id": "choose", "note": "free text"}, True),
+                 ("empty", {}, True)]
+        for identity, value, ok in cases:
+            with self.subTest(identity=identity):
+                path = self.root.parent / (identity + "-decision.json")
+                path.write_text(json.dumps(value), encoding="utf-8")
+                result = subprocess.run([sys.executable, "-B", str(cli), "--root", str(self.root), "checkpoint", "save",
+                                         "--id", identity, "--decision", str(path)], capture_output=True, text=True, env=env, timeout=60)
+                self.assertEqual(result.returncode == 0, ok, result.stdout + result.stderr)
+                if not ok:
+                    self.assertIn("would block loop-history review", result.stdout + result.stderr)
+        self.assertEqual(self.checkpoint_ids(), ["note", "empty"])
+
     def test_plain_notes_and_opaque_checkpoints_never_supply_rejection_authority(self):
         from rds_checkpoints import save_checkpoint
         (self.root / "RESEARCH.md").write_text('verified: true; rejected: root-test', encoding="utf-8")
