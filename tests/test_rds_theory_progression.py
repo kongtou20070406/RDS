@@ -200,11 +200,8 @@ class TheoryProgressionTests(unittest.TestCase):
     def test_real_cli_native_lean_progression(self):
         command = [sys.executable, "-B", str(ROOT / "scripts/rds_theory_tools.py"),
                    "--progression", str(ROOT / "examples/theory-reformulation/progression.json")]
-        with tempfile.TemporaryDirectory(prefix="rds-progression-lean-", dir=ROOT) as folder:
-            env = os.environ.copy()
-            env.update(TEMP=folder, TMP=folder, TMPDIR=folder)
-            result = subprocess.run(command, cwd=ROOT, env=env, capture_output=True,
-                                    encoding="utf-8", timeout=90)
+        result = subprocess.run(command, cwd=ROOT, capture_output=True,
+                                encoding="utf-8", timeout=90)
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout[-2000:])
         report = json.loads(result.stdout)
         self.assertEqual(report["status"], "PASS")
