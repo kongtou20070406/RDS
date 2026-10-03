@@ -138,15 +138,27 @@ import json, os, pathlib, sqlite3, time
 _connect = sqlite3.connect
 _work = pathlib.Path(os.environ["RDS_USAGE_SCHEMA_PAUSE"])
 class Connection(sqlite3.Connection):
+    schema_pause_ready = False
+    def pause(self):
+        (_work / "ready").write_text(json.dumps({"in_transaction": self.in_transaction}))
+        deadline = time.monotonic() + 60
+        while not (_work / "release").exists():
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Synthetic schema-pause gate expired")
+            time.sleep(.01)
     def execute(self, sql, *args, **kwargs):
         result = super().execute(sql, *args, **kwargs)
         if sql.startswith("CREATE INDEX") and not (_work / "ready").exists():
-            (_work / "ready").write_text(json.dumps({"in_transaction": self.in_transaction}))
-            deadline = time.monotonic() + 60
-            while not (_work / "release").exists():
-                if time.monotonic() >= deadline:
-                    raise RuntimeError("Synthetic schema-pause gate expired")
-                time.sleep(.01)
+            if self.in_transaction:
+                self.schema_pause_ready = True
+            else:
+                self.pause()
+        return result
+    def commit(self):
+        result = super().commit()
+        if self.schema_pause_ready:
+            self.schema_pause_ready = False
+            self.pause()
         return result
 def connect(path, *args, **kwargs):
     if pathlib.Path(path).resolve() == pathlib.Path(os.environ["RDS_USAGE_DB"]).resolve():
