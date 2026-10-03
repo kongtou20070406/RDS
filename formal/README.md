@@ -1,7 +1,10 @@
 # RDS native Lean library
 
-Pinned toolchain: Lean **4.33.1**, mathlib **v4.33.1**, commit
-`0df444a360eaa60ab8c11dca51a86af692955474` (also locked in `lake-manifest.json`).
+Current toolchain: Lean **4.34.1**, mathlib **v4.34.1**, commit
+`d13f23b723b8a846827a245b89c10fc7d3f11612` (also locked in `lake-manifest.json`).
+RDS follows matching stable releases; these exact versions identify this revision,
+not a permanent version ceiling. See the [upgrade procedure](../docs/lean-toolchain-upgrades.md)
+for the paired updater, fresh builds and certificate replay.
 
 From this directory:
 
