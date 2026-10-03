@@ -74,7 +74,7 @@ class SandboxUsageTests(unittest.TestCase):
         report_result = self.cli('usage', '--root=' + str(self.root), '--days', '1', '--json')
         self.assertEqual(report_result.returncode, 0, report_result.stderr)
         report = json.loads(report_result.stdout)
-        self.assertEqual(report['log_path'], str(self.fallback))
+        self.assertEqual(Path(report['log_path']).resolve(), self.fallback.resolve())
         self.assertEqual(report['logging'], 'ENABLED')
         self.assertEqual(report['total_calls'], 2)
         self.assertEqual(self.rows(self.fallback), [('advise', 'help', 0), ('usage', 'command', 0)])
@@ -242,7 +242,7 @@ class SandboxUsageTests(unittest.TestCase):
         self.assertEqual(usage.run_logged(command, ['usage'], 'test', root=self.root), 7)
         self.assertEqual(self.rows(self.default), [('usage', 'command', 7)])
         self.assertFalse(other.exists())
-        self.assertEqual(usage.log_path(), other)
+        self.assertEqual(usage.log_path().resolve(), other.resolve())
 
     def test_finish_denial_never_updates_matching_row_in_fallback_database(self):
         with patch.dict(os.environ, {'RDS_USAGE_DB': str(self.fallback)}):
