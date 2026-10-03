@@ -113,6 +113,16 @@ class TheoryProgressionTests(unittest.TestCase):
                 self.assertEqual(result["stages"][-1]["result"]["status"], "UNKNOWN")
                 self.assertEqual(result["stages"][-1]["result"]["assurance"], "NONE")
 
+    def test_bounded_values_cannot_be_promoted_by_a_different_assurance(self):
+        with mock.patch("rds_operators.BoundedFiniteModelOperator.verify_cayley_property",
+                        return_value={"status": "PASS", "assurance": "CERTIFICATE_CHECKED",
+                                      "property": "commutative", "domain_size": 2,
+                                      "combinations_checked": 4}):
+            result = progression.run_progression(SPEC, native_verify=native_pass)
+        self.assertEqual(result["status"], "UNKNOWN")
+        self.assertEqual([item["result"]["status"] for item in result["stages"]],
+                         ["UNKNOWN", "SKIPPED", "SKIPPED"])
+
     def test_egraph_unknown_skips_lean_and_keeps_unknown(self):
         answer = {"status": "UNKNOWN", "assurance": "NONE", "certificate_status": "NOT_EMITTED"}
         with mock.patch("rds_operators.EGraphEquivalenceOperator.verify_algebraic_equivalence",
@@ -120,6 +130,19 @@ class TheoryProgressionTests(unittest.TestCase):
             result = progression.run_progression(SPEC, native_verify=native_pass)
         self.assertEqual(result["status"], "UNKNOWN")
         self.assertEqual(result["stages"][1]["result"]["status"], "UNKNOWN")
+        self.assertEqual(result["stages"][2]["result"]["status"], "SKIPPED")
+
+    def test_egraph_pass_with_a_supplied_certificate_is_not_accepted(self):
+        answer = {"status": "PASS", "assurance": "BOUNDED_REWRITE_CHECK", "equivalent": True,
+                  "domain": "rational_polynomials", "variables": ["a", "b"],
+                  "input_sha256": "a" * 64, "certificate_status": "CERTIFICATE_CHECKED"}
+        with mock.patch("rds_operators.EGraphEquivalenceOperator.verify_algebraic_equivalence",
+                        return_value=answer):
+            result = progression.run_progression(SPEC, native_verify=native_pass)
+        self.assertEqual(result["status"], "UNKNOWN")
+        self.assertEqual(result["stages"][1]["result"]["status"], "UNKNOWN")
+        self.assertEqual(result["stages"][1]["result"]["reported_status"], "PASS")
+        self.assertEqual(result["stages"][1]["result"]["transport"]["status"], "UNKNOWN")
         self.assertEqual(result["stages"][2]["result"]["status"], "SKIPPED")
 
     def test_failed_finite_counterexample_stops_later_stages(self):

@@ -151,18 +151,33 @@ def run_progression(spec, *, native_verify=None):
     encoded_table = {left + "|" + right: product for (left, right), product in table.items()}
     table_sha256 = hashlib.sha256(canonical(encoded_table).encode("utf-8")).hexdigest()
     model_result = BoundedFiniteModelOperator.verify_cayley_property(labels, table, "commutative")
+    model_ok = (model_result.get("status") == "PASS"
+                and model_result.get("assurance") == "BOUNDED_FINITE_MODEL_VERIFIED"
+                and model_result.get("property") == "commutative"
+                and model_result.get("domain_size") == len(values)
+                and model_result.get("combinations_checked") == len(values) ** 2)
+    model_refutes = (model_result.get("status") == "FAIL"
+                     and model_result.get("assurance") == "COUNTEREXAMPLE_FOUND"
+                     and model_result.get("property") == "commutative"
+                     and isinstance(model_result.get("counterexample"), dict)
+                     and isinstance(model_result["counterexample"].get("witness"), list)
+                     and len(model_result["counterexample"]["witness"]) == 2
+                     and set(model_result["counterexample"]["witness"]) <= set(labels))
     finite = _stage("bounded_finite_model", claim_sha256, None,
-                    {**model_result, "table_sha256": table_sha256,
+                    {**model_result,
+                     "status": "PASS" if model_ok else "FAIL" if model_refutes else "UNKNOWN",
+                     "reported_status": model_result.get("status", "UNKNOWN"),
+                     "table_sha256": table_sha256,
                      "domain": labels, "property_scope": "all ordered pairs in the declared finite domain",
                      "transport": {"obligation": TRANSPORTS[0],
-                                   "status": "PASS" if model_result["status"] == "PASS" else "UNKNOWN",
+                                   "status": "PASS" if model_ok else "FAIL" if model_refutes else "UNKNOWN",
                                    "operation": "exact rational multiplication",
                                    "table_sha256": table_sha256}})
     stages.append(finite)
-    status, reason = model_result["status"], model_result.get("reason")
+    status = ("PASS" if model_ok else "FAIL" if model_refutes else "UNKNOWN")
     final_status = status if status in {"FAIL", "PASS"} else "UNKNOWN"
     if status != "PASS":
-        if status == "FAIL" and model_result.get("assurance") != "COUNTEREXAMPLE_FOUND":
+        if status == "FAIL" and not model_refutes:
             final_status = "UNKNOWN"
         why = "Finite-model stage did not pass; later stages were not run"
         previous_sha256 = finite["stage_sha256"]
@@ -191,9 +206,16 @@ def run_progression(spec, *, native_verify=None):
         max_iter=spec["limits"]["egraph_iterations"])
     egraph_ok = (egraph_result.get("status") == "PASS"
                  and egraph_result.get("assurance") == "BOUNDED_REWRITE_CHECK"
-                 and egraph_result.get("certificate_status") == "NOT_EMITTED")
+                 and egraph_result.get("certificate_status") == "NOT_EMITTED"
+                 and egraph_result.get("equivalent") is True
+                 and egraph_result.get("domain") == EGraphEquivalenceOperator.DOMAIN
+                 and egraph_result.get("variables") == ["a", "b"]
+                 and isinstance(egraph_result.get("input_sha256"), str)
+                 and len(egraph_result["input_sha256"]) == 64)
     egraph = _stage("egraph_equivalence_saturation", claim_sha256, previous_sha256,
                     {**egraph_result,
+                     "status": "PASS" if egraph_ok else "UNKNOWN",
+                     "reported_status": egraph_result.get("status", "UNKNOWN"),
                      "transport": {"obligation": TRANSPORTS[1],
                                    "status": "PASS" if egraph_ok else "UNKNOWN",
                                    "expression": ["*", "a", "b"],
@@ -241,6 +263,9 @@ def run_progression(spec, *, native_verify=None):
                 answer = native_verify(obligation)
             except (ValueError, TypeError, KeyError, OSError, RuntimeError) as exc:
                 answer = {"status": "UNKNOWN", "assurance": "NONE", "reason": str(exc)}
+            if not isinstance(answer, dict):
+                answer = {"status": "UNKNOWN", "assurance": "NONE",
+                          "reason": "Native Lean returned a malformed result"}
             certificate = answer.get("certificate") if isinstance(answer, dict) else None
             native_pass = (isinstance(answer, dict) and answer.get("status") == "PASS"
                            and answer.get("assurance") == "LEAN_KERNEL_CHECKED"
@@ -252,10 +277,16 @@ def run_progression(spec, *, native_verify=None):
                     "status": "PASS" if native_pass else "UNKNOWN",
                     "assurance": "LEAN_KERNEL_CHECKED" if native_pass else "NONE",
                     "backend": answer.get("backend", "unknown"),
+                    "attempts": answer.get("tactics", []),
                     "certificate": certificate if native_pass else None}
             leaves.append(leaf)
             if leaf["status"] != "PASS":
-                leaf_failure = answer.get("reason", "Native Lean did not check this pair")
+                attempts = answer.get("tactics", []) if isinstance(answer, dict) else []
+                attempt_reasons = [item.get("reason") for item in attempts if isinstance(item, dict)
+                                   and item.get("reason")]
+                leaf_failure = "; ".join(attempt_reasons) or (
+                    answer.get("reason", "Native Lean did not check this pair")
+                    if isinstance(answer, dict) else "Native Lean returned a malformed result")
                 break
         if leaf_failure:
             break
