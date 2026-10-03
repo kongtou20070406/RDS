@@ -20,6 +20,8 @@ For an existing local Python file, use `python -B scripts/rds_cli.py --root <sou
 
 ## Select before executing
 
+For a new campaign in which the program must own evidence collection and route selection, use the [frozen Advisor policy](program-owned-advisor.md). `advise` reads the complete registered inventory and current owned graph; `project advance` executes at most one program-selected route and automatically incorporates its receipt. Caller context, graph and choice overrides are refused in that workflow. The commands below describe the compatible caller-directed workflow for projects without `advisor_policy`.
+
 Maintain the semantic `context.json` and structured graph for the actual next decision. The tool supplies repetitive bookkeeping around these inputs; it cannot derive the right mathematical question from arbitrary prose.
 
 Decision scopes are dictionaries with at most 16 fields and 2048 serialized UTF-8 bytes. Keys are nonempty strings of at most 512 characters; values are JSON atoms: strings, finite numbers, booleans or null. Keep arrays, tables and nested objects in explicit bound inputs or source records, and use scalar identifiers in the scope. Validation identifies the invalid field without rewriting its contents.

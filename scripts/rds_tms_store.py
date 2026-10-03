@@ -47,7 +47,7 @@ def current(root):
     return {**value, 'sha256': row['sha256'], 'dependency_map': spec}
 
 
-def save(root, spec, *, expected, revision=None, source_base=None):
+def save(root, spec, *, expected, revision=None, source_base=None, validate_current=None):
     """Atomically append a revision; a stale caller cannot overwrite newer input."""
     store = _store(root)
     _validate(spec)
@@ -70,6 +70,11 @@ def save(root, spec, *, expected, revision=None, source_base=None):
                 BEGIN SELECT RAISE(ABORT,'dependency_snapshots is append-only'); END;
         """)
         db.execute('BEGIN IMMEDIATE')
+        # Program-owned collectors may bind publication to the ledger state
+        # they observed. The callback reads this same locked connection; a run
+        # cannot commit a newer receipt between validation and map publication.
+        if validate_current is not None:
+            validate_current(db)
         previous = _last(db)
         if (previous['sha256'] if previous else None) != expected:
             raise SnapshotConflict('Current dependency snapshot changed; review the latest map before resubmitting')
@@ -91,6 +96,15 @@ def maintain(root, *, initial=None, locator='tool-input', source_base=None, audi
              format_repairs=(), **changes):
     """Compile, revise, analyze and persist in one application-side tool action."""
     saved = current(root)
+    store = _store(root)
+    controlled = False
+    if store.path.exists():
+        with store._db(True) as db:
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='contract'").fetchone():
+                controlled = 'advisor_policy' in store._contract(db)
+    if controlled:
+        require(initial is None,
+                'Program-owned evidence cannot be replaced by a caller graph; submit proposed changes instead')
     spec = initial if initial is not None else saved['dependency_map'] if saved else {}
     expected = saved['sha256'] if saved else None
     base = source_base or (saved['source_base_dir'] if saved else str(Path(root).resolve()))
@@ -102,6 +116,21 @@ def maintain(root, *, initial=None, locator='tool-input', source_base=None, audi
     result['snapshot_sha256'] = expected
     if result['input_review']['errors']:
         return result  # No partial declarations reach the current map.
+    if controlled:
+        before = saved['dependency_map'] if saved else {'nodes': [], 'hyperedges': [], 'goals': []}
+        after = result['dependency_map']
+        for kind in ('nodes', 'hyperedges'):
+            old = {row['id']: row for row in before[kind]}
+            new = {row['id']: row for row in after[kind]}
+            require({k: v for k, v in old.items() if k.startswith('owned:')} ==
+                    {k: v for k, v in new.items() if k.startswith('owned:')},
+                    'Program-owned evidence cannot be changed or removed by a caller')
+            require(all(row == old.get(key) or row.get('status') in {'UNKNOWN', 'PROPOSED'}
+                        for key, row in new.items() if not key.startswith('owned:')),
+                    'Program-owned workflow accepts agent proposals, not handwritten support or refutation')
+        require([goal for goal in before.get('goals', []) if str(goal).startswith('owned:')] ==
+                [goal for goal in after.get('goals', []) if str(goal).startswith('owned:')],
+                'Program-owned goals cannot be removed by a caller')
     if audit_files:
         result['source_file_audit'] = audit_sources(result['dependency_map'], base)
     try:

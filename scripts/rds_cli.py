@@ -852,11 +852,14 @@ def cmd_meta(args, rds):
                          evaluation=getattr(args, "evaluation", None),
                          cases=getattr(args, "cases", None),
                          record_dir=rds.directory / "rsi")
-        try:
-            with rds.transaction() as (db, state):
-                rds.event(db, "RULE_APPLIED", **res)
-        except Exception:
-            pass
+        # The adoption record is owned by RSI. An optional L3 event must not
+        # create an empty reference ledger inside a project-only workspace.
+        if rds.db_path.is_file():
+            try:
+                with rds.transaction() as (db, state):
+                    rds.event(db, "RULE_APPLIED", **res)
+            except Exception:
+                pass
         return res
     elif args.action == "evaluate-rule":
         from rds_rsi import evaluate_candidate
@@ -910,6 +913,18 @@ def cmd_meta(args, rds):
 
 def cmd_advise(args, rds):
     from rds_advisor import RDSAdvisor
+    owned = _owned_project(args.root)
+    if owned is not None:
+        overrides = ("research_context", "graph", "artifacts", "templates", "choose", "record",
+                     "frontier", "frontier_proposals", "saved_dependencies", "plan", "telemetry",
+                     "doc", "topic", "train_loss", "val_loss", "baseline_loss", "fit_telemetry",
+                     "literature", "research_note")
+        require(not any(getattr(args, name, None) is not None and getattr(args, name) is not False
+                        for name in overrides),
+                'Program-owned Advisor reads the frozen policy and complete run ledger; '
+                'caller context, graph, facts and choice overrides are not accepted')
+        from rds_owned_advisor import review
+        return review(owned)
     require(not getattr(args, "research_note", None),
             "--research-note is retired; use checkpoint save --decision and a scoped --research-context")
     has_train = getattr(args, "train_loss", None) is not None
@@ -1100,10 +1115,25 @@ def cmd_project(args):
     if args.action == "create":
         return store.register(load_spec(args.manifest))
     if args.action == "execute":
-        return store.execute(args.id, background=args.background)
+        return _project_result(store, store.execute(args.id, background=args.background))
     if args.action == "recover":
-        return store.recover(args.id)
+        return _project_result(store, store.recover(args.id))
+    if args.action == "advance":
+        require(_owned_project(args.root) is not None,
+                'project advance requires a frozen advisor_policy; legacy projects use project next')
+        from rds_owned_advisor import review
+        advice = review(store)
+        selected = advice.get('selected_manifest')
+        if selected is None:
+            return advice
+        snapshot = store.snapshot()
+        if not any(run['id'] == selected['id'] for run in snapshot['runs']):
+            store.register(selected)
+        return _project_result(store, store.execute(selected['id'], background=args.background))
     if args.action == "next":
+        if _owned_project(args.root) is not None:
+            from rds_owned_advisor import review
+            return review(store)
         return store.next_move()
     if args.action == "compare":
         return store.compare()
@@ -1114,6 +1144,27 @@ def cmd_project(args):
         from rds_costs import check_control_reuse
         return check_control_reuse(load_spec(args.candidate), load_spec(args.current), root=args.root)
     return store.snapshot()
+
+
+def _project_result(store, receipt):
+    """Keep the hashed receipt intact while exposing automatic result reception."""
+    advice = getattr(store, 'last_advisor_review', None)
+    if advice is None:
+        return receipt
+    result = {'receipt': receipt, 'advisor': advice}
+    observation = getattr(store, 'last_advisor_observation', None)
+    if observation is not None:
+        result['observation'] = observation
+    return result
+
+
+def _owned_project(root):
+    if not _has_project_contract(root):
+        return None
+    from rds_project import ProjectStore
+    store = ProjectStore(root)
+    with store._db(True) as db:
+        return store if 'advisor_policy' in store._contract(db) else None
 
 
 def _has_project_contract(root):
@@ -1395,8 +1446,11 @@ def parser():
     pr_exec = pr_actions.add_parser("execute")
     pr_exec.add_argument("--id", required=True)
     pr_exec.add_argument("--background", action="store_true", help="Use a tool-owned Windows Task Scheduler task")
+    pr_advance = pr_actions.add_parser("advance", help="Execute one program-selected route and receive its result automatically")
+    pr_advance.add_argument("--background", action="store_true", help="Use the existing authorized background runner")
+    pr_advance.add_argument("--brief", "--digest", action="store_true", help="Retain the receipt and advice and return a bounded digest")
     pr_actions.add_parser("recover").add_argument("--id", required=True)
-    pr_actions.add_parser("next", help="Print the single next actionable project step and its command")
+    pr_actions.add_parser("next", help="Print the single next actionable project step and its command").add_argument("--brief", "--digest", action="store_true")
     pr_actions.add_parser("compare", help="Compare recorded arms against the precommitted min_useful_delta")
     pr_actions.add_parser("status").add_argument("--brief", "--digest", action="store_true")
     pr_actions.add_parser("costs")
@@ -1532,7 +1586,7 @@ def parser():
 
 
 L3_LEDGER_COMMANDS = frozenset({"init", "hypothesis", "gate", "plan", "run", "data", "decide",
-                                "branch", "artifacts", "meta"})
+                                "branch"})
 
 
 def _project_ledger_message(root):
@@ -1561,7 +1615,7 @@ def _main():
             print("[RDS-USAGE] " + str(exc), file=sys.stderr)
             return 1
     rds = RDSState(args.root)
-    if args.command in L3_LEDGER_COMMANDS and not rds.db_path.exists():
+    if (args.command in L3_LEDGER_COMMANDS or args.command == "meta" and args.action == "auto-repair") and not rds.db_path.exists():
         message = _project_ledger_message(args.root)
     elif (args.command == "checkpoint" and args.action == "save"
           and args.kind == "reference" and not rds.db_path.exists()):
@@ -1729,8 +1783,10 @@ def _main():
             return 2
         if args.command == 'rsi' and args.action == 'validate':
             return {'LOCAL_CASES_PASSED': 0, 'FAILED': 1, 'UNKNOWN': 2}[result['status']]
-        if args.command in {"project", "run"} and args.action in {"execute", "recover"} and result.get("run_status") in {"FAILED", "INTERRUPTED", "TIMED_OUT"}:
+        if args.command in {"project", "run"} and args.action in {"execute", "recover", "advance"} and result.get('receipt', result).get("run_status") in {"FAILED", "INTERRUPTED", "TIMED_OUT"}:
             return 1
+        if result.get('status') == 'COLLECTION_FAILED' or (result.get('advisor') or {}).get('status') == 'COLLECTION_FAILED':
+            return 2  # The receipt is retained; collection needs attention, never a training retry.
         if args.command == "meta" and args.action == "evaluate-rule" and not result.get("adoption_eligible"):
             return 1
         if args.command == "checkpoint" and args.action == "restore" and result.get("status") == "CONFLICT":

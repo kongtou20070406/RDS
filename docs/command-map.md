@@ -1,6 +1,6 @@
 # Public command map
 
-Use this map when the short Skill route table does not cover the task. It covers all 62 leaf command paths across 25 top-level commands in `scripts/rds_cli.py`'s current `parser()`, plus relevant Advisor options and documented helper entry points. Aliases do not add capabilities. This is a discovery map, not a requirement to invoke every function.
+Use this map when the short Skill route table does not cover the task. It covers all 63 leaf command paths across 25 top-level commands in `scripts/rds_cli.py`'s current `parser()`, plus relevant Advisor options and documented helper entry points. Aliases do not add capabilities. This is a discovery map, not a requirement to invoke every function.
 
 ```text
 skill_dir := directory containing SKILL.md
@@ -18,7 +18,7 @@ Global `--version` reports the installed version; `--help` lists the installed c
 
 | Command | Purpose | Inputs and prerequisites | Guide |
 | --- | --- | --- | --- |
-| `advise` | Review evidence and propose a next decision | Sourced `--context`, appropriate `--graph` or one of the modes below; inspect `selection_review` before choosing | [Agent entry](agent-entry.md), [Advisor design](advisor-graph-design.md) |
+| `advise` | Review evidence and propose a next decision | Policy-bound projects use the frozen policy and owned graph, without caller context/graph/choice overrides; legacy modes below accept sourced inputs | [Owned Advisor](program-owned-advisor.md), [Agent entry](agent-entry.md), [Advisor design](advisor-graph-design.md) |
 | `artifacts import` | Import original records with field-level provenance | `--manifest` binding source files, hashes, identities and selectors; observations do not certify mechanisms | [Evidence import](development-loop.md) |
 | `hypergraph` | Maintain and inspect bounded AND/OR dependencies | Initial `--input`, saved map, or bounded `--update`/`--declare`; retract/refute flags, `--trace-cone`, `--audit-files`, `--audit-receipts` are available | [TMS](truth-maintenance.md), [Evidence binding](hypergraph-evidence.md) |
 | `reject` | Record a scoped rejection of the current route | Existing choice, `--reason`, `--evidence`; optional `--route` checks identity and `--domain` declares scope | [Rejection](agent-entry.md) |
@@ -37,6 +37,7 @@ Global `--version` reports the installed version; `--help` lists the installed c
 | `project execute` | Execute a registered project run | Existing `--id`, valid bindings and resources; `--background` is the authorized Windows scheduler path | [Project runner](development-loop.md) |
 | `project recover` | Reconcile an existing interrupted attempt | Existing `--id`; inspect retained state and artifacts rather than duplicating the attempt | [Project runner](development-loop.md) |
 | `project next` | Derive the next campaign step | Initialized project ledger; resolve actual inputs in any emitted command | [Project next implementation](../scripts/rds_project.py), [Development loop](development-loop.md) |
+| `project advance` | Execute one program-selected route and receive its results | Frozen `advisor_policy`; optional `--brief` or authorized `--background`; collection failures require recovery, not rerunning completed work | [Owned Advisor](program-owned-advisor.md) |
 | `project compare` | Compare recorded control/treatment arms | Eligible completed arms and precommitted primary metric/useful-delta declaration | [Project comparison](../tests/test_rds_project_next.py) |
 | `project status` | Inspect current runs, budget and receipts | Existing project; `--brief` gives bounded state plus a saved-record locator | [Output](agent-entry.md) |
 | `project costs` | Inspect measured costs and charged estimates | Existing project records; failed attempts and unknown resource values remain visible | [Cost accounting](development-loop.md) |
@@ -120,6 +121,8 @@ These operations act on research-method rules, not model weights. Use an explici
 ## Advisor modes within the existing command
 
 These are options or context fields of `advise`, not additional top-level commands. Combine them only as supported by their guides.
+
+In an `advisor_policy` project, `advise --brief` derives inputs from its ledger and current owned graph. The caller-directed modes below cannot replace those inputs or select another route. See [program-owned Advisor](program-owned-advisor.md) for coverage, result collection and recovery.
 
 - **Selection and continuation:** `--context`, `--graph`, `--choose`, `--record`, `--brief`. Read `selection_review`; one ready candidate alone is not comparative evidence. [Entry and selection](agent-entry.md).
 - **Saved dependency map:** `--saved-dependencies` with the owning project root. Explicit context maps are also supported; do not submit the same map by both routes. The program cannot guarantee completeness of omitted research information. [TMS](truth-maintenance.md).
