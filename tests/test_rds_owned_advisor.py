@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -357,6 +358,41 @@ class OwnedAdvisorCLITests(unittest.TestCase):
         self.assertEqual(self.starts(), ['baseline'])
         self.assertEqual(len(self.snapshot()['receipts']), 1)
         self.assertEqual(self.snapshot()['budget'], state['budget'])
+
+    def loop_flags(self, advice):
+        return [flag['kind'] for rec in advice.get('recommendations', [])
+                for flag in rec.get('search', {}).get('loop_review', {}).get('flags', [])]
+
+    def test_saved_checkpoint_keeps_owned_review_and_advance_available(self):
+        # #149: loop-history review needs the live contract the legacy snapshot already supplies.
+        self.initialize('positive')
+        self.assertEqual(self.output('advise')['status'], 'REVIEWED')
+        self.call('checkpoint', 'save', '--id', 'after-first-review')
+        advice = self.output('advise')
+        self.assertEqual(advice['status'], 'REVIEWED')
+        self.assertNotIn('LOOP_HISTORY_REVIEW_ERROR', self.loop_flags(advice))
+        self.assertEqual(advice['selected_run'], 'baseline')
+        result = self.output('project', 'advance')
+        self.assert_owned_receipt(result['receipt'], 'baseline', 'SUCCEEDED')
+        self.assertEqual(self.starts(), ['baseline'])
+
+    def test_corrupt_checkpoint_still_blocks_owned_review_and_launch(self):
+        self.initialize('positive')
+        self.call('checkpoint', 'save', '--id', 'corrupt')
+        before = self.snapshot()
+        db = sqlite3.connect(self.root / '.rds/project.sqlite3')
+        try:
+            db.execute('DROP TRIGGER checkpoint_no_update')
+            db.execute("UPDATE checkpoints SET body='{}' WHERE id='corrupt'")
+            db.commit()
+        finally:
+            db.close()
+        for args in (('advise',), ('project', 'advance')):
+            with self.subTest(args=args):
+                rejected = self.call(*args, ok=False)
+                self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
+                self.assertIn('Repair checkpoint integrity', rejected.stdout + rejected.stderr)
+        self.assert_uncharged(before)
 
     def test_model_cannot_override_owned_inputs_or_choose_a_different_route(self):
         self.initialize()
