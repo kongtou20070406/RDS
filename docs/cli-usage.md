@@ -4,10 +4,16 @@ Every `rds_cli.py` invocation attempts to record its start and exit in a local S
 automatically. All updated checkouts share one log for the current user. Calls
 include help, version, invalid arguments, failed commands and statistics queries.
 
-SQLite waits up to ten seconds per logging transaction for temporary contention;
+SQLite lock waits share a ten-second budget per logging phase for temporary contention;
 persistent failures leave the command's original result unchanged. Existing journal
 modes are retained, and fresh logs use SQLite's default mode without a first-use
-existence/PRAGMA race. The invocation reports a logging failure to stderr as
+existence/PRAGMA race. Idempotent schema preparation commits each statement before
+the call's write transaction, so a process paused between schema setup and logging
+does not hold a writer reserved for other calls. Tracking and the start row are
+still written atomically; reports read one consistent snapshot without reserving
+a writer. A writer stalled inside a data transaction can still exhaust another
+call's bounded wait; complete recording is not guaranteed during persistent contention.
+The invocation reports a logging failure to stderr as
 [RDS-USAGE-DEGRADED], naming the start/finish phase, exception type and available
 SQLite error code without printing paths or argument payloads. Its original result
 or exception remains unchanged even if the diagnostic stream is unavailable.

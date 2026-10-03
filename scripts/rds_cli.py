@@ -1252,6 +1252,14 @@ class FriendlyParser(argparse.ArgumentParser):
     repair hint rather than triggering a different operation.
     """
     def parse_args(self, args=None, namespace=None):
+        return super().parse_args(self.normalize_args(args), namespace)
+
+    def normalize_args(self, args=None, *, quiet=False):
+        """Resolve our options once; quiet inspection performs no CLI action."""
+        def fail(message):
+            if quiet:
+                raise ValueError(message)
+            self.error(message)
         tokens = list(sys.argv[1:] if args is None else args)
         from rds_usage import COMMAND_ALIASES as aliases, COMMAND_MACROS, ROOT_OPTIONS
         current, result, globals_, i = self, [], [], 0
@@ -1264,12 +1272,12 @@ class FriendlyParser(argparse.ArgumentParser):
             key = token.split('=', 1)[0]
             if key in ROOT_OPTIONS:
                 if globals_:
-                    self.error('Supply one project root')
+                    fail('Supply one project root')
                 if '=' in token:
                     globals_ = ['--root', token.split('=', 1)[1]]
                 else:
                     if i + 1 >= len(tokens):
-                        self.error(key + ' requires a path')
+                        fail(key + ' requires a path')
                     globals_ = ['--root', tokens[i + 1]]
                     i += 1
                 i += 1
@@ -1289,7 +1297,8 @@ class FriendlyParser(argparse.ArgumentParser):
                 sub = next((a for a in current._actions if isinstance(a, argparse._SubParsersAction)), None)
                 if sub is None and wrapped:
                     # Once the child starts, neither root flags nor its options are ours.
-                    print('[RDS-RESOLVE] implicit child boundary before ' + token, file=sys.stderr)
+                    if not quiet:
+                        print('[RDS-RESOLVE] implicit child boundary before ' + token, file=sys.stderr)
                     result.extend(['--'] + tokens[i:])
                     break
                 if sub is not None:
@@ -1298,7 +1307,8 @@ class FriendlyParser(argparse.ArgumentParser):
                     macro = COMMAND_MACROS.get(token.casefold()) if current is self and exact is None else None
                     if macro:
                         result.extend(macro)
-                        print('[RDS-RESOLVE] ' + token + ' -> ' + ' '.join(macro), file=sys.stderr)
+                        if not quiet:
+                            print('[RDS-RESOLVE] ' + token + ' -> ' + ' '.join(macro), file=sys.stderr)
                         current = choices[macro[0]]
                         for nested in macro[1:]:
                             children = next(a for a in current._actions if isinstance(a, argparse._SubParsersAction))
@@ -1310,16 +1320,16 @@ class FriendlyParser(argparse.ArgumentParser):
                         matches = [v for v in choices if v.casefold().startswith(token.casefold())]
                     if len(matches) != 1:
                         suggestions = matches or difflib.get_close_matches(token, choices, n=3, cutoff=0.5)
-                        self.error("Ambiguous or unknown command " + token + "; candidates: " + ", ".join(suggestions))
+                        fail("Ambiguous or unknown command " + token + "; candidates: " + ", ".join(suggestions))
                     resolved = matches[0]
-                    if resolved != token:
+                    if resolved != token and not quiet:
                         print("[RDS-RESOLVE] " + token + " -> " + resolved, file=sys.stderr)
                     token = resolved
                     current = choices[resolved]
                     wrapped = wrapped or (sub is next(a for a in self._actions if isinstance(a, argparse._SubParsersAction)) and resolved == 'exec')
                 result.append(token)
             i += 1
-        return super().parse_args(globals_ + result, namespace)
+        return globals_ + result
 
     def error(self, message):
         options = list(self._option_string_actions)
@@ -1807,7 +1817,22 @@ def _main():
 
 def main():
     from rds_usage import run_logged
-    return run_logged(_main, sys.argv[1:], VERSION)
+    def usage_root():
+        entry = parser()
+        normalized = entry.normalize_args(sys.argv[1:], quiet=True)
+        root = entry.get_default('root')
+        if normalized[:1] == ['--root']:
+            # Normalization locates values but does not validate them. Use the
+            # same argparse value rules before fallback creates any files:
+            # '--root --help' has no root value, even during help handling.
+            options = argparse.ArgumentParser(add_help=False, exit_on_error=False)
+            options.add_argument('--root')
+            try:
+                root = options.parse_args(normalized[:2]).root
+            except argparse.ArgumentError as exc:
+                raise ValueError(str(exc)) from exc
+        return Path(root).resolve()
+    return run_logged(_main, sys.argv[1:], VERSION, root=usage_root)
 
 
 if __name__ == "__main__":
