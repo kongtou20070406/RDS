@@ -10,6 +10,14 @@ metadata:
 
 Agent pseudocode; not an executable language or a new kernel contract.
 
+In a workspace-write sandbox, the CLI automatically records usage under
+`<project_root>/.rds/usage/cli-usage.sqlite3` if its default user-state log is
+unavailable because of permissions or read-only storage. Help is included. Pass
+the intended `--root`; no environment workaround is needed for a successful
+fallback. An explicit `RDS_USAGE_DB` remains authoritative. If both locations
+are unavailable, `RDS-USAGE-DEGRADED` still preserves the command result; see
+[usage logging](docs/cli-usage.md).
+
 ```text
 DISCOVER: name + description
 ON applicable research request:
