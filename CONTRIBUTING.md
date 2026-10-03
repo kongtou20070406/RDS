@@ -16,6 +16,10 @@ Fork [the repository](https://github.com/kongtou20070406/research-direction-sele
 
 Keep future README edits within the established layout: static banner, the two sides of the research loop, five components, Skill/install, kernel, mathematical checks, Advisor, history, tests, repository layout and license. Keep the main README in English and translations in their own files. Put detailed implementation and test reports in the linked guides rather than expanding the homepage.
 
+### Maintainer auto-merge
+
+Maintainers can add the `automerge` label to a non-draft PR to let GitHub enable squash auto-merge after required checks and reviews pass. Remove that label (or disable auto-merge in the PR UI) when further manual review or extra commits are required.
+
 ## Six checks that make a change reviewable
 
 1. **Reach the behavior through the user's entry point.** If the PR advertises a CLI option, run it with real inputs and the correct project root. A helper test does not show that parsing, state selection, input files and output handling work together. For a packaged release, check the downloaded package and its required resources. Keep the exact command and output, including failures.
