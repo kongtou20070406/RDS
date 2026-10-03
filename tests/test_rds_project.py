@@ -1461,5 +1461,71 @@ class StopPolicyAndMaintenanceTests(unittest.TestCase):
         self.assertEqual(store.snapshot(), before)
 
 
+class ProtocolIdentityMessageTests(unittest.TestCase):
+    """#154: a protocol/binding conflict names the role, the expected value and the rule."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="rds protocol identity ")
+        self.env = {**os.environ, "RDS_USAGE_DB": str(Path(self.tmp.name) / "usage.db")}
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "examples" / "project-runner"))
+        from prepare import prepare
+        self.prepare = prepare
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def cli(self, root, *args):
+        return subprocess.run([sys.executable, "-B", str(Path(__file__).resolve().parents[1] / "scripts" / "rds_cli.py"),
+                               "--root", str(root), *args], capture_output=True, text=True, env=self.env, timeout=60)
+
+    def project(self, name, protocol_edit=None, extra_code=False):
+        root = Path(self.prepare(Path(self.tmp.name) / name)["root"])
+        contract = json.loads((root / "contract.json").read_text(encoding="utf-8"))
+        if extra_code:  # A second source file, as in most real projects.
+            (root / "helper.py").write_text("HELPER = 1\n", encoding="utf-8")
+            contract["bindings"].append({"role": "code", "path": "helper.py", "sha256": file_sha(root / "helper.py")})
+        if protocol_edit:
+            protocol = json.loads((root / "protocol.json").read_text(encoding="utf-8"))
+            protocol.update(protocol_edit)
+            (root / "protocol.json").write_text(json.dumps(protocol), encoding="utf-8")
+            sha = file_sha(root / "protocol.json")
+            for binding in contract["bindings"]:
+                if binding["role"] == "protocol":
+                    binding["sha256"] = sha
+            manifest = json.loads((root / "control.json").read_text(encoding="utf-8"))
+            manifest["protocol"]["sha256"] = sha
+            (root / "control.json").write_text(json.dumps(manifest), encoding="utf-8")
+        (root / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+        self.assertEqual(self.cli(root, "project", "init", "--contract", str(root / "contract.json")).returncode, 0)
+        return root
+
+    def create(self, root):
+        return self.cli(root, "project", "create", "--manifest", str(root / "control.json"))
+
+    def test_multi_file_role_rejection_states_the_digest_that_then_registers(self):
+        root = self.project("multi", extra_code=True)
+        before = ProjectStore(root).snapshot()
+        rejected = self.create(root)
+        self.assertNotEqual(rejected.returncode, 0)
+        expected = digest(sorted([{"path": "experiment.py", "sha256": file_sha(root / "experiment.py")},
+                                  {"path": "helper.py", "sha256": file_sha(root / "helper.py")}], key=lambda b: b["path"]))
+        message = rejected.stdout + rejected.stderr
+        self.assertIn("Protocol identity conflicts with bindings: code_sha256 must be " + expected, message)
+        self.assertIn("canonical digest of the 2 'code' bindings", message)
+        self.assertEqual(ProjectStore(root).snapshot(), before)
+        # Following the message on a fresh root is enough to register the run.
+        fixed = self.project("multi-fixed", protocol_edit={"code_sha256": expected}, extra_code=True)
+        registered = self.create(fixed)
+        self.assertEqual(registered.returncode, 0, registered.stdout + registered.stderr)
+        self.assertEqual([run["id"] for run in ProjectStore(fixed).snapshot()["runs"]], ["control"])
+
+    def test_single_binding_rejection_names_the_file_hash(self):
+        root = self.project("single", protocol_edit={"config_sha256": "0" * 64})
+        rejected = self.create(root)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("config_sha256 must be " + file_sha(root / "config.json")
+                      + " (the SHA256 of the one 'config' binding)", rejected.stdout + rejected.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

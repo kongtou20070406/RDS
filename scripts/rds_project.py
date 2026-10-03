@@ -690,7 +690,12 @@ class ProjectStore:
             require(not missing, "Protocol identity fields required: " + ", ".join(missing) + "; exec can complete operational identity fields")
             require(not {"path", "sha256"} & set(protocol), "Protocol identity uses reserved fields")
             for role in ("code", "config", "data"):
-                require(protocol[role + "_sha256"] == self._role_sha(contract, role), "Protocol identity conflicts with bindings")
+                expected = self._role_sha(contract, role)
+                count = sum(b["role"] == role for b in contract["bindings"])
+                require(protocol[role + "_sha256"] == expected,
+                        f"Protocol identity conflicts with bindings: {role}_sha256 must be {expected} ("
+                        + (f"the SHA256 of the one '{role}' binding)" if count == 1 else
+                           f"the canonical digest of the {count} '{role}' bindings as {{path, sha256}} sorted by path)"))
             outpaths = spec.get("outpaths")
             require(isinstance(outpaths, list) and (outpaths or spec["arm"] == "tool"), "Expected output paths required")
             outputs = [self._path(p, True, contract) for p in outpaths]
