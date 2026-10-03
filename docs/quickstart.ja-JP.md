@@ -32,7 +32,7 @@ python -B scripts/rds_cli.py --root ./my-project project init --contract ./my-pr
 python -B scripts/rds_cli.py --root ./my-project project status --brief
 ```
 
-このコマンド列はローカルプロジェクトの準備と確認だけを行い、二つの実験は実行しません。完全な CPU デモを実行する場合は、[project runner の例](../examples/project-runner/README.md)と[リポジトリのクイックスタート手順](../README.ja-JP.md#決定的な実行・受け入れカーネル)を参照してください。このデモは合成データを使っており、科学的確認や汎化を示すものではありません。
+このコマンド列はローカルプロジェクトの準備と確認だけを行い、二つの実験は実行しません。完全な CPU デモを実行する場合は、[project runner の例](../examples/project-runner/README.md)と[リポジトリのクイックスタート手順](../README.ja-JP.md#決定的な実行受け入れカーネル)を参照してください。このデモは合成データを使っており、科学的確認や汎化を示すものではありません。
 
 ### 最小コントラクトテンプレート
 
