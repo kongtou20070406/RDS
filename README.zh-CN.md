@@ -186,6 +186,8 @@ python -B scripts/rds_cli.py --root . formal check --spec examples/formal/theore
 
 ## Advisor：基于证据的建议
 
+[程序持有证据的工作流](docs/program-owned-advisor.md)先固定目标、允许的路线和结果读取规则。RDS 自动将运行收据与输出纳入当前证据图，选择有界的下一步，并在执行前核查。这限制了调用方在已声明工作流内挑选信息的权限，但不证明科研结论正确，也不管控 RDS 外部的命令。
+
 `scripts/rds_advisor.py` 利用已记录的证据和方法论图谱提出下一步建议：
 - **先有证据，再做诊断** — 单个 loss 值不足以支持过拟合或欠拟合诊断。成对曲线或可比较的观测为候选解释提供背景。
 - **先定位，再干预** — 遇到 NaN/Inf 时，建议优先定位第一个非有限值，并检查精度或更新路径，再调整数值保护措施。

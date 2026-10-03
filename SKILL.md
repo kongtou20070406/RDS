@@ -15,9 +15,9 @@ Pick the goal type, run its one command, and drive the work from the kernel's ow
 | Goal | Run | Detail on demand |
 | --- | --- | --- |
 | Start from a plain-language request (first time) | Follow the [plain-language quick start](docs/quickstart.md) — copyable prompts, a generated first project, and `[RDS-REJECT]` recovery | [Project runner example](examples/project-runner/README.md) |
-| Start a locked experiment campaign | `project init --contract <contract.json>` — template below | [Project tools](docs/development-loop.md) |
-| Advance a running campaign | `project next` — prints the derived step and its runnable command | [Development loop](docs/development-loop.md) |
-| Decide a research direction | `advise --context <context.json> --graph <graph.json> --brief`; lock the route with `--choose <candidate-id> --record <checkpoint-id>` | [Research discipline](references/research-discipline.md) |
+| Start a locked experiment campaign | `project init --contract <contract.json>` with a frozen `advisor_policy` for goal-driven selection | [Program-owned Advisor](docs/program-owned-advisor.md) |
+| Advance a running campaign | `project next` to inspect; `project advance` executes one program-selected step in a policy-bound project | [Program-owned Advisor](docs/program-owned-advisor.md) |
+| Decide a research direction | `advise --brief` reads the policy, current graph and complete run inventory; legacy context-based advice remains available for older projects | [Program-owned Advisor](docs/program-owned-advisor.md) and [research discipline](references/research-discipline.md) |
 | Audit evidence into the ledger | `artifacts import --manifest <manifest.json>` | [Agent entry](docs/agent-entry.md) |
 | Check a mathematical claim | `formal verify --spec <spec.json> --tactics rational` | [Formal framework](references/formal_framework.md) |
 | Reuse or register a local tool | `rsi extract --source <file> --entry <function> --name <id>`, then `rsi validate --name <id> --cases <cases.json>` → `rsi register --name <id>` | [Native research](docs/native-research.md) |
@@ -25,6 +25,8 @@ Pick the goal type, run its one command, and drive the work from the kernel's ow
 | Record a decision or rejection | `checkpoint save --id <id> --decision <decision.json>` (kind auto-selects from the root); `reject --reason '<text>' --evidence <file>` reuses the current choice | [Local decision workflow](docs/lightweight-workflow.md) |
 
 **Driving pattern:** after any campaign-changing command, run `project status --brief` or `project next` and execute the printed `next_move` — register, execute, recover, compare, record — instead of memorizing a command sequence. The kernel derives the step from recorded ledger state only.
+
+For a new goal-driven research campaign, freeze the real objective, permitted routes, output readers and budget in `advisor_policy`. Let the program receive every submitted run's results and derive Advisor input from the current graph. Supply inspectable proposals; do not hand-select favorable evidence, replace the program's context, omit returned warnings, or bypass its selected route through quick execution. Completion returns the original receipt plus an automatic Advisor update; a failed update calls for collection recovery, not another training run. The [CPU example](examples/owned-advisor/prepare.py) generates a complete small contract. Existing legacy ledgers retain their original boundaries; configuration and tool checks do not create OS-wide enforcement or independent scientific proof.
 
 **Non-negotiables** (details in the linked docs): infer goal, acceptance conditions, evidence and budget from the request and project — never invent a metric, threshold or goal, and missing evaluation calls for a minimal protocol before material commitments. Missing evidence stays `UNKNOWN`; exit code 0 and self-signed success are execution records, not science. Recommend one default and at most one serious alternative, with a deciding observation, fair comparison and a stop/revision condition. Ask only for an uninferable material goal, method or resource choice.
 

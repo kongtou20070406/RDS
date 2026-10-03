@@ -137,6 +137,8 @@ Control reuse requires a successful completed control receipt, matching code/con
 
 ## Execute a locked project command — M04
 
+For result-dependent continuation with program-owned evidence, follow the [owned Advisor example](program-owned-advisor.md). It freezes routes and result readers, automatically updates the existing TMS graph after settlement, and checks the current selected manifest before dispatch. Projects without this policy retain the explicit command workflow below.
+
 ```text
 python -B scripts/rds_cli.py --root <project> project init --contract <contract.json>
 python -B scripts/rds_cli.py --root <project> project create --manifest <run.json>
