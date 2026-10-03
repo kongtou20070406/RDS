@@ -1820,7 +1820,18 @@ def main():
     def usage_root():
         entry = parser()
         normalized = entry.normalize_args(sys.argv[1:], quiet=True)
-        return Path(normalized[1] if normalized[:1] == ['--root'] else entry.get_default('root')).resolve()
+        root = entry.get_default('root')
+        if normalized[:1] == ['--root']:
+            # Normalization locates values but does not validate them. Use the
+            # same argparse value rules before fallback creates any files:
+            # '--root --help' has no root value, even during help handling.
+            options = argparse.ArgumentParser(add_help=False, exit_on_error=False)
+            options.add_argument('--root')
+            try:
+                root = options.parse_args(normalized[:2]).root
+            except argparse.ArgumentError as exc:
+                raise ValueError(str(exc)) from exc
+        return Path(root).resolve()
     return run_logged(_main, sys.argv[1:], VERSION, root=usage_root)
 
 
