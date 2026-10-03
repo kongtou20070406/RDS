@@ -21,6 +21,8 @@ class ToolchainUpgradeTests(unittest.TestCase):
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory()
         self.addCleanup(self.folder.cleanup)
+        # update() resolves its root, including native Windows 8.3 aliases.
+        # Compare the same directory spelling in the acceptance fixture.
         self.root = Path(self.folder.name).resolve()
         for folder in ("formal", "scripts"):
             (self.root / folder).mkdir()
