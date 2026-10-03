@@ -172,6 +172,35 @@ class TheoryProgressionTests(unittest.TestCase):
         self.assertFalse(progression._check_handoff(egraph, progression.STAGES[1],
                                                     result["claim_sha256"], "foreign-stage"))
 
+    def test_invalid_rational_domain_is_unknown_without_native_dispatch(self):
+        native = mock.Mock(side_effect=AssertionError("Invalid input must not dispatch Lean"))
+        result = progression.run_progression({**SPEC, "domain": ["1/0"]}, native_verify=native)
+        self.assertEqual(result["status"], "UNKNOWN")
+        self.assertEqual(result["assurance"], "NONE")
+        self.assertEqual([stage["result"]["status"] for stage in result["stages"]],
+                         ["SKIPPED", "SKIPPED", "SKIPPED"])
+        native.assert_not_called()
+
+    def test_real_cli_rejects_zero_denominator_and_deep_json_before_dispatch(self):
+        payloads = (json.dumps({**SPEC, "domain": ["1/0"]}), "[" * 8000 + "]" * 8000)
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "spec.json"
+            command = [sys.executable, "-B", str(ROOT / "scripts/rds_theory_tools.py"),
+                       "--progression", str(path)]
+            for payload in payloads:
+                with self.subTest(input_size=len(payload)):
+                    path.write_text(payload, encoding="utf-8")
+                    result = subprocess.run(command, cwd=folder, capture_output=True,
+                                            encoding="utf-8", timeout=20)
+                    self.assertEqual(result.returncode, 2, result.stderr)
+                    report = json.loads(result.stdout)
+                    self.assertEqual(report["status"], "UNKNOWN")
+                    self.assertEqual(report["assurance"], "NONE")
+                    self.assertEqual([stage["result"]["status"] for stage in report["stages"]],
+                                     ["SKIPPED", "SKIPPED", "SKIPPED"])
+                    self.assertTrue(all("certificate" not in stage["result"]
+                                        for stage in report["stages"]))
+
     def test_json_loader_rejects_duplicate_keys_float_nonfinite_and_oversized_file(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "spec.json"

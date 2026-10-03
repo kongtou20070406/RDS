@@ -49,6 +49,8 @@ def load_spec(path):
     try:
         return json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_pairs,
                           parse_float=reject_number, parse_constant=reject_number)
+    except RecursionError as exc:
+        raise InvalidProgression("Progression JSON nesting exceeds the parser limit") from exc
     except (UnicodeError, json.JSONDecodeError) as exc:
         raise InvalidProgression("Invalid UTF-8 JSON progression specification") from exc
 
@@ -134,7 +136,7 @@ def run_progression(spec, *, native_verify=None):
     """Run one fixed three-check example without accepting imported stage verdicts."""
     try:
         values = _validate(spec)
-    except (InvalidProgression, TypeError, ValueError, OverflowError, UnicodeError) as exc:
+    except (InvalidProgression, TypeError, ValueError, ZeroDivisionError, OverflowError, UnicodeError) as exc:
         return _invalid_report(str(exc))
 
     claim = _claim(values)
