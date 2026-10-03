@@ -96,6 +96,35 @@ class ImportTests(unittest.TestCase):
             self.assertEqual(result[fid]["reason"], "invalid array index", fid)
         self.assertEqual(result["out_of_range"]["kind"], "UNKNOWN")
 
+    def test_pointer_tilde_is_an_rfc6901_escape_through_the_import_cli(self):
+        # Each '~' must be followed by 0 or 1; '~~01' used to read the key '~~1' beside its only spelling '~0~01'.
+        data = {"~": 0.1, "/": 0.2, "~1": 0.3, "~~1": 0.4, "~~~1": 0.5, "a~b": 0.6}
+        valid = {"tilde": ("~0", 0.1), "slash": ("~1", 0.2), "tilde_one": ("~01", 0.3),
+                 "two_tildes_one": ("~0~01", 0.4), "three_tildes_one": ("~0~0~01", 0.5), "inner": ("a~0b", 0.6)}
+        malformed = {"bare": "~", "unknown_digit": "~2", "trailing": "a~", "double": "~~", "inner_bare": "a~b",
+                     "alias_two": "~~01", "alias_three_left": "~~0~01", "alias_three_right": "~0~~01"}
+        facts = [{"id": k, "pointer": "/" + v} for k, (v, _) in valid.items()] + \
+                [{"id": k, "pointer": "/" + v} for k, v in malformed.items()]
+        sources = [self.source("metric.json", "metric", data, facts),
+                   self.source("log.jsonl", "log", b'{"~~1":0.4}\n',
+                               [{"id": "jsonl_valid", "row": 1, "pointer": "/~0~01"},
+                                {"id": "jsonl_alias", "row": 1, "pointer": "/~~01"}], "jsonl")]
+        manifest = {"schema": "rds-artifact-manifest-v1", "decision": "choose", "sources": sources,
+                    "derived": [], "cost_bindings": []}
+        (self.base / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        proc = subprocess.run([sys.executable, "-B", str(ROOT / "scripts/rds_cli.py"), "--root", str(self.base),
+                               "artifacts", "import", "--manifest", str(self.base / "manifest.json")],
+                              cwd=ROOT, capture_output=True, encoding="utf-8", timeout=20)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        result = json.loads(proc.stdout)["facts"]
+        for fid, (pointer, value) in valid.items():
+            self.assertEqual((result[fid]["kind"], result[fid]["value"]), ("OBSERVED", value), fid)
+            self.assertEqual(result[fid]["source"]["locator"], "pointer:/" + pointer, fid)
+        self.assertEqual((result["jsonl_valid"]["kind"], result["jsonl_valid"]["value"]), ("OBSERVED", 0.4))
+        for fid in list(malformed) + ["jsonl_alias"]:
+            self.assertEqual((result[fid]["kind"], result[fid]["value"]), ("UNKNOWN", None), fid)
+            self.assertEqual(result[fid]["reason"], "invalid JSON pointer escape", fid)
+
     def test_jsonl_row_is_an_integer_line_number_through_the_import_cli(self):
         # 1.0 and true compare equal to line 1 but would mint a second locator for the same reading.
         spellings = {"int": 1, "float": 1.0, "true": True, "string": "1", "zero": 0, "negative": -1,

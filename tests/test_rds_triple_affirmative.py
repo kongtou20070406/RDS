@@ -244,6 +244,18 @@ class TripleAffirmativeCLITests(unittest.TestCase):
             row = review['goal']['triple_affirmative'][name]['conditions'][0]
             self.assertEqual((row['truth'], row['affirms']), ('UNKNOWN', 'UNKNOWN'))
 
+    def test_malformed_tilde_escape_spelling_of_the_same_key_is_not_a_new_reading(self):
+        # RFC 6901 spells the key '~~~1' only as '~0~0~01'; '~' must be followed by 0 or 1.
+        values = {'runs': {'~~~1': 0.05}}
+        review = self.advise(context(DL_GOAL, DL_AFFIRM), 'heldout_error', values,
+                             aliases={'heldout_error': 'runs/~0~0~01', 'clean_root_replay_error': 'runs/~~0~01',
+                                      'worst_declared_cohort_error': 'runs/~0~~01'})
+        self.assertOpen(review, ['PORTABLE', 'APPLICABLE'], 'UNKNOWN', 'RESOLVE_PREMISE')
+        self.assertEqual(review['goal']['triple_affirmative']['found']['status'], 'TRUE')
+        for name in ('portable', 'applicable'):
+            row = review['goal']['triple_affirmative'][name]['conditions'][0]
+            self.assertEqual((row['truth'], row['affirms']), ('UNKNOWN', 'UNKNOWN'))
+
     def test_non_integer_jsonl_row_spelling_of_the_same_line_is_not_a_new_reading(self):
         # 1.0 and true equal line 1 in Python; they must not mint a second locator for one physical line.
         data = b'{"err":0.05}\n'
