@@ -38,9 +38,8 @@ def log_path():
     override = os.environ.get("RDS_USAGE_DB")
     if override:
         return Path(override).expanduser().resolve()
-    state = os.environ.get("XDG_STATE_HOME")
     local = os.environ.get("LOCALAPPDATA")
-    base = Path(state).expanduser().resolve() if state else Path(local) if local else Path.home() / ".local" / "state"
+    base = Path(local) if local else Path.home() / ".local" / "state"
     return base / "ResearchDirectionSelector" / "cli-usage.sqlite3"
 
 
@@ -173,7 +172,7 @@ def _run_logged(function, argv, version, *, root):
         token = _start(argv, version)
     except (OSError, sqlite3.Error, ValueError) as exc:
         if (root is not None and _unwritable(exc)
-                and not os.environ.get('RDS_USAGE_DB') and not os.environ.get('XDG_STATE_HOME')):
+                and not os.environ.get('RDS_USAGE_DB')):
             try:
                 resolved = Path(root() if callable(root) else root).resolve()
                 _active_path.set(resolved / '.rds' / 'usage' / 'cli-usage.sqlite3')

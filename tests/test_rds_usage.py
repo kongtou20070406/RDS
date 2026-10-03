@@ -28,7 +28,7 @@ class SandboxUsageTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.folder = Path(temporary.name)
-        self.root = self.folder / 'project'
+        self.root = self.folder / 'project with spaces'
         self.root.mkdir()
         self.state = self.folder / 'state'
         self.default = self.state / 'ResearchDirectionSelector' / 'cli-usage.sqlite3'
@@ -133,7 +133,7 @@ class SandboxUsageTests(unittest.TestCase):
 
     def test_explicit_locations_and_nonpermission_failures_do_not_fallback(self):
         self.readonly_default()
-        for settings in ({'RDS_USAGE_DB': str(self.default)}, {'XDG_STATE_HOME': str(self.state)}):
+        for settings in ({'RDS_USAGE_DB': str(self.default)},):
             with self.subTest(settings=settings), patch.dict(os.environ, settings):
                 result = self.cli('-w', str(self.root), 'advise', '--help')
                 self.assertEqual(result.returncode, 0)
@@ -145,6 +145,39 @@ class SandboxUsageTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn('SQLITE_NOTADB', result.stderr)
         self.assertFalse(self.fallback.exists())
+
+    def test_unrecognized_xdg_setting_keeps_existing_default_semantics(self):
+        with patch.dict(os.environ, {'XDG_STATE_HOME': str(self.folder / 'xdg')}):
+            self.assertEqual(usage.log_path(), self.default)
+            self.readonly_default()
+            result = self.cli('-w', str(self.root), 'advise', '--help')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn('RDS-USAGE-DEGRADED', result.stderr)
+            self.assertEqual(self.rows(self.fallback), [('advise', 'help', 0)])
+            self.assertFalse((self.folder / 'xdg').exists())
+
+    def test_invalid_or_duplicate_root_does_not_create_unintended_directories(self):
+        self.readonly_default()
+        other = self.folder / 'unintended root'
+        for argv in (['--root', str(other), '-w', str(self.root), 'advise', '--help'],
+                     ['advise', '--root']):
+            with self.subTest(argv=argv):
+                result = self.cli(*argv)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn('RDS-USAGE-DEGRADED', result.stderr)
+                self.assertFalse(other.exists())
+                self.assertFalse(self.fallback.exists())
+
+    def test_real_exec_help_does_not_use_child_root_options(self):
+        self.readonly_default()
+        other = str(self.folder / 'child root')
+        for child in (['--', 'python', '--root', other], ['python', '--root', other]):
+            with self.subTest(child=child):
+                result = self.cli('exec', '-w', str(self.root), '--help', *child)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn('RDS-USAGE-DEGRADED', result.stderr)
+                self.assertFalse(Path(other).exists())
+        self.assertEqual(self.rows(self.fallback), [('exec', 'help', 0), ('exec', 'help', 0)])
 
     def test_unavailable_fallback_keeps_degraded_result(self):
         self.readonly_default()
