@@ -16,7 +16,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from usage_cli_fixture import count_diagnostics, dual_sqlite_wait, ledger_snapshot, run_cli, wait_marker
+from usage_cli_fixture import count_diagnostics, dual_sqlite_wait, ledger_snapshot, paused_schema, run_cli, wait_marker
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -146,6 +146,23 @@ class UsageTests(unittest.TestCase):
                 usage.run_logged(lambda: (_ for _ in ()).throw(RuntimeError("original error")), ["status"], "test")
         self.assertIsNotNone(usage._last_error)
 
+    def test_rejected_start_rolls_back_tracking_with_call_and_recovers(self):
+        with usage._database() as db:
+            db.execute("CREATE TRIGGER reject_call BEFORE INSERT ON calls "
+                       "BEGIN SELECT RAISE(ABORT, 'synthetic rejection'); END")
+        warning = io.StringIO()
+        with redirect_stderr(warning):
+            self.assertEqual(usage.run_logged(lambda: 7, ["status"], "test"), 7)
+        self.assertIn("start record not confirmed", warning.getvalue())
+        with closing(sqlite3.connect(self.path)) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM tracking").fetchone()[0], 0)
+            self.assertEqual(db.execute("SELECT count(*) FROM calls").fetchone()[0], 0)
+            db.execute("DROP TRIGGER reject_call")
+        self.assertEqual(usage.run_logged(lambda: 0, ["status"], "test"), 0)
+        report = usage.summarize(days=2)
+        self.assertEqual(report["total_calls"], 1)
+        self.assertEqual(sum(r["unfinished"] for r in report["daily"]), 0)
+
     def test_concurrent_cli_processes_retain_all_calls(self):
         warmup = self.cli("--version")
         self.assertEqual(warmup.returncode, 0, count_diagnostics(self.path, [warmup]))
@@ -162,6 +179,8 @@ class UsageTests(unittest.TestCase):
         self.assertEqual(result["total_calls"], 13, evidence)
         self.assertEqual(result["modes"], {"version": 13}, evidence)
         self.assertEqual(result["daily"][0]["successful"], 13, evidence)
+        self.assertEqual(result["daily"][0]["unfinished"], 0, evidence)
+        self.assertTrue(all(row["exit_code"] == 0 for row in ledger_snapshot(self.path)["calls"]), evidence)
 
     def test_first_concurrent_invocations_retain_all_calls(self):
         self.assertFalse(self.path.exists())
@@ -176,6 +195,37 @@ class UsageTests(unittest.TestCase):
         evidence = count_diagnostics(self.path, results, report)
         self.assertEqual(report['total_calls'], 12, evidence)
         self.assertEqual(report['daily'][0]['successful'], 12, evidence)
+        self.assertEqual(report['daily'][0]['unfinished'], 0, evidence)
+        self.assertTrue(all(row["exit_code"] == 0 for row in ledger_snapshot(self.path)["calls"]), evidence)
+
+    def test_paused_schema_preparation_does_not_drop_concurrent_cli_starts(self):
+        # One real warmup pauses at the schema/caller boundary. The other
+        # twelve real invocations must complete while it is still paused;
+        # schema preparation must not reserve their writer for Python work.
+        with paused_schema(self.folder, self.path) as probe:
+            environment = {**os.environ, **probe["environment"]}
+            with ThreadPoolExecutor(max_workers=1) as warmup_pool:
+                warmup_future = warmup_pool.submit(
+                    subprocess.run,
+                    [sys.executable, "-B", str(ROOT / "scripts/rds_cli.py"), "--version"],
+                    cwd=self.folder, env=environment, capture_output=True, text=True, timeout=60)
+                try:
+                    wait_marker(probe["work"] / "ready")
+                    with ThreadPoolExecutor(max_workers=8) as workers:
+                        results = list(workers.map(lambda _: self.cli("--version"), range(12)))
+                    paused = json.loads((probe["work"] / "ready").read_text())
+                finally:
+                    (probe["work"] / "release").touch()
+                warmup = warmup_future.result(timeout=60)
+        children = [warmup, *results]
+        report = usage.summarize(days=2)
+        evidence = count_diagnostics(self.path, children, report)
+        self.assertTrue(all(r.returncode == 0 for r in children), evidence)
+        self.assertEqual(report["total_calls"], 13, evidence)
+        self.assertEqual(sum(r["successful"] for r in report["daily"]), 13, evidence)
+        self.assertEqual(sum(r["unfinished"] for r in report["daily"]), 0, evidence)
+        self.assertTrue(all(r["exit_code"] == 0 for r in ledger_snapshot(self.path)["calls"]), evidence)
+        self.assertFalse(paused["in_transaction"])
 
     def test_persistent_start_lock_reports_loss_but_preserves_real_cli_result(self):
         warmup = self.cli("--version")

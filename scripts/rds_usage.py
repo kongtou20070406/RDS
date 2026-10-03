@@ -38,21 +38,38 @@ def log_path():
 
 
 @contextmanager
-def _database():
+def _database(*, write=True):
     path = log_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     # Brief contention must not drop invocations. SQLite bounds this wait;
     # persistent storage failure still leaves the original command unaffected.
-    connection = sqlite3.connect(path, timeout=10)
+    connection = sqlite3.connect(path, timeout=10, isolation_level=None)
+    deadline = time.monotonic() + 10
+
+    def remaining_wait():
+        # All schema/transaction waits share the original phase budget. A
+        # paused process does not get a fresh ten seconds at every statement.
+        milliseconds = max(0, int((deadline - time.monotonic()) * 1000))
+        connection.execute(f"PRAGMA busy_timeout={milliseconds}")
+
     try:
-        # Serialize schema creation and the caller's write in one bounded
-        # transaction, before reading schema; no read-to-write lock upgrade.
-        connection.execute('BEGIN IMMEDIATE')
+        # Idempotent DDL uses separate SQLite autocommit statements. Never
+        # carry a reserved writer from schema preparation into Python work.
+        # A partial first-use schema is safe to finish on the next invocation.
         # Keep existing journal modes; no first-use existence/PRAGMA race.
-        connection.execute("CREATE TABLE IF NOT EXISTS tracking (id INTEGER PRIMARY KEY CHECK(id=1), started REAL NOT NULL, day TEXT NOT NULL)")
-        connection.execute("CREATE TABLE IF NOT EXISTS calls (id INTEGER PRIMARY KEY, started REAL NOT NULL, day TEXT NOT NULL, command TEXT NOT NULL, mode TEXT NOT NULL, version TEXT NOT NULL, exit_code INTEGER, elapsed_ms REAL)")
-        connection.execute("CREATE INDEX IF NOT EXISTS calls_day ON calls(day)")
+        for statement in (
+            "CREATE TABLE IF NOT EXISTS tracking (id INTEGER PRIMARY KEY CHECK(id=1), started REAL NOT NULL, day TEXT NOT NULL)",
+            "CREATE TABLE IF NOT EXISTS calls (id INTEGER PRIMARY KEY, started REAL NOT NULL, day TEXT NOT NULL, command TEXT NOT NULL, mode TEXT NOT NULL, version TEXT NOT NULL, exit_code INTEGER, elapsed_ms REAL)",
+            "CREATE INDEX IF NOT EXISTS calls_day ON calls(day)",
+        ):
+            remaining_wait()
+            connection.execute(statement)
+        remaining_wait()
+        # Start's tracking+call remain atomic; readers get one consistent
+        # snapshot without reserving a writer or upgrading a read transaction.
+        connection.execute('BEGIN IMMEDIATE' if write else 'BEGIN')
         yield connection
+        remaining_wait()
         connection.commit()
     finally:
         connection.close()
@@ -163,7 +180,7 @@ def summarize(*, days=14, since=None, until=None):
         start = end - timedelta(days=days - 1)
     if not 0 <= (end - start).days < 3660:
         raise ValueError("Date range must be ordered and span at most 3660 days")
-    with _database() as connection:
+    with _database(write=False) as connection:
         tracking = connection.execute("SELECT started,day FROM tracking WHERE id=1").fetchone()
         rows = connection.execute("SELECT day,COUNT(*),SUM(exit_code=0),SUM(exit_code!=0),SUM(exit_code IS NULL) FROM calls WHERE day BETWEEN ? AND ? GROUP BY day", (start.isoformat(), end.isoformat())).fetchall()
         commands = dict(connection.execute("SELECT command,COUNT(*) FROM calls WHERE day BETWEEN ? AND ? GROUP BY command ORDER BY command", (start.isoformat(), end.isoformat())))
