@@ -330,6 +330,32 @@ def _facts(spec):
             if n['id'].startswith(OWNED_PREFIX) and 'owned_fact' in n}
 
 
+def _dispatch_graph(policy, runs):
+    """Project live dispatch choices before the existing bounded search.
+
+    Completed routes still supply prerequisite nodes and observations. Only
+    their dispatch roots/fallback actions are omitted; the frozen graph and
+    its predicates, edges, history and search bounds remain unchanged.
+    """
+    statuses = {run['id']: run['status'] for run in runs}
+    terminal = {route['candidate'] for route in policy['routes']
+                if statuses.get(route['manifest']['id']) in TERMINAL}
+    graph = deepcopy(policy['graph'])
+    for node in graph['nodes']:
+        config = node.get('executable', {})
+        action = config.get('action') or {}
+        if action.get('id') in terminal:
+            config['decisions'] = []
+        for key in ('preconditions', 'satisfied_when'):
+            conditions = config.get(key, [])
+            if isinstance(conditions, list):
+                for condition in conditions:
+                    fallback = condition.get('on_false') if isinstance(condition, dict) else None
+                    if isinstance(fallback, dict) and fallback.get('id') in terminal:
+                        del condition['on_false']
+    return graph
+
+
 def _event(store, body):
     with store._db() as db:
         db.execute('BEGIN IMMEDIATE')
@@ -398,8 +424,12 @@ def review(store, persist=True):
         context['budget'] = {**identity, 'value': budget.get('wall_seconds', 0) + owned_reservations}
         context['costs'] = {r['candidate']: {**identity, 'value': r['manifest']['resource_estimates']['wall_seconds']}
                             for r in policy['routes']}
+        run_index = {r['id']: r for r in state['runs']}
+        priority = tuple(route['candidate'] for route in policy['routes']
+                         if run_index.get(route['manifest']['id'], {}).get('status') in {'RESERVED', 'RUNNING'})
         state_for_advisor = {'advisor_context': context, 'runs': state['runs'], 'receipts': state['receipts']}
-        recommendations = RDSAdvisor(store.root).recommend_next_directions(state_for_advisor, policy['graph'])
+        recommendations = RDSAdvisor(store.root).recommend_next_directions(
+            state_for_advisor, _dispatch_graph(policy, state['runs']), priority_action_ids=priority)
         advice = {'advisor_type': 'STRATEGIC_RESEARCH_ADVICE', 'recommendations': recommendations,
                   'recommendations_count': len(recommendations)}
         result.update(advice=advice, recommendations=recommendations, context=context)
@@ -407,7 +437,6 @@ def review(store, persist=True):
         selection = searches[0]['selection_review'] if searches else {}
         result['warnings'] = deepcopy(selection.get('flags', []))
         result['next_move'] = deepcopy(selection.get('next_move'))
-        run_index = {r['id']: r for r in state['runs']}
         ready = {c['action']['id']: c for search in searches for c in search['candidates'] if c['status'] == 'READY'}
         active = [r for r in policy['routes'] if run_index.get(r['manifest']['id'], {}).get('status') in {'RESERVED', 'RUNNING'}
                   and r['candidate'] in ready]

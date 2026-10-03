@@ -495,7 +495,8 @@ class RDSAdvisor:
             limitations=["rules_extracted 是兼容字段，计数匹配的未审查摘录；rules_added 计数本次实际新增行，包括显式迁移。",
                          "关键词命中不会自动成为可执行原则；legacy_bundle_sha256 不代表源文档身份。"])
 
-    def recommend_next_directions(self, state: Dict[str, Any], judgment_graph: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def recommend_next_directions(self, state: Dict[str, Any], judgment_graph: Dict[str, Any],
+                                  *, priority_action_ids=()) -> List[Dict[str, Any]]:
         """Read real state and supplied graph; recommend a review, never a causal ranking."""
         recommendations = []
         context = state.get("advisor_context", {})
@@ -519,6 +520,8 @@ class RDSAdvisor:
         if context and (not isinstance(context, dict) or "decision" in context or "frontier" not in context):
             from rds_advisor_search import search_directions, review_selection
             options = {"templates": state["advisor_templates"]} if state.get("advisor_templates") else {}
+            if priority_action_ids:
+                options['priority_action_ids'] = priority_action_ids
             if isinstance(state["advisor_context"], dict):
                 options.update({key: state["advisor_context"][key] for key in ("max_depth", "max_candidates")
                                 if key in state["advisor_context"]})

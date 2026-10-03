@@ -196,8 +196,157 @@ class OwnedAdvisorCLITests(unittest.TestCase):
         self.assertEqual(self.snapshot()['budget'], state['budget'])
         self.assertEqual(self.starts(), ['baseline'])
 
+    def test_candidate_limit_counts_pending_routes_without_erasing_completed_dependency(self):
+        def policy(value):
+            value['context']['max_candidates'] = 1
+            value['graph']['nodes'][0]['executable']['satisfied_when'] = [
+                {'fact': 'baseline.score', 'op': 'lt', 'value': 0}]
+            value['graph']['edges'] = [{'from': 'baseline', 'to': 'repair', 'relation': 'prerequisite_for'}]
+        self.initialize(mutate_policy=policy)
+        frozen = deepcopy(self.snapshot()['contract']['advisor_policy'])
+        first = self.output('project', 'next')
+        search = next(row['search'] for row in first['recommendations'] if 'search' in row)
+        self.assertTrue(search['truncation']['truncated'])
+        self.assertIn('candidate limit', search['truncation']['reasons'])
+        completed = self.output('project', 'advance')
+        self.assertEqual(completed['advisor']['selected_run'], 'repair')
+        search = next(row['search'] for row in completed['advisor']['recommendations'] if 'search' in row)
+        self.assertEqual(search['truncation']['limits']['max_candidates'], 1)
+        self.assertFalse(search['truncation']['truncated'])
+        self.assertEqual([row['action']['id'] for row in search['candidates']], ['repair'])
+        self.assertTrue(any(step.get('step') == 'dependency' and step.get('from') == 'baseline'
+                            for step in search['candidates'][0]['derivation']))
+        self.assertEqual(completed['advisor']['context']['facts']['baseline.score']['value'], -1)
+        self.assertEqual(completed['advisor']['coverage']['receipts'], 1)
+        before = self.snapshot()
+        self.create('repair')
+        reserved = self.snapshot()
+        self.assertEqual(reserved['budget']['cpu_seconds']['reserved'], 1)
+        self.assertEqual(self.output('project', 'next')['selected_run'], 'repair')
+        self.assertEqual(self.snapshot()['budget'], reserved['budget'])
+        finished = self.output('project', 'advance')
+        self.assert_owned_receipt(finished['receipt'], 'repair', 'SUCCEEDED')
+        self.assertEqual(self.starts(), ['baseline', 'repair'])
+        final = self.snapshot()
+        self.assertEqual(final['receipts'][0], before['receipts'][0])
+        self.assertEqual(final['contract']['advisor_policy'], frozen)
+        self.assertEqual(final['budget']['cpu_seconds']['charged_estimate'], 2)
+        self.assertEqual(final['budget']['cpu_seconds']['reserved'], 0)
+        self.assertIsNone(self.output('project', 'advance')['selected_run'])
+        self.assertEqual(self.snapshot()['budget'], final['budget'])
+
+    def test_active_reservation_precedes_newly_ready_earlier_route_under_candidate_limit(self):
+        def policy(value):
+            value['context']['max_candidates'] = 1
+            value['graph']['nodes'][0]['executable']['preconditions'] = [
+                {'fact': 'run.repair.status', 'value': 'RESERVED'}]
+            value['graph']['nodes'][1]['executable']['preconditions'] = []
+        self.initialize(mutate_policy=policy)
+        self.assertEqual(self.output('project', 'next')['selected_run'], 'repair')
+        self.create('repair')
+        reserved = self.snapshot()
+        advice = self.output('project', 'next')
+        self.assertEqual(advice['selected_run'], 'repair')
+        search = next(row['search'] for row in advice['recommendations'] if 'search' in row)
+        self.assertEqual([row['action']['id'] for row in search['candidates']], ['repair'])
+        self.assertTrue(search['truncation']['truncated'])
+        self.assertEqual(self.snapshot()['budget'], reserved['budget'])
+        completed = self.output('project', 'advance')
+        self.assert_owned_receipt(completed['receipt'], 'repair', 'SUCCEEDED')
+        final = self.snapshot()
+        self.assertEqual(self.starts(), ['repair'])
+        self.assertEqual(len(final['runs']), 1)
+        self.assertEqual(final['budget']['cpu_seconds']['charged_estimate'], 1)
+        self.assertEqual(final['budget']['cpu_seconds']['reserved'], 0)
+        self.assertIsNone(self.output('project', 'advance')['selected_run'])
+        self.assertEqual(self.snapshot()['budget'], final['budget'])
+
+    def test_active_fallback_keeps_its_slot_before_a_new_reservation(self):
+        def policy(value):
+            value['context']['max_candidates'] = 1
+            baseline, trigger = value['graph']['nodes']
+            spare = deepcopy(trigger)
+            spare['id'] = 'spare'
+            spare['executable'].update(decisions=[], preconditions=[])
+            spare['executable']['action'].update(id='spare', operation='measure-spare')
+            baseline['executable']['preconditions'] = [{'fact': 'run.spare.status', 'value': 'RESERVED'}]
+            trigger['executable']['preconditions'] = [{'fact': 'run.repair.completed', 'value': True,
+                'on_false': deepcopy(spare['executable']['action'])}]
+            value['graph']['nodes'].append(spare)
+            manifest = deepcopy(self.manifests['repair'])
+            manifest.update(id='spare', outpaths=['outputs/spare.json'])
+            manifest['argv'][3] = 'spare'
+            manifest['argv'][-1] = manifest['outpaths'][0]
+            self.manifests['spare'] = manifest
+            value['routes'].append({'candidate': 'spare', 'manifest': manifest})
+            self.contract['allowed_commands'].append(manifest['argv'])
+        self.initialize(mutate_policy=policy)
+        self.assertEqual(self.output('project', 'next')['selected_run'], 'spare')
+        self.create('spare')
+        reserved = self.snapshot()
+        advice = self.output('project', 'next')
+        self.assertEqual(advice['selected_run'], 'spare')
+        search = next(row['search'] for row in advice['recommendations'] if 'search' in row)
+        self.assertEqual([row['action']['id'] for row in search['candidates']], ['spare'])
+        self.assertTrue(search['truncation']['truncated'])
+        self.assertEqual(search['truncation']['limits']['max_candidates'], 1)
+        self.assertNotEqual(self.create('baseline', ok=False).returncode, 0)
+        self.assertEqual(self.snapshot()['budget'], reserved['budget'])
+        self.assertEqual(self.snapshot()['runs'], reserved['runs'])
+        completed = self.output('project', 'advance')
+        self.assert_owned_receipt(completed['receipt'], 'spare', 'SUCCEEDED')
+        final = self.snapshot()
+        self.assertEqual(self.starts(), ['spare'])
+        self.assertEqual(len(final['runs']), 1)
+        self.assertEqual(final['budget']['cpu_seconds']['charged_estimate'], 1)
+        self.assertEqual(final['budget']['cpu_seconds']['reserved'], 0)
+        self.assertIsNone(self.output('project', 'advance')['selected_run'])
+        self.assertEqual(self.snapshot()['budget'], final['budget'])
+
+    def test_terminal_fallback_cannot_consume_pending_candidate_slot(self):
+        def policy(value):
+            value['context']['max_candidates'] = 1
+            baseline, repair = value['graph']['nodes']
+            diagnosis = deepcopy(repair)
+            diagnosis['id'] = 'diagnosis'
+            diagnosis['executable']['action']['id'] = 'diagnosis'
+            diagnosis['executable']['action']['operation'] = 'measure-diagnosis'
+            repair['executable']['preconditions'] = [{'fact': 'baseline.score', 'op': 'gte', 'value': 0,
+                'on_false': deepcopy(baseline['executable']['action'])}]
+            value['graph']['nodes'].append(diagnosis)
+            manifest = deepcopy(self.manifests['repair'])
+            manifest.update(id='diagnosis', outpaths=['outputs/diagnosis.json'])
+            manifest['argv'][3] = 'diagnosis'
+            manifest['argv'][-1] = manifest['outpaths'][0]
+            value['routes'].append({'candidate': 'diagnosis', 'manifest': manifest})
+            self.contract['allowed_commands'].append(manifest['argv'])
+        self.initialize(mutate_policy=policy)
+        completed = self.output('project', 'advance')
+        self.assertEqual(completed['advisor']['selected_run'], 'diagnosis')
+        search = next(row['search'] for row in completed['advisor']['recommendations'] if 'search' in row)
+        self.assertEqual([row['action']['id'] for row in search['candidates']], ['diagnosis'])
+        self.assertTrue(any(row.get('rule_id') == 'repair' and row['status'] == 'BLOCKED_PREREQUISITE'
+                            for row in search['blocked_candidates']))
+        self.assert_owned_receipt(self.output('project', 'advance')['receipt'], 'diagnosis', 'SUCCEEDED')
+        self.assertEqual(self.starts(), ['baseline', 'diagnosis'])
+
+    def test_candidate_limit_does_not_reopen_exhausted_resource_budget(self):
+        def policy(value):
+            value['context']['max_candidates'] = 1
+            self.contract['budget']['cpu_seconds'] = 1
+        self.initialize(mutate_policy=policy)
+        completed = self.output('project', 'advance')
+        self.assertIsNone(completed['advisor']['selected_run'])
+        before = self.snapshot()
+        self.assertEqual(before['budget']['cpu_seconds']['remaining'], 0)
+        self.assertIsNone(self.output('project', 'advance')['selected_run'])
+        self.assertNotEqual(self.create('repair', ok=False).returncode, 0)
+        self.assertEqual(self.snapshot()['budget'], before['budget'])
+        self.assertEqual(self.snapshot()['runs'], before['runs'])
+        self.assertEqual(self.starts(), ['baseline'])
+
     def test_positive_result_closes_declared_goal_without_repair_launch(self):
-        self.initialize('positive')
+        self.initialize('positive', mutate_policy=lambda value: value['context'].update(max_candidates=1))
         result = self.output('project', 'advance')
         self.assert_owned_receipt(result['receipt'], 'baseline', 'SUCCEEDED')
         self.assertIsNone(result['advisor']['selected_run'])
@@ -282,7 +431,7 @@ class OwnedAdvisorCLITests(unittest.TestCase):
                     self.root, self.env = original_root, original_env
 
     def test_missing_or_changed_negative_artifact_blocks_dispatch_and_can_be_recovered(self):
-        self.initialize()
+        self.initialize(mutate_policy=lambda value: value['context'].update(max_candidates=1))
         self.output('project', 'advance')
         path = self.root / 'outputs/baseline.json'
         original = path.read_bytes()
@@ -483,7 +632,7 @@ class OwnedAdvisorCLITests(unittest.TestCase):
         self.assertEqual(before['budget']['cpu_seconds']['reserved'], 0)
 
     def test_concurrent_advance_cannot_launch_the_same_attempt_twice(self):
-        self.initialize('slownegative')
+        self.initialize('slownegative', mutate_policy=lambda value: value['context'].update(max_candidates=1))
         with ThreadPoolExecutor(max_workers=2) as pool:
             results = list(pool.map(lambda _: self.call('project', 'advance', ok=False), range(2)))
         self.assertTrue(any(result.returncode == 0 for result in results),

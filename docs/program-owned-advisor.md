@@ -54,6 +54,8 @@ The context carries the decision, scope and research constraints. Runtime facts,
 
 Normal candidate predicates and existing bounded Advisor search determine eligibility. A stable choice among remaining routes is conditional on the frozen candidate space; it does not prove global scientific optimality. When that space needs a new hypothesis, retain the blocker and prepare a reviewed new policy rather than silently widening a running contract or changing its acceptance threshold.
 
+Completed routes retain their evidence and dependency nodes but no longer consume executable candidate slots. Active reservations are considered before new routes within the same frozen search limit; their current prerequisites, budget and evidence still have to pass. Genuine search truncation remains visible. This allows a limit-one campaign to continue after receiving a result without rerunning the completed route or changing its policy.
+
 ## Collection, graph and admission
 
 RDS enumerates all registered runs and their owned receipts. It retains favorable and negative values, failures, timeouts, logs, declared outputs and unresolved readings. Original assets stay in the existing project artifacts/CAS; `owned:` nodes and relationships in the existing TMS map connect them to the current observations. Advisor consumes that program-produced state. The scope of completeness is the frozen run/output contract, not arbitrary disk contents, unregistered experiments or every possible scientific interpretation of a file.

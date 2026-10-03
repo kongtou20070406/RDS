@@ -108,6 +108,50 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(len(unknown["ranking"]["cost_unknown"]), 2)
         self.assertEqual(unknown["ranking"]["dominance"], [])
 
+    def test_priority_fallback_retains_bound_and_default_search_order(self):
+        active = node('active')
+        active['executable']['decisions'] = []
+        trigger = node('trigger', [{'fact': 'ready', 'value': True,
+                                   'on_false': copy.deepcopy(active['executable']['action'])}])
+        graph = {'nodes': [node('first'), trigger, active], 'edges': []}
+        context = {'decision': 'choose', 'facts': {'ready': fact(False)}}
+        original = copy.deepcopy((graph, context))
+        ordinary = search_directions(graph, context, max_candidates=1)
+        empty = search_directions(graph, context, max_candidates=1, priority_action_ids=())
+        self.assertEqual(ordinary, empty)
+        self.assertEqual([row['action']['id'] for row in ordinary['candidates']], ['first-test'])
+        prioritized = search_directions(graph, context, max_candidates=1, priority_action_ids=('active-test',))
+        self.assertEqual([row['id'] for row in prioritized['candidates']], ['trigger:active-test'])
+        self.assertEqual(prioritized['candidates'][0]['status'], 'READY')
+        self.assertEqual(prioritized['truncation']['limits']['max_candidates'], 1)
+        self.assertIn('candidate limit', prioritized['truncation']['reasons'])
+        self.assertTrue(prioritized['truncation']['truncated'])
+        self.assertEqual((graph, context), original)
+
+    def test_blocked_priority_action_cannot_evict_ready_candidate(self):
+        for blocker in ('budget', 'method', 'unknown-premise'):
+            with self.subTest(blocker=blocker):
+                graph = {'nodes': [node('first'), node('active')], 'edges': []}
+                context = {'decision': 'choose', 'facts': {}}
+                if blocker == 'budget':
+                    context.update(costs={name + '-test': fact(cost, unit='seconds', comparison_group='same-host')
+                                          for name, cost in (('first', 1), ('active', 2))},
+                                   budget=fact(1, unit='seconds', comparison_group='same-host'))
+                elif blocker == 'method':
+                    for rule, family in zip(graph['nodes'], ('safe', 'blocked')):
+                        rule['executable']['action']['methods'] = {'family': family}
+                    context['method_constraints'] = [{'id': 'no-blocked-method', 'quote': 'exclude blocked methods',
+                        'source': 'synthetic fixture', 'status': 'CONFIRMED', 'forbid': {'family': 'blocked'}}]
+                else:
+                    graph['nodes'][1]['executable']['preconditions'] = [{'fact': 'unread', 'value': True}]
+                result = search_directions(graph, context, max_candidates=1, priority_action_ids=('active-test',))
+                self.assertEqual([row['action']['id'] for row in result['candidates']], ['first-test'])
+                self.assertEqual(result['candidates'][0]['status'], 'READY')
+                if blocker != 'unknown-premise':
+                    self.assertEqual(result['blocked_candidates'][0]['status'],
+                                     'BLOCKED_BUDGET' if blocker == 'budget' else 'BLOCKED_METHOD')
+                self.assertTrue(result['truncation']['truncated'])
+
     def test_unrelated_actions_with_matching_decision_text_do_not_compete_on_cost(self):
         graph = {"nodes": [node("cheap"), node("important")], "edges": []}
         graph["nodes"][1]["executable"]["action"]["competing_explanations"] = ["mechanism C", "mechanism D"]
