@@ -127,8 +127,10 @@ def choice(advice, context, candidate_id=None):
         goal_guard = {'dependency_map': deepcopy(guarded_context['dependency_map']),
                       'input_sha256': dependency['input_sha256'], 'ready_obligation': token,
                       'contribution': deepcopy(contribution)}
-    require(not any(f.get('kind') == 'LOOP_HISTORY_REVIEW_ERROR' for r in advice.get('recommendations', [])
-                    for f in r.get('review', {}).get('flags', [])), 'Repair checkpoint integrity before executing a candidate')
+    history_errors = [str(f.get('reason', '')) for r in advice.get('recommendations', [])
+                      for f in r.get('review', {}).get('flags', []) if f.get('kind') == 'LOOP_HISTORY_REVIEW_ERROR']
+    require(not history_errors, 'Repair checkpoint integrity before executing a candidate'
+            + (': ' + history_errors[0] if history_errors and history_errors[0] else ''))
     require(_loop_route(candidate) is not None, 'Candidate has no structured route identity')
     record = {'question_id': decision['id'], 'goal_revision': decision['goal_revision'],
               'scope': deepcopy(decision['scope']), 'candidate': deepcopy(candidate),

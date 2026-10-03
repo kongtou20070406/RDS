@@ -34,6 +34,10 @@ def save_checkpoint(root, checkpoint_id, snapshot, *, kind, decision=None):
         raise ValueError("Checkpoint needs a live operational snapshot and contract")
     if decision is not None and not isinstance(decision, dict):
         raise ValueError("Decision context must be an object")
+    if decision:
+        # Checkpoints are append-only: a route record review would refuse must never be written.
+        from rds_advisor import validate_checkpoint_decision
+        validate_checkpoint_decision(decision, checkpoint_id, Path(root).resolve() / ".rds")
     record = {"schema": SCHEMA, "id": checkpoint_id, "kind": kind,
               "created_ns": time.time_ns(), "contract_sha256": _sha(snapshot["contract"]),
               "snapshot": snapshot, "decision": decision or {},
@@ -41,6 +45,11 @@ def save_checkpoint(root, checkpoint_id, snapshot, *, kind, decision=None):
     raw = _raw(record)
     if len(raw.encode("utf-8")) > MAX_BYTES:
         raise ValueError("Checkpoint exceeds bounded record size")
+    from rds_artifacts import strict_json
+    try:  # Loop-history review parses every record this way; one it cannot read would block all questions.
+        strict_json(raw)
+    except ValueError as exc:
+        raise ValueError("Checkpoint record would be unreadable by loop-history review: " + str(exc)) from exc
     sha = hashlib.sha256(raw.encode("utf-8")).hexdigest()
     db = sqlite3.connect(_database(root, kind), timeout=15, isolation_level=None)
     try:

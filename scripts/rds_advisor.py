@@ -680,30 +680,7 @@ class RDSAdvisor:
         skipped_goal_records = []
 
         def decision_row(prior, checkpoint_id, sha, same_question, same_goal):
-            _require(_text(prior["goal_revision"]) and prior["outcome"] in
-                     ("rejected", "accepted", "plan_locked", "deferred") and isinstance(prior["evidence"], dict),
-                     "Invalid checkpoint decision: " + checkpoint_id)
-            _scope(prior["scope"])
-            _json(prior["evidence"])
-            route = _loop_route(prior["candidate"])
-            _require(route is not None, "Checkpoint decision needs a structured candidate: " + checkpoint_id)
-            # Declared domains prune only within their own question, so only that question checks the witness.
-            if same_question and prior['outcome'] == 'rejected' and 'rejected_domain' in prior:
-                from rds_guard import validate_domain, MAX_BYTES
-                validate_domain(prior['rejected_domain'], prior['candidate'])
-                witness = prior.get('falsification', {})
-                witness_sha = witness.get('sha256')
-                _require(isinstance(witness_sha, str) and re.fullmatch('[0-9a-f]{64}', witness_sha), 'Declared-domain rejection needs a witness hash')
-                original = Path(witness['path']).resolve()
-                _require(original.is_relative_to((directory / 'cas').resolve()), 'Domain witness must be in the project CAS')
-                if (str(original), witness_sha) not in checked_witnesses:
-                    with original.open('rb') as handle:
-                        witness_raw = handle.read(MAX_BYTES + 1)
-                    _require(len(witness_raw) <= MAX_BYTES and hashlib.sha256(witness_raw).hexdigest() == witness_sha,
-                             'Declared-domain witness CAS integrity failure')
-                    checked_witnesses.add((str(original), witness_sha))
-            return {**prior, "route_sha256": route, "family_sha256": _loop_family(prior["candidate"]),
-                    "review_context": _loop_context(prior["candidate"], prior["evidence"]),
+            return {**_checkpoint_route(prior, checkpoint_id, directory, checked_witnesses, same_question),
                     "checkpoint_id": checkpoint_id, "checkpoint_sha256": sha,
                     "same_question": same_question, "same_goal": same_goal}
 
@@ -740,8 +717,7 @@ class RDSAdvisor:
                                  and _text(prior.get("question_id")) and _goal_key(prior.get("goal_conditions")) == goal_key)
                     if not (same_question or same_goal):
                         continue
-                    fields = ("goal_revision", "scope", "candidate", "outcome", "evidence")
-                    if not all(key in prior for key in fields):
+                    if not all(key in prior for key in CHECKPOINT_ROUTE_FIELDS):
                         continue  # Older opaque contexts never become route decisions.
                     if same_question:
                         history.append(decision_row(prior, checkpoint_id, sha, True, same_goal))
@@ -866,6 +842,54 @@ class RDSAdvisor:
         review["status"] = "REVIEW_REQUIRED" if review["flags"] else "RECORDED_HISTORY_REVIEWED"
         search["loop_review"] = review
         return review
+
+
+CHECKPOINT_ROUTE_FIELDS = ("goal_revision", "scope", "candidate", "outcome", "evidence")
+
+
+def _checkpoint_route(prior, checkpoint_id, directory, checked_witnesses, same_question):
+    """Structural checks loop-history review applies to one recorded route decision."""
+    _require(_text(prior["goal_revision"]) and prior["outcome"] in
+             ("rejected", "accepted", "plan_locked", "deferred") and isinstance(prior["evidence"], dict),
+             "Invalid checkpoint decision: " + checkpoint_id)
+    _scope(prior["scope"])
+    _json(prior["evidence"])
+    route = _loop_route(prior["candidate"])
+    _require(route is not None, "Checkpoint decision needs a structured candidate: " + checkpoint_id)
+    # Declared domains prune only within their own question, so only that question checks the witness.
+    if same_question and prior['outcome'] == 'rejected' and 'rejected_domain' in prior:
+        from rds_guard import validate_domain, MAX_BYTES
+        validate_domain(prior['rejected_domain'], prior['candidate'])
+        witness = prior.get('falsification', {})
+        witness_sha = witness.get('sha256')
+        _require(isinstance(witness_sha, str) and re.fullmatch('[0-9a-f]{64}', witness_sha), 'Declared-domain rejection needs a witness hash')
+        original = Path(witness['path']).resolve()
+        _require(original.is_relative_to((directory / 'cas').resolve()), 'Domain witness must be in the project CAS')
+        if (str(original), witness_sha) not in checked_witnesses:
+            with original.open('rb') as handle:
+                witness_raw = handle.read(MAX_BYTES + 1)
+            _require(len(witness_raw) <= MAX_BYTES and hashlib.sha256(witness_raw).hexdigest() == witness_sha,
+                     'Declared-domain witness CAS integrity failure')
+            checked_witnesses.add((str(original), witness_sha))
+    return {**prior, "route_sha256": route, "family_sha256": _loop_family(prior["candidate"]),
+            "review_context": _loop_context(prior["candidate"], prior["evidence"])}
+
+
+def validate_checkpoint_decision(decision, checkpoint_id, directory):
+    """Refuse at save time a route record that its question's loop-history review would always refuse."""
+    if not (isinstance(decision, dict) and _text(decision.get("question_id"))
+            and all(key in decision for key in CHECKPOINT_ROUTE_FIELDS)):
+        return  # Opaque contexts are never read as route decisions.
+    try:
+        _checkpoint_route(decision, checkpoint_id, Path(directory), set(), True)
+        if decision["outcome"] == "rejected" and "rejected_domain" in decision:
+            # Review resolves the witness from its own working directory; only an absolute path stays valid.
+            _require(Path(decision["falsification"]["path"]).is_absolute(), "Domain witness path must be absolute")
+    except (ValueError, KeyError, TypeError, AttributeError, RecursionError, OSError) as exc:
+        raise ValueError("Checkpoint decision for question " + json.dumps(decision["question_id"][:80], ensure_ascii=False)
+                         + " would block loop-history review: "
+                         + str(exc) + ". Record the structured candidate from the Advisor output, "
+                         "or save the note without the route fields (" + ", ".join(CHECKPOINT_ROUTE_FIELDS) + ")") from exc
 
 
 def _loop_route(candidate):
