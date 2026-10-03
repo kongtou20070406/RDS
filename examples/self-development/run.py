@@ -2,6 +2,7 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -14,6 +15,15 @@ PATTERNS = ["test_rds_artifacts.py", "test_rds_costs.py", "test_rds_experiments.
             "test_rds_frontier_history.py", "test_rds_advancement.py", "test_rds_advancement_cli.py",
             "test_rds_research_note.py", "test_rds_research_note_cli.py", "test_rds_history_preflight.py"]
 
+# Only versioned public inputs enter the development copy. Never copy the
+# checkout's Git metadata, local host configuration or private research state.
+PUBLIC_DIRECTORIES = {"scripts", "tests", "references", "examples", "benchmark",
+                      "docs", "formal", "native", "integrations", "agents", ".github"}
+PUBLIC_ROOT_FILES = {"SKILL.md", "LICENSE", "README.md", "README.zh-CN.md", "README.ja-JP.md",
+                     "CONTRIBUTING.md", "CONTRIBUTING.zh-CN.md", "CHANGELOG.md", "requirements-formal.txt"}
+EXCLUDED_PARTS = {".rds", ".git", ".lake", "target", "__pycache__", ".venv", "node_modules",
+                  ".codex", ".agents", ".env", "dist"}
+
 
 def write(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -22,6 +32,63 @@ def write(path, value):
 
 def file_sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def git(source, *arguments, input=None):
+    # Do not let inherited Git variables redirect the source/index or inject a
+    # repository configuration. The independent index has no copied remotes.
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+    return subprocess.run(["git", "--literal-pathspecs", "-C", str(source), *arguments],
+                          input=input, env=env, check=True, capture_output=True, timeout=30)
+
+
+def freeze_public_source(source, root):
+    """Copy current bytes of tracked public files, with a fresh package index."""
+    entries = []
+    for record in git(source, "ls-files", "--stage", "-z").stdout.decode("utf-8").split("\0"):
+        if not record:
+            continue
+        metadata, name = record.split("\t", 1)
+        mode, blob, stage = metadata.split()
+        relative = Path(name)
+        if relative.is_absolute() or ".." in relative.parts or "\\" in name:
+            raise ValueError("Invalid tracked source path: " + name)
+        if relative.parts[0] not in PUBLIC_DIRECTORIES and name not in PUBLIC_ROOT_FILES:
+            continue
+        if (EXCLUDED_PARTS.intersection(relative.parts) or relative.name.startswith(".env")
+                or relative.suffix in {".pyc", ".pyo"}):
+            continue
+        if stage != "0" or mode not in {"100644", "100755"}:
+            raise ValueError("Unmerged or non-regular public source: " + name)
+        original = source / relative
+        if (any(source.joinpath(*relative.parts[:end]).is_symlink()
+                for end in range(1, len(relative.parts) + 1))
+                or not original.is_file() or not original.resolve().is_relative_to(source.resolve())):
+            raise ValueError("Missing, linked or escaping public source: " + name)
+        entries.append({"path": relative.as_posix(), "index_blob": blob, "mode": mode,
+                        "sha256": file_sha(original)})
+    if not entries:
+        raise ValueError("No tracked public source files")
+    for entry in entries:
+        target = root / entry["path"]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source / entry["path"], target)
+        if file_sha(target) != entry["sha256"]:
+            raise ValueError("Public source changed while copying: " + entry["path"])
+    try:
+        head = git(source, "rev-parse", "--verify", "HEAD").stdout.decode("ascii").strip()
+    except subprocess.CalledProcessError:
+        head = None  # An index-only development source has no accepted commit.
+    snapshot = {"schema": "rds-development-source-v1", "source_kind": "git-index-working-tree",
+                "source_head": head, "files": entries,
+                "git_metadata": "new local index; original metadata/configuration not copied"}
+    write(root / "source-snapshot.json", snapshot)
+    git(root, "init", "--quiet", "--template=")
+    paths = b"\0".join(entry["path"].encode("utf-8") for entry in entries) + b"\0"
+    git(root, "-c", "core.autocrlf=false", "-c", "core.safecrlf=false", "add", "--force",
+        "--pathspec-from-file=-", "--pathspec-file-nul", input=paths)
+    return entries
 
 
 def main():
@@ -46,39 +113,17 @@ def main():
     if root.exists() and any(root.iterdir()):
         parser.error("Use a new empty workspace; existing research state is never overwritten")
     root.mkdir(parents=True, exist_ok=True)
-    for folder in ("scripts", "tests", "references", "examples", "benchmark"):
-        shutil.copytree(REPO / folder, root / folder, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-    shutil.copyfile(Path(__file__).with_name("test_driver.py"), root / "test_driver.py")
+    sources = freeze_public_source(REPO, root)
+    shutil.copyfile(root / "examples/self-development/test_driver.py", root / "test_driver.py")
     config = {"test_patterns": patterns, "goal": "Validate actual RDS development behavior", "scientific_claim": None}
     write(root / "development-config.json", config)
-    bindings = [{"path": p.relative_to(root).as_posix(), "sha256": file_sha(p), "role": "code"}
-                for p in sorted((root / "scripts").glob("*.py"))]
-    data = [{"path": "tests/" + pattern, "sha256": file_sha(root / "tests" / pattern), "role": "data"}
-            for pattern in patterns]
-    fixture_paths = ["examples/experiment-templates/templates.json", "examples/rsi/base-graph.json",
-                     "examples/rsi/candidate-rule.json", "examples/rsi/cases.json", "references/theory-tools.json",
-                     "examples/goal-linked-hypergraph.json"]
-    data.extend({"path": path, "sha256": file_sha(root / path), "role": "data"} for path in fixture_paths)
-    if "test_rds_advancement_cli.py" in patterns:
-        path = "examples/advancement-loop/run.py"
-        bindings.append({"path": path, "sha256": file_sha(root / path), "role": "code"})
-    if "test_rds_research_note_cli.py" in patterns:
-        path = "examples/lightweight/RESEARCH.md"
-        data.append({"path": path, "sha256": file_sha(root / path), "role": "data"})
-    # The historical evaluator consumes these inputs/targets after exploration;
-    # bind their original bytes once at execution admission, like other fixtures.
-    data.extend({"path": p.relative_to(root).as_posix(), "sha256": file_sha(p), "role": "data"}
-                for p in sorted((root / "benchmark/advisor-frontier").rglob("*.json"))
-                if "results" not in p.relative_to(root / "benchmark/advisor-frontier").parts)
-    if args.all_tests:
-        bindings.extend({"path": p.relative_to(root).as_posix(), "sha256": file_sha(p), "role": "code"}
-                        for p in sorted((root / "benchmark").rglob("*.py")))
-        data.extend({"path": p.relative_to(root).as_posix(), "sha256": file_sha(p), "role": "data"}
-                    for p in sorted((root / "examples/formal").glob("*.json")))
-        data.extend({"path": path, "sha256": file_sha(root / path), "role": "data"}
-                    for path in ("references/judgment-graph.yaml", "references/scientific_tuning_principles.json",
-                                 "examples/advisor-search/boundary-context.json"))
-    bindings.extend(data)
+    # Dynamic fixtures, native locks, documents and package inputs all belong
+    # to this workload's identity, regardless of how a test imports them.
+    bindings = [{"path": item["path"], "sha256": item["sha256"],
+                 "role": "code" if Path(item["path"]).suffix in {".py", ".mjs", ".lean", ".rs"} else "data"}
+                for item in sources]
+    bindings.extend({"path": path, "sha256": file_sha(root / path), "role": "data"}
+                    for path in ("source-snapshot.json", ".git/index", ".git/config"))
     bindings.extend({"path": path, "sha256": file_sha(root / path), "role": role}
                     for path, role in (("development-config.json", "config"), ("test_driver.py", "evaluator")))
     # Use the runner's documented role-hash convention, from the exact source copy.

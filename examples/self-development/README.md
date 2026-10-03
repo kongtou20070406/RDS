@@ -8,7 +8,9 @@ From the repository root:
 python -B examples/self-development/run.py --workspace C:\rds-development\iteration-1
 ```
 
-Add `--all-tests` to run every public test module. The copied workspace includes the benchmark support package required by the full suite; its test inputs are bound at admission along with the program.
+Add `--all-tests` to run every public test module, or repeat `--test-pattern test_module.py` for a bounded repair. The same tracked public snapshot supports either selection: programs/tests, benchmark fixtures, docs/Skill, OMP integrations, formal/native sources and locks, and package root resources such as LICENSE. Stage new public files before running; untracked files are excluded.
+
+`source-snapshot.json` records the original commit (when available), index blob identities and hashes of the actual working-tree bytes. Every exported input is bound at admission, including documents, locks and the package index. A new local Git index supports the real package/relocation tests; it is not the original repository's history. No original Git metadata, remotes, credentials, local host configuration, private `.rds` state or generated build/cache directories are copied. Missing tracked inputs, unresolved merge entries and symlinks are rejected. Only explicitly allowed public paths are exported; tracking a file is not permission to publish private content.
 
 Choose a new, empty directory outside the repository. The example rejects an existing or nested directory. It uses the current Python executable and standard-library process runner; the selected tests may use the repository's optional formal dependencies.
 
