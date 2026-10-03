@@ -281,6 +281,37 @@ class AdviseTests(unittest.TestCase):
         self.assertIn('run', review['dependency_review']['receipt_blocked_node_ids'])
         self.assertEqual(review['obstruction_review'][0]['receipt_audit']['status'], 'RECEIPT_BODY_INVALID')
 
+    def advise_cli(self, *bodies):
+        with tempfile.TemporaryDirectory() as raw:
+            work = Path(raw)
+            self.ledger = raw_ledger(work / 'ledger', *bodies)
+            (work / 'context.json').write_text(json.dumps(self.ctx(DEEP_LEARNING)), encoding='utf-8')
+            (work / 'graph.json').write_text(json.dumps(route(DEEP_LEARNING[0])), encoding='utf-8')
+            before = ledger_bytes(self.ledger)
+            proc = cli(work, 'advise', '--research-context', str(work / 'context.json'),
+                       '--graph', str(work / 'graph.json'))
+            self.assertNotIn('Traceback', proc.stderr)
+            self.assertEqual(proc.returncode, 0, proc.stderr[-800:])
+            self.assertEqual(ledger_bytes(self.ledger), before)
+        return next(row['search'] for row in json.loads(proc.stdout)['recommendations']
+                    if row.get('type') == 'EXECUTABLE_DIRECTION_SEARCH')['selection_review']
+
+    def test_duplicate_receipts_leave_the_obstruction_cause_unknown_in_either_order(self):
+        # Row order must not pick the timed-out receipt and turn it into a declared execution cap (#112).
+        timed_out = json.dumps({'schema': 1, 'run_id': 'r0', 'sha256': SHA, 'run_status': 'FAILED', 'timeout': True})
+        alone = self.advise_cli(timed_out)['obstruction_review'][0]
+        self.assertEqual((alone['receipt_audit']['status'], alone['receipt_audit']['execution_cap']),
+                         ('RECEIPT_FOUND', 'TIMEOUT'))
+        for index, bodies in enumerate(((timed_out, VALID), (VALID, timed_out))):
+            with self.subTest(order=index):
+                review = self.advise_cli(*bodies)
+                [row] = review['dependency_review']['receipt_audit']['audits']
+                self.assertEqual(row['status'], 'RECEIPT_AMBIGUOUS')
+                self.assertIn('run', review['dependency_review']['receipt_blocked_node_ids'])
+                entry = review['obstruction_review'][0]
+                self.assertEqual(entry['receipt_audit'], {'status': 'RECEIPT_AMBIGUOUS'})
+                self.assertEqual((entry['response'], entry['cause_status']), ('DISCRIMINATING_CHECK', 'UNKNOWN'))
+
 
 class GoalLinkGuardTests(unittest.TestCase):
     """`exec` with require_goal_link audits through the same consumer; a non-object receipt blocks the path."""
