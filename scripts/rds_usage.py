@@ -1,6 +1,8 @@
 """Local, process-safe CLI invocation counts; no prompts or argument payloads."""
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import date, datetime, timedelta, timezone
+import errno
 import os
 from pathlib import Path
 import sqlite3
@@ -26,15 +28,29 @@ COMMAND_ALIASES = {"exec": {"execute", "test", "eval", "start", "执行", "运�
                    "math": {"assets", "数学", "资产"}, "rsi": {"tools", "evolve", "演化", "工具"},
                    "execute": {"exec", "执行"}, "save": {"record", "保存"}, "restore": {"resume", "恢复"}}
 _last_error = None
+_active_path = ContextVar('rds_usage_path', default=None)
 
 
 def log_path():
+    active = _active_path.get()
+    if active is not None:
+        return active
     override = os.environ.get("RDS_USAGE_DB")
     if override:
         return Path(override).expanduser().resolve()
+    state = os.environ.get("XDG_STATE_HOME")
     local = os.environ.get("LOCALAPPDATA")
-    base = Path(local) if local else Path.home() / ".local" / "state"
+    base = Path(state).expanduser().resolve() if state else Path(local) if local else Path.home() / ".local" / "state"
     return base / "ResearchDirectionSelector" / "cli-usage.sqlite3"
+
+
+def _unwritable(exc):
+    # Only storage access failures justify changing the automatic location.
+    # Busy writers, damaged databases and rejected inserts remain visible.
+    if isinstance(exc, OSError):
+        return isinstance(exc, PermissionError) or exc.errno in {errno.EACCES, errno.EPERM, errno.EROFS}
+    code = getattr(exc, 'sqlite_errorcode', None)
+    return isinstance(code, int) and code & 255 in {sqlite3.SQLITE_READONLY, sqlite3.SQLITE_PERM, sqlite3.SQLITE_CANTOPEN}
 
 
 @contextmanager
@@ -138,15 +154,34 @@ def _log_failure(phase, exc):
         pass
 
 
-def run_logged(function, argv, version):
+def run_logged(function, argv, version, *, root=None):
+    """Pin one database per invocation, including reports and exceptional exits."""
+    context = _active_path.set(None)
+    try:
+        return _run_logged(function, argv, version, root=root)
+    finally:
+        _active_path.reset(context)
+
+
+def _run_logged(function, argv, version, *, root):
     """Record starts and exits; log failures never change the command's result."""
     global _last_error
     token, code, started = None, None, time.perf_counter()
     _last_error = None
     try:
+        _active_path.set(log_path())
         token = _start(argv, version)
     except (OSError, sqlite3.Error, ValueError) as exc:
-        _log_failure("start", exc)
+        if (root is not None and _unwritable(exc)
+                and not os.environ.get('RDS_USAGE_DB') and not os.environ.get('XDG_STATE_HOME')):
+            try:
+                resolved = Path(root() if callable(root) else root).resolve()
+                _active_path.set(resolved / '.rds' / 'usage' / 'cli-usage.sqlite3')
+                token = _start(argv, version)
+            except (OSError, sqlite3.Error, ValueError) as fallback_error:
+                _log_failure('start', fallback_error)
+        else:
+            _log_failure("start", exc)
     try:
         result = function()
         code = result if type(result) is int else 0
