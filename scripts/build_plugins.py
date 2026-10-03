@@ -17,7 +17,7 @@ SOURCE = Path(__file__).resolve().parent.parent
 DIRECTORIES = {"scripts", "references", "docs", "examples", "agents", "formal",
                "native", "benchmark", "tests"}
 ROOT_FILES = {"SKILL.md", "LICENSE", "README.md", "README.zh-CN.md", "README.ja-JP.md",
-              "CONTRIBUTING.md", "CONTRIBUTING.zh-CN.md", "CHANGELOG.md", "requirements-formal.txt"}
+              "CONTRIBUTING.md", "CONTRIBUTING.zh-CN.md", "requirements-formal.txt"}
 EXCLUDED = {".rds", ".git", ".lake", "target", "__pycache__", ".venv"}
 
 

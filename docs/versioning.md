@@ -27,7 +27,7 @@ Before publishing, complete these checks for the exact release revision:
 1. Record the exact commit SHA on `main`. The tag, source package and release notes must identify that revision.
 2. Align CLI `VERSION`, Skill `metadata.version` and the tag to the same numerical release. Tags have a `v` prefix; CLI `VERSION` does not. For 5.8.0: CLI `5.8.0`, Skill `v5.8.0`, tag `v5.8.0`.
 3. Preserve read compatibility with old ledgers for compatible releases. For a breaking release, provide and verify the migration path, describe the supported old formats, and retain recovery evidence.
-4. Update the changelog and run verification appropriate to the accumulated changes. Retain local results and CI evidence for the release revision; distinguish earlier-revision evidence, actual passes, skips and unavailable coverage.
+4. Run verification appropriate to the accumulated changes. Retain local results and CI evidence for the release revision; distinguish earlier-revision evidence, actual passes, skips and unavailable coverage. Prepare release notes as described in step 5.
 5. Write release notes describing delivered behavior, compatibility, validation and material limits. Engineering acceptance does not require demonstrated scientific gain. Unmeasured benchmarks, unresolved application premises and research hypotheses remain unknown or untested.
 
 Skill `metadata.engine` is a descriptive value, **`rds-cli-vMAJOR.MINOR`**; for this release it is `rds-cli-v5.8`. The actual `engine_id` binds source and environment hashes. A changed binding may require a new contract under the existing execution guard. That safety check alone is not a breaking version change: classify the release by changes to the public contract, not by every new source hash.
