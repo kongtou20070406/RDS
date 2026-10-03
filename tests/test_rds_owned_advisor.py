@@ -430,6 +430,29 @@ class OwnedAdvisorCLITests(unittest.TestCase):
                 finally:
                     self.root, self.env = original_root, original_env
 
+    def test_actions_the_advisor_would_discard_are_rejected_before_the_contract_freezes(self):
+        def node(policy, run_id):
+            return next(n for n in policy['graph']['nodes'] if n['id'] == run_id)['executable']['action']
+        variants = {
+            'one-next-decision': (lambda policy: [o.update(next_decision='review the bounded repair')
+                                                  for o in node(policy, 'repair')['outcomes']],
+                                  'no outcome can distinguish next decisions'),
+            'one-explanation': (lambda policy: node(policy, 'baseline').update(competing_explanations=['positive response']),
+                                'missing competing explanations or action'),
+            'no-observables': (lambda policy: node(policy, 'baseline').update(required_observables=[]),
+                               'missing required observables'),
+        }
+        for label, (change, reason) in variants.items():
+            with self.subTest(label=label):
+                result = self.initialize(mutate_policy=change, ok=False)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn('would never be admitted by the Advisor: ' + reason, result.stderr)
+                self.assertFalse((self.root / '.rds/project.sqlite3').exists())
+                self.assertEqual(self.starts(), [])
+        # Corrected in the same root, the policy freezes and the Advisor selects a route.
+        self.initialize()
+        self.assertEqual(self.output('advise')['selected_run'], 'baseline')
+
     def test_missing_or_changed_negative_artifact_blocks_dispatch_and_can_be_recovered(self):
         self.initialize(mutate_policy=lambda value: value['context'].update(max_candidates=1))
         self.output('project', 'advance')
