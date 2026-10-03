@@ -427,7 +427,8 @@ def review(store, persist=True):
         run_index = {r['id']: r for r in state['runs']}
         priority = tuple(route['candidate'] for route in policy['routes']
                          if run_index.get(route['manifest']['id'], {}).get('status') in {'RESERVED', 'RUNNING'})
-        state_for_advisor = {'advisor_context': context, 'runs': state['runs'], 'receipts': state['receipts']}
+        state_for_advisor = {'contract': state['contract'], 'contract_sha256': digest(state['contract']),
+                             'advisor_context': context, 'runs': state['runs'], 'receipts': state['receipts']}
         recommendations = RDSAdvisor(store.root).recommend_next_directions(
             state_for_advisor, _dispatch_graph(policy, state['runs']), priority_action_ids=priority)
         advice = {'advisor_type': 'STRATEGIC_RESEARCH_ADVICE', 'recommendations': recommendations,
