@@ -15,7 +15,7 @@ from rds_verify_types import MAX_CERTIFICATE_BYTES, canonical, digest, require
 BACKEND = "lean4_statistical_library"
 VERSION = 1
 SEMANTICS = "conditional_statistical_theorem"
-MATHLIB_REV = "0df444a360eaa60ab8c11dca51a86af692955474"
+MATHLIB_REV = "d13f23b723b8a846827a245b89c10fc7d3f11612"
 ALLOWED_AXIOMS = {"propext", "Classical.choice", "Quot.sound"}
 THEOREMS = {
     "ville": ("Formal.Probability.Martingale", "Formal.Probability.ville_test", [
