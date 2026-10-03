@@ -12,7 +12,7 @@
 [![license](https://img.shields.io/badge/license-Apache%202.0-blue.svg?style=flat-square)](LICENSE)
 [![tests](https://github.com/kongtou20070406/research-direction-selector/actions/workflows/test.yml/badge.svg?branch=main&event=push)](https://github.com/kongtou20070406/research-direction-selector/actions/workflows/test.yml)
 
-把研究问题、已有证据和有限预算转化为能改变决策的实验——由你的 Agent 推进，由本地内核验证。
+将研究目标、证据和约束连接到有用的下一步——由 Advisor 引导决策，由内核检查有界执行。
 
 [English](README.md) · **简体中文** · [日本語](README.ja-JP.md)
 
@@ -22,13 +22,13 @@
 
 ## 科研闭环的两端
 
-RDS 的两端共享同一套研究状态：
+RDS 是以 Advisor 为决策中心的研究系统，两端协作并共享已记录的研究状态：
 
-**Agent 端** — `research-direction-selector` 智能体技能（`SKILL.md`）指导编码 Agent（Codex、Claude Code 等）理解研究目标、提出可证伪假说、设计公平对照，并将门禁反馈转化为结构化的下一步计划。Agent 用自然语言交流并规划实验。
+**Agent 端** — `research-direction-selector` 技能（`SKILL.md`）指导 Codex、Claude Code 等 Agent 明确原始目标、提出假说与候选路线、检查应用前提，并与研究者共同解读证据。
 
-**内核端** — 本地参考引擎（`scripts/rds_cli.py`）管理事务级 SQLite 预算、AST 与有限声明式形式化门禁、基线缓存、遥测压缩，以及基于证据的 Advisor 建议引擎。
+**程序端** — 本地 CLI（`scripts/rds_cli.py`）将支持的行动绑定到源码、输入与资源，检查准入并保存结果和回执。具有冻结 `advisor_policy` 的项目会更新程序持有的状态，并由 Advisor 在派发前选择下一条允许的路线。
 
-两端共同读写 `.rds/` 状态存储和 `references/judgment-graph.yaml` 因果规则。
+闭环为 **目标与约束 → Advisor 决策 → 受约束执行 → 结果与回执 → 更新研究状态 → Advisor**。项目记录保存在 `.rds/`；`references/judgment-graph.yaml` 提供有适用范围的方法论规则，并非自动改写的、已获证明的因果规律集合。未满足的目标谓词保持 `FALSE`；缺失或不确定的科学支持保持 `UNKNOWN`。
 
 [5.8 完整目标与协作计划](docs/5.8-vision.zh-CN.md)公开目标关联的选路闭环、可检验的转向、按需理论工具库和可分工事项，区分已有实现与待审开发；5.8.0 仍未发布。
 
@@ -43,29 +43,25 @@ RDS 的两端共享同一套研究状态：
 | **① 科研规程：Skill** | 引导 Agent 理解目标、提出假说、设计对照并规划下一步 | **这轮研究应该怎样思考和推进？** |
 | **② 执行与验收内核** | 管理实验状态、调用运行工具、收集结果，检查预算和证据 | **实验怎么跑？结果满足哪些预定条件？** |
 | **③ 研究状态与记忆** | 跨会话保存目标、配置、结果、失败条件和决策依据 | **我们已经做过什么、知道什么，为什么走到这里？** |
-| **④ Advisor 建议引擎** | 根据观测、历史和规则，提出诊断线索与候选行动 | **面对当前情况，下一步可以尝试什么？** |
+| **④ Advisor 建议引擎** | 将原始目标、当前证据、约束与候选路线连接到下一行动或明确阻塞 | **接下来可以执行什么，什么证据会改变决定？** |
 | **⑤ 自改进模块：RSI** | 提出规则或策略修改，并在采用前进行评测 | **RDS 自己哪些判断和做法需要改进？** |
 
 ```mermaid
 flowchart TD
-    subgraph Foundational_loop[基础闭环]
-        S["① Skill（科研规程）"] --> K["② 执行与验收内核"]
-        K --> M["③ 研究状态与记忆"]
-        M --> S
-    end
-    subgraph Enhancement_engines[增强引擎]
-        M -. 历史记录与规则图 .-> A["④ Advisor 建议引擎"]
-        A -. 候选探索建议 .-> S
-        M -. 失败记录与反例 .-> R["⑤ RSI 自改进模块"]
-        R -. 修订后的规则与策略 .-> M
-    end
+    S["① Skill：目标、范围与候选提案"] --> A["④ Advisor：下一行动或阻塞"]
+    M["③ 研究状态与记忆"] -->|证据与剩余资源| A
+    A -->|策略绑定项目中选定的允许路线| K["② 执行与验收内核"]
+    K -->|结果、回执与恢复状态| M
+    A -->|缺失证据或修订提案| S
+    M -. 失败证据 .-> R["⑤ RSI：工具或策略变更提案"]
+    R -. 有范围的评估与审查后采用 .-> M
 ```
 
 ### 容易混淆的三组关系
 
 - **Skill 和 Advisor：** Skill 定义研究的基本做法，例如公平对照，以及指标与机制的区别。Advisor 针对当前情况提出行动建议，例如检查训练是否充分，或尝试另一条候选路线。
 - **记忆和 Advisor：** 记忆保存发生过什么及其证据。Advisor 利用这些记录，建议接下来值得检查什么。
-- **Advisor 和 RSI：** Advisor 帮助改进正在研究的模型或实验。RSI 尝试改进 **RDS 自身的规则和决策策略**。
+- **Advisor 和 RSI：** Advisor 支持当前科研决策；有用的建议不等于任务收益已获证明。RSI 评估 **RDS 自身的规则、工具和决策策略** 变更；工程验收与科学决策收益提高需要不同证据。
 
 ### 其他名称属于哪里？
 
@@ -73,7 +69,7 @@ flowchart TD
 - **`.rds/` 项目记录、Obelisk 历史接口和判断图谱（`judgment-graph.yaml`）**主要属于 **③ 研究状态与记忆**，供其他组件读取。
 - **L1–L5** 是研究框架中讨论的[能力层级](docs/research-autonomy.md)，不是额外组件。
 
-**前 3 个组件支撑基本科研闭环；Advisor 增加主动建议；RSI 增加对工具自身的改进。** 系统由 **3 个基础组件 + 2 个增强组件组成，共 5 个**。
+**3 个基础组件 + 2 个增强组件** 是同一闭环中的五项职责。Advisor 是证据与下一行动之间的决策接口；这不意味着每个连接都已自主执行，也不证明闭环提高了科学收益。见[科研工作流](docs/research-workflow.zh-CN.md)和[自主程度边界](docs/research-autonomy.md)。
 
 ---
 
@@ -143,7 +139,7 @@ python -B scripts/rds_cli.py --root ./my-project project costs
 python -B scripts/rds_cli.py --root ./my-project project status
 ```
 
-内核会从账本记录状态推导活动的下一步。任意时刻运行
+本例没有 `advisor_policy`，内核会从账本状态推导程序流程的下一步。任意时刻运行
 `python -B scripts/rds_cli.py --root ./my-project project next`，
 即可打印当前应做的一步（注册、执行、恢复、对比或记录决定）及其可运行命令；
 智能体重复这一步即可驱动整个循环，无需记住上面的命令序列。
@@ -188,7 +184,9 @@ python -B scripts/rds_cli.py --root . formal check --spec examples/formal/theore
 
 ## Advisor：基于证据的建议
 
-[程序持有证据的工作流](docs/program-owned-advisor.md)先固定目标、允许的路线和结果读取规则。RDS 自动将运行收据与输出纳入当前证据图，选择有界的下一步，并在执行前核查。这限制了调用方在已声明工作流内挑选信息的权限，但不证明科研结论正确，也不管控 RDS 外部的命令。
+[程序持有证据的工作流](docs/program-owned-advisor.md)先固定目标谓词、允许的路线和结果读取规则。`project advance` 至多执行一条由程序选定的路线，结算回执、收集已声明输出到当前证据图，并返回下一次 Advisor 报告。已完成路线保留证据，但不再占用可执行候选名额。采集恢复复用已有结果，不重复已完成的实验。没有 `advisor_policy` 的项目保留原有调用方引导方式。
+
+Advisor 在已有候选空间内，将原始目标连接到当前事实与约束。结果可能使一条路线可执行、使声明目标成立、暴露阻塞，或促使提出转向方案。Agent 仍需提供新假说、检查应用前提并配合领域验证器；程序不会悄然扩大冻结策略。这限制的是已声明 RDS 入口内的信息挑选，不是 RDS 外部命令。
 
 `scripts/rds_advisor.py` 利用已记录的证据和方法论图谱提出下一步建议：
 - **先有证据，再做诊断** — 单个 loss 值不足以支持过拟合或欠拟合诊断。成对曲线或可比较的观测为候选解释提供背景。
@@ -198,6 +196,8 @@ python -B scripts/rds_cli.py --root . formal check --spec examples/formal/theore
 ```powershell
 python -B scripts/rds_cli.py --root ./my-project advise
 ```
+
+真实 CLI 工作流和回归测试验证的是上述工程行为。即使两个命令都成功，目标谓词仍可能为 `FALSE`；即使达到数值阈值，科学支持仍可能为 `UNKNOWN`。更好的科研决策或 RSI 策略收益需要在未用过的案例上，以相同总预算进行公平的前瞻比较，并计入失败和评估成本；这里尚未确立该收益。
 
 ---
 
