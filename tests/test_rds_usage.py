@@ -455,6 +455,39 @@ class UsageTests(unittest.TestCase):
         self.assertEqual(report['daily'][0]['unfinished'], 0, evidence)
         self.assertTrue(all(row["exit_code"] == 0 for row in ledger_snapshot(self.path)["calls"]), evidence)
 
+    def test_failed_schema_initialization_leaves_no_partial_tables_and_recovers(self):
+        original = sqlite3.connect
+        def reject_index(*args, **kwargs):
+            connection = original(*args, **kwargs)
+            connection.set_authorizer(lambda action, *_:
+                sqlite3.SQLITE_DENY if action == sqlite3.SQLITE_CREATE_INDEX else sqlite3.SQLITE_OK)
+            return connection
+        warning = io.StringIO()
+        with patch("rds_usage.sqlite3.connect", side_effect=reject_index), redirect_stderr(warning):
+            self.assertEqual(usage.run_logged(lambda: 7, ["status"], "test"), 7)
+        self.assertIn("[RDS-USAGE-DEGRADED] start logging failed", warning.getvalue())
+        with closing(original(self.path)) as db:
+            self.assertEqual(db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall(), [])
+        self.assertEqual(usage.run_logged(lambda: 0, ["status"], "test"), 0)
+        report = usage.summarize(days=1)
+        self.assertEqual(report["total_calls"], 1)
+        self.assertEqual(report["daily"][0]["successful"], 1)
+
+    def test_partial_existing_schema_preserves_rows_and_journal_mode(self):
+        self.assertEqual(self.cli("--version").returncode, 0)
+        with closing(sqlite3.connect(self.path)) as db:
+            journal = db.execute("PRAGMA journal_mode").fetchone()[0]
+            db.execute("DROP INDEX calls_day")
+            db.commit()
+        before = ledger_snapshot(self.path)["calls"]
+        self.assertEqual(usage.run_logged(lambda: 7, ["status"], "test"), 7)
+        after = ledger_snapshot(self.path)["calls"]
+        self.assertEqual(after[:1], before)
+        self.assertEqual(after[1]["exit_code"], 7)
+        with closing(sqlite3.connect(self.path)) as db:
+            self.assertEqual(db.execute("PRAGMA journal_mode").fetchone()[0], journal)
+            self.assertEqual(db.execute("SELECT name FROM sqlite_master WHERE type='index'").fetchall(), [("calls_day",)])
+
     def test_slow_schema_initialization_retains_first_concurrent_calls(self):
         # Three separate schema commits consume the ten-second start budget
         # under this declared slow-storage fixture. One schema transaction
