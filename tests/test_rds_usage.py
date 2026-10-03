@@ -168,6 +168,37 @@ class SandboxUsageTests(unittest.TestCase):
                 self.assertFalse(other.exists())
                 self.assertFalse(self.fallback.exists())
 
+    def test_option_looking_root_value_does_not_create_usage_files(self):
+        self.readonly_default()
+        result = self.cli('--root', '--help', 'advise', '--help')
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn('expected one argument', result.stderr)
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_option_looking_root_aliases_and_placements_leave_cwd_untouched(self):
+        self.readonly_default()
+        for index, argv in enumerate((
+                ['advise', '--workspace', '--help', '--help'],
+                ['-w', '--help', 'advise', '--help'],
+                ['--project-root=--help', 'advise', '--help'],
+                ['--dir', '--version', 'advise', '--help'],
+                ['--root', '--', 'advise', '--help'])):
+            with self.subTest(argv=argv):
+                cwd = self.folder / ('invalid root case ' + str(index))
+                cwd.mkdir()
+                result = subprocess.run([sys.executable, '-B', str(ROOT / 'scripts/rds_cli.py'), *argv],
+                    cwd=cwd, capture_output=True, text=True, encoding='utf-8', timeout=30)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertEqual(list(cwd.iterdir()), [])
+
+    def test_explicit_path_named_like_an_option_remains_a_valid_root(self):
+        self.readonly_default()
+        target = self.root / '--help'
+        result = self.cli('--root', str(target), 'advise', '--help')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('RDS-USAGE-DEGRADED', result.stderr)
+        self.assertEqual(self.rows(target / '.rds/usage/cli-usage.sqlite3'), [('advise', 'help', 0)])
+
     def test_real_exec_help_does_not_use_child_root_options(self):
         self.readonly_default()
         other = str(self.folder / 'child root')
