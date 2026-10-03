@@ -1,4 +1,6 @@
 import copy
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -112,6 +114,83 @@ class TheoryProgressionTests(unittest.TestCase):
                 self.assertEqual(result["status"], "UNKNOWN")
                 self.assertEqual(result["stages"][-1]["result"]["status"], "UNKNOWN")
                 self.assertEqual(result["stages"][-1]["result"]["assurance"], "NONE")
+
+    def test_unaccepted_native_leaf_never_passes_regardless_of_diagnostic(self):
+        diagnostics = ({}, {"reason": None}, {"reason": ""}, {"reason": "  "}, {"reason": 0},
+                       {"reason": ["unavailable"]}, {"reason": {"message": "unavailable"}},
+                       {"tactics": [{"reason": 7}]}, {"tactics": None})
+        responses = ({"status": "UNKNOWN", "assurance": "NONE"},
+                     {"status": "FAIL", "assurance": "NONE"},
+                     {"status": "PASS", "assurance": "NONE"},
+                     {"status": "PASS", "assurance": "LEAN_KERNEL_CHECKED"},
+                     {"status": "PASS", "assurance": "LEAN_KERNEL_CHECKED",
+                      "certificate": {"verdict": "PASS", "spec_sha256": "foreign"}},
+                     {"status": "PASS", "assurance": "LEAN_KERNEL_CHECKED",
+                      "certificate": {"verdict": "UNKNOWN", "spec_sha256": "foreign"}})
+        for response in responses:
+            for diagnostic in diagnostics:
+                with self.subTest(response=response, diagnostic=diagnostic):
+                    check = mock.Mock(return_value={**response, **diagnostic})
+                    result = progression.run_progression({**SPEC, "domain": ["1"]}, native_verify=check)
+                    self.assertEqual(result["status"], "UNKNOWN")
+                    self.assertEqual(result["assurance"], "NONE")
+                    native = result["stages"][-1]["result"]
+                    self.assertEqual(native["status"], "UNKNOWN")
+                    self.assertEqual(native["assurance"], "NONE")
+                    self.assertEqual(native["transport"]["pairs_checked"], 0)
+                    self.assertIsNone(native["leaves"][0]["certificate"])
+                    self.assertEqual(native["leaves"][0]["status"], "UNKNOWN")
+                    self.assertIsInstance(native["reason"], str)
+                    self.assertTrue(native["reason"])
+                    self.assertEqual(check.call_count, 1)
+
+    def test_native_failure_stops_dispatch_and_does_not_count_as_a_checked_pair(self):
+        for failure_index in (0, 1, 3):
+            with self.subTest(failure_index=failure_index):
+                seen = []
+
+                def check(spec):
+                    seen.append(spec)
+                    if len(seen) == failure_index + 1:
+                        return {"status": "UNKNOWN", "assurance": "NONE", "reason": None}
+                    return native_pass(spec)
+
+                result = progression.run_progression(SPEC, native_verify=check)
+                native = result["stages"][-1]["result"]
+                self.assertEqual(result["status"], "UNKNOWN")
+                self.assertEqual(result["assurance"], "NONE")
+                self.assertEqual(native["status"], "UNKNOWN")
+                self.assertEqual(native["assurance"], "NONE")
+                self.assertEqual(len(seen), failure_index + 1)
+                self.assertEqual(native["transport"]["pairs_checked"], failure_index)
+                self.assertEqual([leaf["status"] for leaf in native["leaves"]],
+                                 ["PASS"] * failure_index + ["UNKNOWN"])
+                self.assertTrue(all(leaf["certificate"] for leaf in native["leaves"][:-1]))
+                self.assertIsNone(native["leaves"][-1]["certificate"])
+
+    def test_cli_unknown_native_leaf_with_null_reason_returns_two(self):
+        import rds_theory_tools
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "spec.json"
+            path.write_text(json.dumps({**SPEC, "domain": ["1"]}), encoding="utf-8")
+            output = io.StringIO()
+            with mock.patch("rds_verify.LeanFormalEngine.verify", return_value={
+                    "status": "UNKNOWN", "assurance": "NONE", "reason": None}) as native, \
+                    mock.patch.object(sys, "argv", ["rds_theory_tools.py", "--progression", str(path)]), \
+                    contextlib.redirect_stdout(output):
+                exit_code = rds_theory_tools.main()
+            self.assertEqual(exit_code, 2, output.getvalue())
+            report = json.loads(output.getvalue())
+            self.assertEqual(report["status"], "UNKNOWN")
+            self.assertEqual(report["assurance"], "NONE")
+            self.assertEqual([stage["result"]["status"] for stage in report["stages"]],
+                             ["PASS", "PASS", "UNKNOWN"])
+            leaf = report["stages"][-1]["result"]["leaves"][0]
+            self.assertEqual(leaf["status"], "UNKNOWN")
+            self.assertEqual(leaf["assurance"], "NONE")
+            self.assertIsNone(leaf["certificate"])
+            native.assert_called_once()
 
     def test_bounded_values_cannot_be_promoted_by_a_different_assurance(self):
         with mock.patch("rds_operators.BoundedFiniteModelOperator.verify_cayley_property",

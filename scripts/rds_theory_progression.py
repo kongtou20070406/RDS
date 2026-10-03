@@ -254,7 +254,7 @@ def run_progression(spec, *, native_verify=None):
     if native_verify is None:
         from rds_verify import LeanFormalEngine
         native_verify = lambda obligation: LeanFormalEngine().verify(obligation, ("lean4",))
-    leaves, leaf_failure = [], None
+    leaves, leaf_failure, leaf_failed = [], None, False
     for left_index, a in enumerate(values):
         for right_index, b in enumerate(values):
             left_value = Fraction(table[labels[left_index], labels[right_index]])
@@ -283,23 +283,27 @@ def run_progression(spec, *, native_verify=None):
                     "certificate": certificate if native_pass else None}
             leaves.append(leaf)
             if leaf["status"] != "PASS":
-                attempts = answer.get("tactics", []) if isinstance(answer, dict) else []
-                attempt_reasons = [item.get("reason") for item in attempts if isinstance(item, dict)
-                                   and item.get("reason")]
+                leaf_failed = True
+                attempts = answer.get("tactics", [])
+                attempts = attempts if isinstance(attempts, list) else []
+                attempt_reasons = [item["reason"] for item in attempts if isinstance(item, dict)
+                                   and isinstance(item.get("reason"), str) and item["reason"].strip()]
+                reason = answer.get("reason")
                 leaf_failure = "; ".join(attempt_reasons) or (
-                    answer.get("reason", "Native Lean did not check this pair")
-                    if isinstance(answer, dict) else "Native Lean returned a malformed result")
+                    reason if isinstance(reason, str) and reason.strip()
+                    else "Native Lean did not check this pair")
                 break
-        if leaf_failure:
+        if leaf_failed:
             break
-    native_status = "PASS" if leaf_failure is None and len(leaves) == len(values) ** 2 else "UNKNOWN"
+    pairs_checked = sum(leaf["status"] == "PASS" for leaf in leaves)
+    native_status = "PASS" if pairs_checked == len(values) ** 2 else "UNKNOWN"
     native = _stage("native_lean", claim_sha256, previous_sha256,
                     {"status": native_status,
                      "assurance": "LEAN_KERNEL_CHECKED" if native_status == "PASS" else "NONE",
                      "transport": {"obligation": TRANSPORTS[2], "status": native_status,
                                    "source_table_sha256": table_sha256,
                                    "pairs_required": len(values) ** 2,
-                                   "pairs_checked": len(leaves)},
+                                   "pairs_checked": pairs_checked},
                      "leaves": leaves, "reason": leaf_failure})
     stages.append(native)
     chain_valid = all(_check_handoff(stages[index], STAGES[index], claim_sha256,
