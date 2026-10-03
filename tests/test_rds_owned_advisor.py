@@ -653,6 +653,8 @@ class OwnedAdvisorCLITests(unittest.TestCase):
         # callback, register/execute/admission and the public CLI remain in use.
         wrapper.write_text(r'''
 import json, pathlib, sys, time
+sys.stdout.reconfigure(encoding='utf-8')
+sys.stderr.reconfigure(encoding='utf-8')
 source, role, root = pathlib.Path(sys.argv[1]).resolve(), sys.argv[2], pathlib.Path(sys.argv[3]).resolve()
 gates = root / 'gates'
 sys.path.insert(0, str(source / 'scripts'))
