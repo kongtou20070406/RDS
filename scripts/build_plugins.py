@@ -104,11 +104,10 @@ def build(output, source=SOURCE):
                 "name": "rds-local", "owner": {"name": "RDS contributors"},
                 "plugins": [{"name": NAME, "source": "./" + NAME, "description": description}]})
         elif host == "codex":
-            overlay = {"name": NAME, "version": version, "description": description,
-                       "skills": "./skills/", "hooks": "./integrations/hooks.json"}
-            write_json(root / "plugin.json", {"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
-                       **identity, "extensions": {"com.openai": overlay}})
-            write_json(root / ".codex-plugin/plugin.json", overlay)
+            # Codex 0.160.0 skips bundled hooks for portable root plugin.json.
+            # Its native manifest supports both Skill and hook discovery.
+            write_json(root / ".codex-plugin/plugin.json", {
+                **identity, "skills": "./skills/", "hooks": "./integrations/hooks.json"})
             write_json(root / "integrations/hooks.json", hook_config(host))
             write_json(output / host / ".agents/plugins/marketplace.json", {
                 "name": "rds-local", "interface": {"displayName": "RDS local"},

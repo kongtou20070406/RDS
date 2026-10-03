@@ -44,10 +44,14 @@ codex plugin marketplace add ../rds-host-packages/codex
 codex plugin add research-direction-selector@rds-local
 ```
 
-The package supplies portable root `plugin.json` and a compatible
-`.codex-plugin/plugin.json` pointing to the same resources. The generated local
-marketplace is `.agents/plugins/marketplace.json`. In the desktop app, restart
-and select the **RDS local** marketplace in Plugins to install it.
+The package uses the native `.codex-plugin/plugin.json` manifest. Codex 0.160.0
+loads Skills but skips bundled hooks when a portable root `plugin.json` is
+present, including hooks declared in its `com.openai` extension. The native-only
+package exposes both resources; do not add a portable root manifest to this
+package. This was confirmed by an isolated native loader comparison and the
+[0.160.0 loader](https://github.com/openai/codex/blob/a956835d020762cb2b570053af06f643a11c0ecc/codex-rs/core-plugins/src/loader.rs#L952-L962).
+The generated local marketplace is `.agents/plugins/marketplace.json`. In the
+desktop app, restart and select **RDS local** in Plugins to install it.
 
 Installation does not trust hooks. Review the current definitions through the
 host's hooks controls (`/hooks` in Codex CLI); untrusted/disabled hooks do not
@@ -116,6 +120,18 @@ Advisor resources, and run the manifest hook commands using synthetic host
 payloads. OMP's Node tests exercise event ordering, errors and session cleanup.
 These are package/runtime regression checks, not an evaluation of a model's
 research decisions or proof that every host UI displays context identically.
+
+Native checks on 2026-10-03 used isolated configuration without model turns:
+
+| Host | Observed result | Boundary |
+| --- | --- | --- |
+| Claude Code 2.1.205 | `plugin validate` accepted the manifest | No live lifecycle or model display test |
+| Codex 0.160.0 | Plugin installed/enabled; `skills/list` found the Skill; `hooks/list` found all three native-manifest hooks as `source: plugin` | Hooks remained `untrusted`; discovery does not prove execution or model display |
+| OMP 18.4.3 | Isolated RPC loaded the native extension | No model turn or interactive footer display test |
+
+The Codex comparison first returned zero hooks with the portable root manifest;
+removing only that manifest exposed all three hooks while retaining the Skill.
+No hook trust setting was changed. Normal host trust and enablement still apply.
 
 ```text
 python -B -m unittest discover -s tests -p test_rds_conversation_hook.py -v

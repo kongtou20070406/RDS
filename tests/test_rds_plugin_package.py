@@ -89,6 +89,16 @@ class PluginPackageTests(unittest.TestCase):
             build_plugins.build(self.moved)
         self.assertEqual(marker.read_text(encoding="utf-8"), "preserve")
 
+    def test_codex_uses_native_manifest_without_portable_hook_suppression(self):
+        plugin = self.moved / "codex" / build_plugins.NAME
+        self.assertFalse((plugin / "plugin.json").exists(),
+                         "Codex 0.160.0 skips bundled hooks for portable root manifests")
+        manifest = json.loads((plugin / ".codex-plugin/plugin.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["name"], build_plugins.NAME)
+        self.assertTrue((plugin / manifest["skills"] / build_plugins.NAME / "SKILL.md").is_file())
+        hooks = json.loads((plugin / manifest["hooks"]).read_text(encoding="utf-8"))
+        self.assertEqual(set(hooks["hooks"]), {"SessionStart", "PreToolUse", "PostToolUse"})
+
     def test_untracked_private_content_does_not_enter_export(self):
         source = self.workspace / "minimal source"
         source.mkdir()
