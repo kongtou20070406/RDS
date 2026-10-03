@@ -2,6 +2,7 @@
 
 ## 5.8.0 — Unreleased
 
+- Keep whitespace-padded `UNKNOWN` protocol identities unresolved in control reuse and receipt/cost validation (#131). Classify missing values from stripped text, including nested lists and dictionaries, while retaining exact comparisons for real known identities. Real CLI regressions preserve `scientific_assessment=UNKNOWN`; no cached control is executed or historical record rewritten.
 - Record `host-hook` invocations under their public command instead of `other` (or generic `help` for help calls). Check the usage label catalog against the actual CLI parser and exercise the real help entry. This corrects command attribution only; it does not reconstruct older log rows or resolve #108's unknown original count-loss cause.
 - Normalize the Lean updater acceptance fixture's temporary root before comparing it with the updater's resolved root. Real Windows 8.3 aliases such as `RUNNER~1` name the same directory; a native alias regression retains all four upgrade-binding and no-build/commit/push assertions. The production updater and pinned Lean/Mathlib dependencies are unchanged.
 
