@@ -234,6 +234,55 @@ class ProjectStore:
         require(self.state_dir.resolve().is_relative_to(self.root), "State directory escapes project root")
         self.path = self.state_dir / "project.sqlite3"
         self.artifact_dir = self.state_dir / "project-artifacts"
+        self.last_advisor_review = None
+        self.last_advisor_observation = None
+
+    def _advisor_prepare(self, spec, contract):
+        """Read original evidence before taking the execution write lock."""
+        if "advisor_policy" not in contract:
+            return None
+        from rds_owned_advisor import prepare_admission
+        return prepare_admission(self, spec)
+
+    def _advisor_prepare_run(self, run_id, *, allow_observation=False):
+        with self._db(True) as db:
+            contract = self._contract(db)
+            if "advisor_policy" not in contract:
+                return None
+            run = self._run(db, run_id)
+            if (allow_observation and "execution_policy" in contract
+                    and (run["status"] != "RESERVED" or run["attempt_id"] is not None)):
+                return None
+        return self._advisor_prepare(run["manifest"], contract)
+
+    def _advisor_check(self, db, spec, token):
+        if "advisor_policy" not in self._contract(db):
+            return
+        require(token is not None, "Advisor admission is missing; collect and select the current route first")
+        from rds_owned_advisor import check_admission
+        check_admission(self, db, spec, token)
+
+    def _advisor_finished(self, contract):
+        """Collection is post-commit; never mutate the owned receipt or repeat a run."""
+        if "advisor_policy" not in contract:
+            return
+        try:
+            from rds_owned_advisor import after_finish
+            self.last_advisor_review = after_finish(self)
+        except Exception as exc:
+            # Even an unexpected collector failure leaves the receipt and settled
+            # budget intact. A later review/recovery retries collection only.
+            failure = {"status": "COLLECTION_FAILED", "reason": f"{type(exc).__name__}: {exc}",
+                       "next_move": "Retry Advisor collection; do not repeat the completed attempt"}
+            self.last_advisor_review = failure
+            try:
+                with self._db() as db:
+                    db.execute("INSERT INTO events(body) VALUES (?)", (canonical({
+                        "kind": "ADVISOR_COLLECTION_FAILED", **failure}),))
+            except Exception as record_error:
+                failure["record_error"] = f"{type(record_error).__name__}: {record_error}"
+        if isinstance(self.last_advisor_review, dict) and self.last_advisor_review.get("status") == "COLLECTION_FAILED":
+            print("Advisor collection pending: " + str(self.last_advisor_review.get("reason", "unknown error")), file=sys.stderr)
 
     def _path(self, relative, output=False, contract=None):
         require(isinstance(relative, str) and relative and not Path(relative).is_absolute()
@@ -426,7 +475,7 @@ class ProjectStore:
         require(isinstance(contract, dict) and type(contract.get("schema")) is int
                 and contract["schema"] == 1, "Project contract schema must be 1")
         require(set(contract) <= {"schema", "bindings", "allowed_commands", "output_roots", "output_files", "budget", "description",
-                                  "primary_metric", "objective_sha256", "execution_policy", "stop_policy", "maintenance_allowance"}, "Unknown contract fields")
+                                  "primary_metric", "objective_sha256", "execution_policy", "stop_policy", "maintenance_allowance", "advisor_policy"}, "Unknown contract fields")
         if "primary_metric" in contract:
             metric = contract["primary_metric"]
             require(isinstance(metric, dict) and set(metric) == {"name", "direction", "min_useful_delta"},
@@ -499,6 +548,9 @@ class ProjectStore:
         for unit, cap in budget.items():
             require(isinstance(unit, str) and unit and len(unit) <= 64, "Invalid resource name")
             number(cap, f"budget.{unit}")
+        if "advisor_policy" in contract:
+            from rds_owned_advisor import validate_policy
+            validate_policy(self, contract)
         canonical(contract)
         self.state_dir.mkdir(exist_ok=True)
         with self._db() as db:
@@ -546,6 +598,8 @@ class ProjectStore:
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             contract = self._contract(db)
+            require('advisor_policy' not in contract,
+                    'Program-owned Advisor requires project advance/create/execute; theory allowance cannot bypass it')
             require('stop_policy' not in contract and 'maintenance_allowance' not in contract,
                     'Configured stop/maintenance policies require project create/execute; theory allowance cannot bypass them')
             require(db.execute("SELECT 1 FROM runs WHERE id=?", (run_id,)).fetchone() is None, "Run ID already exists")
@@ -652,7 +706,9 @@ class ProjectStore:
             if 'execution_policy' in contract:
                 run['execution_route_sha256'] = execution_route(spec['argv'], bindings, outpaths, self.root,
                     contract.get('objective_sha256'), arm=spec['arm'], executor_sha256=run['executor_sha256'])
+            advisor_token = self._advisor_prepare(spec, contract)
             db.execute("BEGIN IMMEDIATE")
+            self._advisor_check(db, spec, advisor_token)
             require(db.execute("SELECT 1 FROM runs WHERE id=?", (run_id,)).fetchone() is None, "Run ID already exists")
             retained = self._runs(db)
             if 'execution_policy' in contract:
@@ -811,6 +867,7 @@ class ProjectStore:
         require(isinstance(background, bool), "background must be Boolean")
         if background and os.name != "nt":
             raise NotImplementedError("Background execution requires Windows Task Scheduler")
+        advisor_token = self._advisor_prepare_run(run_id, allow_observation=True)
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             run = self._run(db, run_id)
@@ -818,6 +875,7 @@ class ProjectStore:
             if 'execution_policy' in self._contract(db) and (run['status'] != 'RESERVED' or run['attempt_id'] is not None):
                 return self._observe(db, run)
             require(run["status"] == "RESERVED" and run["attempt_id"] is None, "Run already dispatched or started; recover never reruns it")
+            self._advisor_check(db, run["manifest"], advisor_token)
             self._check_start(db, run)
             run["attempt_id"] = uuid.uuid4().hex
             if background:
@@ -873,16 +931,23 @@ class ProjectStore:
                 path = self._path(output, True, contract)
                 require(output in inventory and path.is_file() and file_sha(path) == inventory[output],
                         'Existing successful output unavailable or changed: ' + output)
-        return {**receipt, 'execution_started': False, 'policy_observation': 'Retained receipt; scientific assessment is unchanged'}
+        observation = {'execution_started': False, 'policy_observation': 'Retained receipt; scientific assessment is unchanged'}
+        if "advisor_policy" in contract:
+            # Keep metadata outside the receipt's signed body for the new API.
+            self.last_advisor_observation = observation
+            return receipt
+        return {**receipt, **observation}
 
     def _execute_claim(self, run_id, attempt_id):
         attempt_start = time.monotonic()
         admission_error = None
+        advisor_token = self._advisor_prepare_run(run_id)
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             run = self._run(db, run_id)
             require(run["status"] == "RESERVED" and run["attempt_id"] == attempt_id, "Run cannot be started twice")
             self._runs(db)
+            self._advisor_check(db, run["manifest"], advisor_token)
             try:
                 self._check_start(db, run)
             except ValueError as exc:
@@ -939,11 +1004,13 @@ class ProjectStore:
             with (work / "stdout.bin").open("xb") as out, (work / "stderr.bin").open("xb") as err:
                 flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
                 argv = [run["executor"], *run["manifest"]["argv"][1:]]
+                advisor_token = self._advisor_prepare_run(run_id)
                 with self._db() as db:
                     db.execute("BEGIN IMMEDIATE")
                     current = self._run(db, run_id)
                     require(current["status"] == "RUNNING" and current["attempt_id"] == attempt_id
                             and current["pid"] is None, "Run cannot be started twice")
+                    self._advisor_check(db, current["manifest"], advisor_token)
                     self._check_start(db, current)
                     deadline = self._campaign_deadline(db, contract)
                     if deadline is not None:
@@ -1081,23 +1148,25 @@ class ProjectStore:
             self._runs(db)
             old = db.execute("SELECT run_id,sha256,body FROM receipts WHERE run_id=?", (run_id,)).fetchone()
             if old:
-                return self._receipt(old)
-            current = self._run(db, run_id)
-            require(current["attempt_id"] == attempt_id and current["status"] not in TERMINAL, "Run already terminal")
-            # Evidence collection can race with startup or progress. Recheck
-            # the latest identity while holding the settlement write lock.
-            if recovering and (current != run or _alive(current["worker_pid"]) is not False
-                               or _alive(current["pid"]) is not False):
-                return {**current, "recovery": "Run changed or process may still be active; no rerun or termination"}
-            if only_unstarted and current["status"] == "RUNNING":
-                return {**current, "dispatch_error": errors[0]}
-            for key, resource in resources.items():
-                db.execute("UPDATE budget SET reserved=reserved-?,spent=spent+?,charged=charged+? WHERE resource=?",
-                           (run["resource_estimates"][key], resource["measured"] or 0.0, resource["charged_estimate"], key))
-            current.update(status=status, finished_at=receipt["ended_at"], scheduler=receipt["scheduler"])
-            self._save(db, current)
-            db.execute("INSERT INTO receipts VALUES (?,?,?)", (run_id, receipt["sha256"], canonical(receipt)))
-            db.execute("INSERT INTO events(body) VALUES (?)", (canonical({"kind": "ATTEMPT_FINISHED", "run_id": run_id, "sha256": receipt["sha256"]}),))
+                receipt = self._receipt(old)
+            else:
+                current = self._run(db, run_id)
+                require(current["attempt_id"] == attempt_id and current["status"] not in TERMINAL, "Run already terminal")
+                # Evidence collection can race with startup or progress. Recheck
+                # the latest identity while holding the settlement write lock.
+                if recovering and (current != run or _alive(current["worker_pid"]) is not False
+                                   or _alive(current["pid"]) is not False):
+                    return {**current, "recovery": "Run changed or process may still be active; no rerun or termination"}
+                if only_unstarted and current["status"] == "RUNNING":
+                    return {**current, "dispatch_error": errors[0]}
+                for key, resource in resources.items():
+                    db.execute("UPDATE budget SET reserved=reserved-?,spent=spent+?,charged=charged+? WHERE resource=?",
+                               (run["resource_estimates"][key], resource["measured"] or 0.0, resource["charged_estimate"], key))
+                current.update(status=status, finished_at=receipt["ended_at"], scheduler=receipt["scheduler"])
+                self._save(db, current)
+                db.execute("INSERT INTO receipts VALUES (?,?,?)", (run_id, receipt["sha256"], canonical(receipt)))
+                db.execute("INSERT INTO events(body) VALUES (?)", (canonical({"kind": "ATTEMPT_FINISHED", "run_id": run_id, "sha256": receipt["sha256"]}),))
+        self._advisor_finished(contract)
         return receipt
 
     def recover(self, run_id):
@@ -1105,9 +1174,12 @@ class ProjectStore:
             db.execute("BEGIN")
             run = self._run(db, run_id)
             self._runs(db)
+            contract = self._contract(db)
             old = db.execute("SELECT run_id,sha256,body FROM receipts WHERE run_id=?", (run_id,)).fetchone()
-            if old:
-                return self._receipt(old)
+            receipt = self._receipt(old) if old else None
+        if receipt is not None:
+            self._advisor_finished(contract)
+            return receipt
         if run["attempt_id"] is None:
             return {**run, "recovery": "Unstarted reservation; no process to restart"}
         if run["status"] == "RESERVED" and run["scheduler"]:

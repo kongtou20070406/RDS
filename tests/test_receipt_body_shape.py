@@ -4,9 +4,11 @@ All ledgers and maps are synthetic. A corrupted or imported ledger row is data: 
 read reports it as RECEIPT_BODY_INVALID, every consumer stays fail-closed, and nothing is
 inferred from the body or written to the named ledger.
 """
+from contextlib import closing
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -18,15 +20,23 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 sys.path.insert(0, str(ROOT / 'tests'))
 from rds_hypergraph import audit_receipts, read_project_receipt, receipt_reader
+from rds_project import ReceiptIntegrityError, canonical, digest
+import test_rds_project  # Module import: its TestCase classes are not collected twice.
 from test_rds_capability_requirement import (DEEP_LEARNING, MATHEMATICS, SOFTWARE_TOOL, advisor_review, context,
                                              obstruction, route)
 
-SHA = 'a' * 64
 # Valid JSON bodies that are not objects, with the JSON type the status names.
 NON_OBJECT = (('[]', 'array'), ('null', 'null'), ('"SUCCEEDED"', 'string'), ('7', 'number'), ('true', 'boolean'))
 
 
-VALID = json.dumps({'schema': 1, 'run_id': 'r1', 'sha256': SHA, 'run_status': 'SUCCEEDED'})
+def writer_body(**fields):
+    """The writer's shape for row r1: the body carries the digest of itself without it (#118)."""
+    body = {'schema': 1, 'run_id': 'r1', **fields}
+    sha = digest(body)
+    return sha, json.dumps({**body, 'sha256': sha})
+
+
+SHA, VALID = writer_body(run_status='SUCCEEDED')
 
 
 def raw_ledger(root, *bodies, sha=SHA, typed=True):
@@ -58,6 +68,23 @@ def one_node_map(project_root, sha=SHA):
     return {'schema': 1, 'goals': ['g'], 'hyperedges': [],
             'nodes': [{'id': 'g', 'status': 'SUPPORTED', 'source': 'synthetic',
                        'evidence': {'receipt': {'project_root': str(project_root), 'sha256': sha}}}]}
+
+
+def advise_context(setting, ledger_root, sha):
+    """One receipt read by both `advise` consumers: the dependency map and an execution-cap obstruction."""
+    goal = setting[0]
+    ctx = context(*setting)
+    ctx['dependency_map'] = {
+        'schema': 1, 'goals': [goal],
+        'nodes': [{'id': 'run', 'status': 'SUPPORTED', 'source': 'synthetic-run-log.txt',
+                   'evidence': {'receipt': {'project_root': str(ledger_root), 'sha256': sha}}},
+                  {'id': goal, 'status': 'UNKNOWN', 'source': 'synthetic-goal.json'}],
+        'hyperedges': [{'id': 'e1', 'premises': ['run'], 'conclusion': goal, 'status': 'SUPPORTED',
+                        'source': 'synthetic-protocol.json'}]}
+    ctx['obstructions'] = [obstruction(goal, 'EXECUTION_CAP',
+                                       receipt={'project_root': str(ledger_root), 'sha256': sha})]
+    ctx['audit_receipts'] = True
+    return ctx
 
 
 def cli(root, *args):
@@ -212,19 +239,7 @@ class AdviseTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def ctx(self, setting):
-        goal = setting[0]
-        ctx = context(*setting)
-        ctx['dependency_map'] = {
-            'schema': 1, 'goals': [goal],
-            'nodes': [{'id': 'run', 'status': 'SUPPORTED', 'source': 'synthetic-run-log.txt',
-                       'evidence': {'receipt': {'project_root': str(self.ledger), 'sha256': SHA}}},
-                      {'id': goal, 'status': 'UNKNOWN', 'source': 'synthetic-goal.json'}],
-            'hyperedges': [{'id': 'e1', 'premises': ['run'], 'conclusion': goal, 'status': 'SUPPORTED',
-                            'source': 'synthetic-protocol.json'}]}
-        ctx['obstructions'] = [obstruction(goal, 'EXECUTION_CAP',
-                                           receipt={'project_root': str(self.ledger), 'sha256': SHA})]
-        ctx['audit_receipts'] = True
-        return ctx
+        return advise_context(setting, self.ledger, SHA)
 
     def check(self, review):
         dependency = review['dependency_review']
@@ -281,11 +296,12 @@ class AdviseTests(unittest.TestCase):
         self.assertIn('run', review['dependency_review']['receipt_blocked_node_ids'])
         self.assertEqual(review['obstruction_review'][0]['receipt_audit']['status'], 'RECEIPT_BODY_INVALID')
 
-    def advise_cli(self, *bodies):
+    def advise_cli(self, *bodies, sha=SHA):
         with tempfile.TemporaryDirectory() as raw:
             work = Path(raw)
-            self.ledger = raw_ledger(work / 'ledger', *bodies)
-            (work / 'context.json').write_text(json.dumps(self.ctx(DEEP_LEARNING)), encoding='utf-8')
+            self.ledger = raw_ledger(work / 'ledger', *bodies, sha=sha)
+            ctx = advise_context(DEEP_LEARNING, self.ledger, sha)
+            (work / 'context.json').write_text(json.dumps(ctx), encoding='utf-8')
             (work / 'graph.json').write_text(json.dumps(route(DEEP_LEARNING[0])), encoding='utf-8')
             before = ledger_bytes(self.ledger)
             proc = cli(work, 'advise', '--research-context', str(work / 'context.json'),
@@ -298,8 +314,8 @@ class AdviseTests(unittest.TestCase):
 
     def test_duplicate_receipts_leave_the_obstruction_cause_unknown_in_either_order(self):
         # Row order must not pick the timed-out receipt and turn it into a declared execution cap (#112).
-        timed_out = json.dumps({'schema': 1, 'run_id': 'r0', 'sha256': SHA, 'run_status': 'FAILED', 'timeout': True})
-        alone = self.advise_cli(timed_out)['obstruction_review'][0]
+        timed_sha, timed_out = writer_body(run_status='FAILED', timeout=True)
+        alone = self.advise_cli(timed_out, sha=timed_sha)['obstruction_review'][0]
         self.assertEqual((alone['receipt_audit']['status'], alone['receipt_audit']['execution_cap']),
                          ('RECEIPT_FOUND', 'TIMEOUT'))
         for index, bodies in enumerate(((timed_out, VALID), (VALID, timed_out))):
@@ -313,28 +329,142 @@ class AdviseTests(unittest.TestCase):
                 self.assertEqual((entry['response'], entry['cause_status']), ('DISCRIMINATING_CHECK', 'UNKNOWN'))
 
 
+class OwnedIntegrityTests(unittest.TestCase):
+    """#118: a row the owning ProjectStore rejects is not a receipt for any other reader.
+
+    Each case executes one real synthetic run, then rewrites its stored row in this temporary
+    ledger only (the writer never produces these rows; an import or corruption can).
+    """
+
+    def project(self, mode, forge=None):
+        fixture = test_rds_project.ProjectTests('test_execution_policy_is_opt_in_and_frozen')
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        receipt = fixture.run_spec(fixture.spec(mode=mode, timeout=4))
+        if forge is not None:
+            with fixture.store._db() as db:
+                db.execute('DROP TRIGGER receipts_no_update')
+                db.execute('UPDATE receipts SET body=? WHERE run_id=?', (forge(receipt), receipt['run_id']))
+        return fixture, receipt
+
+    @staticmethod
+    def rows(root):
+        # closing(): a sqlite3 connection's own context manager commits but stays open (Windows cleanup).
+        with closing(sqlite3.connect(root / '.rds' / 'project.sqlite3')) as db:
+            return db.execute('SELECT run_id,sha256,body FROM receipts ORDER BY run_id').fetchall()
+
+    def audit_cli(self, root, sha):
+        with tempfile.TemporaryDirectory(prefix='rds118 reader ') as raw:
+            reader = Path(raw)
+            (reader / 'map.json').write_text(json.dumps(one_node_map(root, sha)), encoding='utf-8')
+            before = self.rows(root)
+            proc = cli(reader, 'hypergraph', '--input', str(reader / 'map.json'), '--audit-receipts', '--json')
+            self.assertEqual(self.rows(root), before)  # The named ledger is only read.
+            self.assertNotIn('Traceback', proc.stderr)
+            self.assertEqual(proc.returncode, 0, proc.stderr[-800:])
+            return json.loads(proc.stdout)
+
+    def test_rows_the_owner_rejects_ground_nothing_through_the_real_cli(self):
+        cases = (
+            ('nonzero', lambda r: canonical(r)[:-1] + ',"run_status":"SUCCEEDED"}', 'repeats a JSON key'),
+            ('nonzero', lambda r: canonical({**r, 'run_status': 'SUCCEEDED'}), 'does not match its recorded sha256'),
+            ('ok', lambda r: canonical({**r, 'run_id': 'forged-r999'}), 'names a different run'),
+            ('ok', lambda r: canonical(r)[:-1] + ',"extra":NaN}',
+             'has no canonical encoding (e.g. a non-finite number or an unpaired surrogate)'),
+            ('ok', lambda r: canonical(r)[:-1] + ',"extra":"\\ud800"}',
+             'has no canonical encoding (e.g. a non-finite number or an unpaired surrogate)'),
+            ('ok', lambda r: canonical(r).encode('utf-8')[:-1] + b',"run_id":"forged-r999"}', 'repeats a JSON key'),
+        )
+        for index, (mode, forge, reason) in enumerate(cases):
+            with self.subTest(case=index, reason=reason):
+                fixture, receipt = self.project(mode, forge)
+                with self.assertRaisesRegex(ReceiptIntegrityError, reason.split(' (')[0]):
+                    fixture.store.snapshot()
+                result = self.audit_cli(fixture.root, receipt['sha256'])
+                [row] = result['receipt_audit']['audits']
+                self.assertEqual((row['status'], row.get('reason')), ('RECEIPT_BODY_INVALID', reason))
+                self.assertNotIn('run_id', row)  # Nothing is read out of a rejected body.
+                self.assertEqual(result['receipt_audit']['grounded_receipts'], [])
+                self.assertEqual(result['receipt_blocked_node_ids'], ['g'])
+                self.assertEqual(result['declared_supported_closure'], [])
+                self.assertNotEqual(result['goals']['g']['status'], 'DECLARED_SUPPORTED')
+
+    def test_writer_receipts_keep_their_status_through_the_real_cli(self):
+        for mode, status in (('ok', 'GROUNDED'), ('nonzero', 'RECEIPT_NOT_SUCCEEDED')):
+            with self.subTest(mode=mode):
+                fixture, receipt = self.project(mode)
+                [row] = self.audit_cli(fixture.root, receipt['sha256'])['receipt_audit']['audits']
+                self.assertEqual(row['status'], status)
+                self.assertEqual(read_project_receipt(str(fixture.root), receipt['sha256'])['body'], receipt)
+
+    def test_an_owner_parse_failure_on_decodable_json_stays_the_overdeep_status(self):
+        # Only the owner's object_pairs_hook frame can fail a body the plain decode accepts (recursion
+        # limit), so the status must not depend on which of the two decodes reached it first.
+        root = raw_ledger(Path(tempfile.mkdtemp(prefix='rds118 depth ')), VALID)
+        self.addCleanup(shutil.rmtree, root, True)
+        failure = ReceiptIntegrityError('Project receipt integrity failure: run r1 body is not valid JSON; '
+                                        'inspect retained state')
+        with mock.patch('rds_project.ProjectStore._receipt', side_effect=failure):
+            self.assertEqual(read_project_receipt(str(root), SHA),
+                             {'status': 'LEDGER_UNAVAILABLE', 'reason': 'RecursionError'})
+
+    def test_a_forged_timeout_is_not_an_execution_cap_in_advise(self):
+        fixture, receipt = self.project('ok', lambda r: canonical({**r, 'timeout': True, 'run_status': 'FAILED'}))
+        with tempfile.TemporaryDirectory() as raw:
+            work = Path(raw)
+            ctx = advise_context(DEEP_LEARNING, fixture.root, receipt['sha256'])
+            (work / 'context.json').write_text(json.dumps(ctx), encoding='utf-8')
+            (work / 'graph.json').write_text(json.dumps(route(DEEP_LEARNING[0])), encoding='utf-8')
+            proc = cli(work, 'advise', '--research-context', str(work / 'context.json'),
+                       '--graph', str(work / 'graph.json'))
+        self.assertNotIn('Traceback', proc.stderr)
+        self.assertEqual(proc.returncode, 0, proc.stderr[-800:])
+        review = next(row['search'] for row in json.loads(proc.stdout)['recommendations']
+                      if row.get('type') == 'EXECUTABLE_DIRECTION_SEARCH')['selection_review']
+        invalid = {'status': 'RECEIPT_BODY_INVALID', 'reason': 'does not match its recorded sha256'}
+        [row] = review['dependency_review']['receipt_audit']['audits']
+        self.assertEqual({key: row.get(key) for key in invalid}, invalid)
+        entry = review['obstruction_review'][0]
+        self.assertEqual(entry['receipt_audit'], invalid)
+        self.assertEqual((entry['response'], entry['cause_status']), ('DISCRIMINATING_CHECK', 'UNKNOWN'))
+
+
 class GoalLinkGuardTests(unittest.TestCase):
-    """`exec` with require_goal_link audits through the same consumer; a non-object receipt blocks the path."""
+    """`exec` with require_goal_link audits through the same consumer; an invalid receipt blocks the path."""
+
+    @staticmethod
+    def guard(ledger_root, sha):
+        from rds_advisor_search import _dependency_review, _goal_contribution
+        spec = {'schema': 1, 'goals': ['D'],
+                'nodes': [{'id': 'B', 'status': 'SUPPORTED', 'source': 'src-B',
+                           'evidence': {'receipt': {'project_root': str(ledger_root), 'sha256': sha}}},
+                          {'id': 'D', 'status': 'UNKNOWN', 'source': 'src-D'}],
+                'hyperedges': [{'id': 'e1', 'premises': ['B'], 'conclusion': 'D', 'status': 'SUPPORTED',
+                                'source': 'src-e1'}]}
+        context = {'decision': {'goal_conditions': [{'fact': 'D', 'value': True}]}, 'dependency_map': spec}
+        action = {'kind': 'OBLIGATION_CHECK', 'target': 'B',
+                  'goal_contribution': {'target': 'D', 'path': ['B', 'D'], 'source': 'fixture'}}
+        # The exact calls the exec guard makes (rds_quick: audit_receipts=True, audit_files=True).
+        dependency = _dependency_review(context, audit_receipts=True, audit_files=True)
+        return dependency, _goal_contribution(action, context, dependency)['graph_path']
+
+    def assert_refused(self, dependency, path):
+        self.assertEqual(dependency['receipt_audit']['audits'][0]['status'], 'RECEIPT_BODY_INVALID')
+        self.assertEqual(path['status'], 'UNKNOWN')
+        self.assertEqual(path['blocked_bindings'][0]['token'], 'node:B')
 
     def test_route_through_an_invalid_receipt_is_refused_with_its_repair_token(self):
-        from rds_advisor_search import _dependency_review, _goal_contribution
         with tempfile.TemporaryDirectory(prefix='rds receipt shape guard ') as raw:
-            ledger_root = raw_ledger(Path(raw) / 'ledger', '[]')
-            spec = {'schema': 1, 'goals': ['D'],
-                    'nodes': [{'id': 'B', 'status': 'SUPPORTED', 'source': 'src-B',
-                               'evidence': {'receipt': {'project_root': str(ledger_root), 'sha256': SHA}}},
-                              {'id': 'D', 'status': 'UNKNOWN', 'source': 'src-D'}],
-                    'hyperedges': [{'id': 'e1', 'premises': ['B'], 'conclusion': 'D', 'status': 'SUPPORTED',
-                                    'source': 'src-e1'}]}
-            context = {'decision': {'goal_conditions': [{'fact': 'D', 'value': True}]}, 'dependency_map': spec}
-            action = {'kind': 'OBLIGATION_CHECK', 'target': 'B',
-                      'goal_contribution': {'target': 'D', 'path': ['B', 'D'], 'source': 'fixture'}}
-            # The exact calls the exec guard makes (rds_quick: audit_receipts=True, audit_files=True).
-            dependency = _dependency_review(context, audit_receipts=True, audit_files=True)
-            self.assertEqual(dependency['receipt_audit']['audits'][0]['status'], 'RECEIPT_BODY_INVALID')
-            path = _goal_contribution(action, context, dependency)['graph_path']
-            self.assertEqual(path['status'], 'UNKNOWN')
-            self.assertEqual(path['blocked_bindings'][0]['token'], 'node:B')
+            self.assert_refused(*self.guard(raw_ledger(Path(raw) / 'ledger', '[]'), SHA))
+
+    def test_route_through_a_row_the_owner_rejects_is_refused(self):
+        # #118: a FAILED run whose stored row gained a second SUCCEEDED status.
+        rows = OwnedIntegrityTests('test_writer_receipts_keep_their_status_through_the_real_cli')
+        self.addCleanup(rows.doCleanups)
+        fixture, receipt = rows.project('nonzero', lambda r: canonical(r)[:-1] + ',"run_status":"SUCCEEDED"}')
+        dependency, path = self.guard(fixture.root, receipt['sha256'])
+        self.assert_refused(dependency, path)
+        self.assertEqual(dependency['receipt_audit']['audits'][0]['reason'], 'repeats a JSON key')
 
 
 if __name__ == '__main__':

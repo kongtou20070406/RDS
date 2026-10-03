@@ -1050,7 +1050,7 @@ def review_selection(search, context, *, _dependency=None, audit_receipts=False,
 def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nodes=128,
                       templates=None, max_combinations=128, max_compose_depth=2,
                       _dependency=None, _defer_selection_review=False,
-                      audit_receipts=False, audit_files=False):
+                      audit_receipts=False, audit_files=False, priority_action_ids=()):
     """Compose source-labelled checks and tests for the supplied next decision.
 
     Nodes opt in via executable.decisions, preconditions, satisfied_when, action.
@@ -1060,6 +1060,10 @@ def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nod
     """
     if not isinstance(graph, dict) or not isinstance(context, dict):
         raise ValueError("Graph and advisor context must be objects")
+    if (not isinstance(priority_action_ids, (tuple, list, set, frozenset)) or len(priority_action_ids) > 64
+            or not all(isinstance(ident, str) and 1 <= len(ident) <= 128 for ident in priority_action_ids)):
+        raise ValueError("priority_action_ids must contain up to 64 bounded action IDs")
+    priority_action_ids = frozenset(priority_action_ids)
     for value, cap, name in ((max_candidates, 64, "max_candidates"), (max_depth, 32, "max_depth"), (max_nodes, 512, "max_nodes")):
         if type(value) is not int or not 1 <= value <= cap:
             raise ValueError(f"{name} must be an integer between 1 and {cap}")
@@ -1141,11 +1145,13 @@ def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nod
         candidate_id = f"{rule_id}:{action['id']}"
         if candidate_id in candidates:
             return
-        if len(candidates) >= max_candidates:
+        full = len(candidates) >= max_candidates
+        if full:
             result["truncation"].update(truncated=True)
             if "candidate limit" not in result["truncation"]["reasons"]:
                 result["truncation"]["reasons"].append("candidate limit")
-            return
+            if action['id'] not in priority_action_ids:
+                return
         steps = [deepcopy(queries[q]) for q in dict.fromkeys(pending)]
         steps.append({"id": action["id"], "rule_id": rule_id, "kind": action.get("kind", "BOUNDED_CHECK"),
                       "description": action["description"], "conditional": status != "READY",
@@ -1173,6 +1179,15 @@ def search_directions(graph, context, *, max_candidates=12, max_depth=8, max_nod
         elif candidate["status"] == "BLOCKED_METHOD":
             result["blocked_candidates"].append(candidate)
         else:
+            if full:
+                # An owned active route may be emitted by any root or fallback.
+                # It can replace a nonpriority slot only after the same method,
+                # budget and prerequisite checks establish current readiness.
+                replace = next((key for key in reversed(candidates)
+                                if candidates[key]['action']['id'] not in priority_action_ids), None)
+                if candidate['status'] != 'READY' or replace is None:
+                    return
+                del candidates[replace]
             candidates[candidate_id] = candidate
 
     def conditions(rule_id, cfg, key, derivation, pending, fallbacks):

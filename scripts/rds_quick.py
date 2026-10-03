@@ -234,6 +234,8 @@ def _charge_ledger(root, workspace, request, seconds, route=None, source_root=No
     with store._db() as db:
         db.execute('BEGIN IMMEDIATE')
         contract = store._contract(db)
+        require('advisor_policy' not in contract,
+                'Program-owned Advisor requires project advance/create/execute; quick child allowance cannot bypass it')
         require('stop_policy' not in contract and 'maintenance_allowance' not in contract,
                 'Configured stop/maintenance policies require project create/execute; quick child allowance cannot bypass them')
         require(set(contract['budget']) == {'wall_seconds'}, 'Quick exec supports a wall-only parent ledger; use a full project manifest for other resources')
@@ -391,6 +393,8 @@ def execute(args, review=None):
             # Native research records can share this database before project init.
             has_contract = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='contract'").fetchone()
             source_contract = source_store._contract(db) if has_contract else {}
+        require('advisor_policy' not in source_contract,
+                'Program-owned Advisor requires project advance/create/execute; quick exec cannot bypass it')
         require('stop_policy' not in source_contract and 'maintenance_allowance' not in source_contract,
                 'Configured stop/maintenance policies require project create/execute; quick exec cannot bypass them')
         if 'execution_policy' in source_contract:
@@ -681,6 +685,32 @@ def brief(root, value, version, formal=False):
         relevant = [kind for kind in flags if kind in advisory_moves and advisory_moves[kind] == summary.get('next_move')]
         flags = relevant + [kind for kind in flags if kind not in advisory_moves]
         summary['flags'] = list(dict.fromkeys(flags))[:3]
+    owned = value.get('advisor') or value
+    if 'advisor' in value and 'receipt' in value:
+        summary.update(status=value['receipt'].get('run_status', 'UNKNOWN'),
+                       run_id=value['receipt'].get('run_id'), receipt_sha256=value['receipt'].get('sha256'),
+                       advisor_status=owned.get('status'), scientific_support='UNKNOWN')
+        if owned.get('reason'):
+            summary['advisor_reason'] = str(owned['reason'])[:512]
+    if owned.get('assurance') == 'PROGRAM_OWNED_EVIDENCE_NOT_SCIENTIFIC_PROOF':
+        summary.update(selected_run=owned.get('selected_run'), snapshot_sha256=owned.get('snapshot_sha256'),
+                       authorization='UNCHANGED', scientific_support='UNKNOWN', assurance=owned['assurance'])
+        if owned.get('next_move'):
+            move = owned['next_move']
+            summary['next_move'] = move.get('kind', move) if isinstance(move, dict) else move
+        coverage = owned.get('coverage', {})
+        summary['coverage'] = {key: coverage.get(key, 0) for key in ('runs', 'receipts', 'artifacts', 'parsed_observations')}
+        summary['coverage']['unparsed_outputs'] = len(coverage.get('unparsed_outputs', []))
+        summary['coverage']['errors'] = len(coverage.get('errors', []))
+        summary['coverage']['gaps'] = len(coverage.get('gaps', []))
+        summary['coverage']['declared_outputs'] = len(coverage.get('declared_outputs', []))
+        summary['coverage']['missing_outputs'] = sum(row.get('status') == 'MISSING'
+                                                     for row in coverage.get('declared_outputs', []))
+        summary['coverage_errors'] = coverage.get('errors', [])[:3]
+        summary['coverage_gaps'] = coverage.get('gaps', [])[:3]
+        warnings = [row['kind'] for row in owned.get('warnings', []) if 'kind' in row]
+        summary['flags'] = list(dict.fromkeys(warnings + summary.get('flags', [])))[:5]
+        summary['omitted_flags'] = max(0, len(set(warnings)) - len(summary['flags']))
     if 'job_root' in value:
         summary['job_root'] = value['job_root']
         summary['run_status'] = (value.get('receipt') or {}).get('run_status', 'UNKNOWN')
@@ -712,7 +742,9 @@ def brief(root, value, version, formal=False):
     ledger = ledger_root / '.rds' / 'project.sqlite3'
     if ledger.is_file() and isinstance(value.get('runs'), list) and isinstance(value.get('contract'), dict):
         try:
-            summary['next_move'] = ProjectStore(ledger_root).next_move()
+            summary['next_move'] = ({'next_move': 'inspect current program-owned evidence and selection',
+                                     'command': 'python -B scripts/rds_cli.py project next'}
+                                    if 'advisor_policy' in value['contract'] else ProjectStore(ledger_root).next_move())
         except (ValueError, OSError, sqlite3.Error):
             summary['next_move'] = {'next_move': 'inspect recorded project state', 'command': 'python -B scripts/rds_cli.py project status'}
     assurance = value.get('assurance') if formal else None

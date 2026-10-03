@@ -24,7 +24,7 @@ def sha256(value):
 
 
 def _known(value):
-    if value is None or isinstance(value, str) and (not value.strip() or value.upper() == "UNKNOWN"):
+    if value is None or isinstance(value, str) and (not value.strip() or value.strip().upper() == "UNKNOWN"):
         return False
     if isinstance(value, (list, dict)):
         children = value.values() if isinstance(value, dict) else value
