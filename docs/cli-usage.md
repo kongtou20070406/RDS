@@ -16,6 +16,9 @@ an unfinished entry. The current process's logging=ENABLED is not proof that
 earlier invocations were completely recorded. Missing history is not reconstructed.
 Counts describe recorded CLI invocations; API imports and loading Skill instructions
 have their own evidence. No prompt, full argv, input path or credential is stored.
+The command labels cover the current public top-level CLI commands, including
+`host-hook`. Older rows that labelled its calls `other` or generic `help` are
+retained as recorded; their original command cannot be recovered from those rows.
 
 Show recent daily counts (14 days by default):
 
