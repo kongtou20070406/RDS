@@ -13,10 +13,12 @@ The research protocol Skill, execution and acceptance kernel, and research state
 | Research protocol Skill | 科研规程 Skill | The collaboration protocol for intent, evidence, experiment design, results and resumption. A protocol instruction is distinct from behavior enforced by a program. |
 | Execution and acceptance kernel | 执行与验收内核 | The supported plan, constraint, execution, verification, artifact, receipt and recovery machinery. Applicable mathematical checking is one capability within this responsibility. |
 | Research state and memory | 研究状态与记忆 | Project records in `.rds`, the judgment graph and Obelisk history retrieval used to preserve research evidence and decision reasons. Operational records and historical sources have different roles. |
-| Advisor | 科研建议引擎 | The responsibility for generating or combining candidates along real evidence, judgment dependencies and scoped rules, so tests distinguish competing explanations and change the next decision before cost screening. |
+| Advisor | 科研建议引擎 | Connect the original goal, current evidence, constraints and available candidate routes to the next executable action or blocker, preserving the reasons and unknowns. |
 | RSI | 自改进 | The responsibility for proposing, evaluating, adopting or rolling back scoped changes to rules and work policies. It does not denote an automatic increase in a model's intelligence. |
 
 Current Advisor helpers provide diagnostic hints, scoped rule retrieval and bounded graph search over source-labelled facts, explicit candidate bindings and prerequisite dependencies. They preserve unknowns and result-dependent next decisions. General automatic discovery and combination of research ideas remain development directions; the component benchmark does not measure independent scientific success. Rule matches are clues whose applicability needs evidence. Policy improvement through RSI requires independent comparisons of whole research trajectories at equal total budgets. Lean-compatible work applies to suitable mathematical subtasks and does not certify the broader scientific conclusion.
+
+In a [program-owned project](program-owned-advisor.md), results and receipts update state before Advisor selects the next permitted route from the frozen policy. A goal predicate `FALSE` and scientific support `UNKNOWN` have separate meanings; command success does not promote either to scientific confirmation. This engineering loop does not establish prospective scientific decision benefit.
 
 ## Research and experiment terms
 

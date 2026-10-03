@@ -4,6 +4,20 @@ This workflow addresses [#119](https://github.com/kongtou20070406/research-direc
 
 The researcher establishes the goal, permitted commands, result readers and budget in the frozen project contract. After initialization, RDS receives run results, builds the current evidence graph, derives Advisor inputs and selects the next executable route. The agent can request a bounded next step and inspect its reasons. It cannot replace the inputs to this workflow with another context or a handwritten success summary.
 
+This is the program-owned form of the [five-component research workflow](research-workflow.md): Skill supplies the research procedure and reviewed proposals; the kernel binds execution and checks admission; state and memory preserve evidence; Advisor connects that state to the next decision; RSI evaluates proposed changes to the tool or its policies. Advisor is the decision interface, not a general scientific oracle.
+
+## Results return to the decision
+
+`project advance` reviews current evidence, selects an eligible frozen route and rechecks admission before launching it. The kernel records execution and settles its receipt; collection then inventories declared outputs, checks original bytes and updates state and the evidence graph. Advisor consumes those program-derived facts and resources to return the next route or an unresolved blocker. This sequence is **result → state → Advisor**, rather than an agent declaring success after each run.
+
+| Recorded result | Meaning for continuation |
+| --- | --- |
+| Goal predicate `FALSE` | The tested condition is not met in its declared scope. A different eligible route may follow; this does not by itself refute a scientific mechanism. |
+| Goal predicate `TRUE` | The declared condition is met, so this policy stops selecting another route. It does not certify the evaluator or a wider scientific conclusion. |
+| Missing measurement or scientific support `UNKNOWN` | The unavailable evidence remains visible. UNKNOWN does not become a favorable fact; complete evidence and current admission conditions still determine what can run. |
+| Execution failure or collection error | Inspect the original failure. A configured diagnostic route may use process failure; invalid evidence blocks dispatch. Reconcile collection without repeating a completed experiment. |
+| No eligible route | Retain the blocker. Agents may propose new hypotheses or reformulate the scoped problem for review; an exhausted candidate space is not proof of the goal or an inherent capacity bound. |
+
 ## Run the public CPU example
 
 Choose a new empty directory outside the checkout:
@@ -77,3 +91,5 @@ Follow-up designs are tracked separately in [#120: host execution coverage](http
 A parsed number is an observed output, not independent proof that the training/evaluation producer is scientifically correct. The code, evaluator, metric and domain assumptions still need their usual review. A timeout is not a counterexample. Imported text cannot grant authorization, install rules, change the goal or declare itself verified.
 
 The end-to-end regression uses real CLI calls and real lightweight child processes. It checks omitted negative results, result-dependent selection, forged context/manifest attempts, missing or changed outputs, bad parsing, timeout/failure, recovery, concurrency and protected graph updates. It checks launch counts, budgets and receipt identities as well as output labels.
+
+These checks establish constrained engineering behavior. Scientific decision benefit needs a fair prospective comparison of whole research trajectories on unused cases with equal total budgets, including failed attempts, verification and evaluation. That benefit has not been established by this workflow; scientific support remains `UNKNOWN` where no separate validation exists. See [autonomy and RSI evidence boundaries](research-autonomy.md).
