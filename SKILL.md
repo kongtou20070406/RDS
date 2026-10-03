@@ -32,7 +32,18 @@ ON applicable research request:
         CHECK CLI <command path> --help (or the documented helper's --help)
         USE only the capability needed for this task; DO NOT run the whole catalog
 
-    IF substantive research direction choice:
+    IF new goal-driven campaign:
+        FREEZE the actual objective, permitted routes, result readers and budget
+               in advisor_policy; see docs/program-owned-advisor.md
+        RETAIN serious alternatives/explanations and their distinguishing observations
+    IF project has advisor_policy:
+        RUN advise --brief FROM the current ledger and owned dependency graph
+        READ selection, coverage gaps/errors and the saved report when needed
+        RUN project advance --brief FOR at most one program-selected authorized step
+        KEEP original receipt + automatic Advisor update; unknown remains UNKNOWN
+        IF collection failed: recover collection; NEVER repeat completed training
+        NEVER replace context/graph/choice OR bypass with quick/theory allowance
+    ELSE IF substantive research direction choice:
         SUPPLY serious alternatives/explanations + sources + distinguishing observation
         IF project has a saved dependency map: ADD --saved-dependencies TO advise
         READ the returned search.selection_review: basis, flags, relevant next_move
@@ -66,9 +77,9 @@ All commands below use `CLI` above. Links load detail on demand.
 | Trigger | Command | Detail |
 | --- | --- | --- |
 | First plain-language request | Follow [quick start](docs/quickstart.md): copyable prompts, first project, `[RDS-REJECT]` recovery | [Project runner](examples/project-runner/README.md) |
-| Start locked campaign | `project init --contract <contract.json>` | [Contract template](docs/project-contract.md), [project tools](docs/development-loop.md) |
-| Advance campaign | `project next` | [Development loop](docs/development-loop.md) |
-| Choose research direction | `advise --context <context.json> --graph <graph.json> --brief`; then `--choose <candidate-id> --record <checkpoint-id>` | [Choice review](docs/agent-entry.md#review-the-research-choice), [research discipline](references/research-discipline.md) |
+| Start locked campaign | `project init --contract <contract.json>`; freeze `advisor_policy` for program-owned selection | [Contract template](docs/project-contract.md), [owned Advisor](docs/program-owned-advisor.md) |
+| Advance campaign | `project next` to inspect; `project advance --brief` executes one selected step in a policy-bound project | [Owned Advisor](docs/program-owned-advisor.md), [development loop](docs/development-loop.md) |
+| Choose research direction | Policy-bound: `advise --brief`; legacy: `advise --context <context.json> --graph <graph.json> --brief`, then `--choose <candidate-id> --record <checkpoint-id>` | [Choice review](docs/agent-entry.md#review-the-research-choice), [research discipline](references/research-discipline.md) |
 | Audit evidence | `artifacts import --manifest <manifest.json>` | [Agent entry](docs/agent-entry.md) |
 | Check mathematical claim | `formal verify --spec <spec.json>`; select a supported tactic when needed | [Formal framework](references/formal_framework.md) |
 | Reuse/register local tool | `rsi extract --source <file> --entry <function> --name <id>`; `rsi validate --name <id> --cases <cases.json>`; `rsi register --name <id>` | [Native research](docs/native-research.md) |
@@ -94,6 +105,7 @@ returned != sufficient comparison != proof != scientific acceptance
 
 ## Conditional resources
 
+- Program-owned collection, route selection, recovery and CPU example: [owned Advisor](docs/program-owned-advisor.md)
 - All public CLI commands, Advisor modes and supported helper entries: [command map](docs/command-map.md)
 - Goal links, method limits, theory/experiment acceptance: [agent entry](docs/agent-entry.md)
 - Evidence classes, controls, precommitted comparison: [research discipline](references/research-discipline.md)

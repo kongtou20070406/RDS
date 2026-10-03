@@ -190,6 +190,8 @@ A checked mathematical statement does not establish task performance, causal iso
 
 ## Advisor: Evidence-Grounded Suggestions
 
+[Program-owned campaigns](docs/program-owned-advisor.md) freeze the goal, permitted routes and result readers. RDS automatically collects run receipts and outputs into the current evidence graph, selects a bounded next step, and checks it before execution. This restricts caller cherry-picking within the declared workflow; it does not certify scientific correctness or control commands outside RDS.
+
 `scripts/rds_advisor.py` uses recorded evidence and the methodology graph to propose next steps:
 - **Evidence before diagnosis** — A single loss value does not support an overfitting or underfitting diagnosis. Paired curves or comparable observations provide context for candidate explanations.
 - **Localization before intervention** — For NaN/Inf, suggestions prioritize locating the first nonfinite value and checking precision or update paths before changing numerical safeguards.
