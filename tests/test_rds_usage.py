@@ -213,6 +213,41 @@ class SandboxUsageTests(unittest.TestCase):
         self.assertFalse(other.exists())
         self.assertEqual(usage.log_path(), other)
 
+    def test_finish_denial_never_updates_matching_row_in_fallback_database(self):
+        with patch.dict(os.environ, {'RDS_USAGE_DB': str(self.fallback)}):
+            usage.run_logged(lambda: 7, ['status'], 'test')
+        warning = io.StringIO()
+        def command():
+            self.default.chmod(0o444)
+            self.addCleanup(self.default.chmod, 0o666)
+            return 9
+        with redirect_stderr(warning):
+            self.assertEqual(usage.run_logged(command, ['status'], 'test', root=self.root), 9)
+        if 'finish logging failed' not in warning.getvalue():
+            self.skipTest('This account bypasses filesystem read-only protection')
+        self.assertEqual(self.rows(self.default), [('status', 'command', None)])
+        self.assertEqual(self.rows(self.fallback), [('status', 'command', 7)])
+
+    def test_busy_default_does_not_split_history_into_project_fallback(self):
+        usage.run_logged(lambda: 0, ['status'], 'test')
+        warning = io.StringIO()
+        with closing(sqlite3.connect(self.default)) as db:
+            db.execute('BEGIN IMMEDIATE')
+            with redirect_stderr(warning):
+                self.assertEqual(usage.run_logged(lambda: 7, ['status'], 'test', root=self.root), 7)
+            db.rollback()
+        self.assertIn('SQLITE_BUSY', warning.getvalue())
+        self.assertFalse(self.fallback.exists())
+        self.assertEqual(self.rows(self.default), [('status', 'command', 0)])
+
+    def test_concurrent_fallback_cli_calls_keep_all_finished_records(self):
+        self.readonly_default()
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(lambda _: self.cli('-w', str(self.root), 'advise', '--help'), range(12)))
+        self.assertTrue(all(result.returncode == 0 for result in results), results)
+        self.assertTrue(all('RDS-USAGE-DEGRADED' not in result.stderr for result in results), results)
+        self.assertEqual(self.rows(self.fallback), [('advise', 'help', 0)] * 12)
+
 
 class UsageTests(unittest.TestCase):
     def setUp(self):
