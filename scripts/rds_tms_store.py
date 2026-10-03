@@ -76,8 +76,7 @@ def save(root, spec, *, expected, revision=None, source_base=None, validate_curr
         if validate_current is not None:
             validate_current(db)
         previous = _last(db)
-        if (previous['sha256'] if previous else None) != expected:
-            raise SnapshotConflict('Current dependency snapshot changed; review the latest map before resubmitting')
+        previous_sha = previous['sha256'] if previous else None
         if previous:
             old = json.loads(previous['body'])
             require(digest(old) == previous['sha256'], 'Dependency snapshot integrity failure')
@@ -85,8 +84,18 @@ def save(root, spec, *, expected, revision=None, source_base=None, validate_curr
                 def declarations(rev):
                     return [{k: change.get(k) for k in ('kind', 'id', 'operation', 'status', 'source')}
                             for change in (rev or {}).get('changes', [])]
-                if not revision or declarations(revision) == declarations(old.get('revision')):
+                # A locked owned collector can reuse one concurrent publication
+                # of exactly its map. Do not cross a declaration revision or an
+                # intervening map change, even if later content is identical.
+                owned_duplicate = (validate_current is not None and revision is None
+                                   and old.get('revision') is None and old['parent'] == expected)
+                same_head = (previous_sha == expected and
+                             (not revision or declarations(revision) == declarations(old.get('revision'))))
+                if same_head or owned_duplicate:
+                    blob(store.root, old['map'])
                     return previous['sha256']
+        if previous_sha != expected:
+            raise SnapshotConflict('Current dependency snapshot changed; review the latest map before resubmitting')
         sha = digest(value)
         db.execute('INSERT INTO dependency_snapshots VALUES (?,?)', (sha, body))
     return sha
