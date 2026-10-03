@@ -153,9 +153,10 @@ def choice(advice, context, candidate_id=None):
 def record_choice(root, advice, context, candidate_id, checkpoint_id):
     from rds_checkpoints import save_checkpoint
     record = choice(advice, context, candidate_id)
+    # Read the contract before writing advice, so a rejected record leaves no blob.
+    snapshot = ProjectStore(root).snapshot(check_bindings=True)
     record['advice'] = cas_json(root, advice)
-    saved = save_checkpoint(root, checkpoint_id, ProjectStore(root).snapshot(check_bindings=True),
-                            kind='project', decision=record)
+    saved = save_checkpoint(root, checkpoint_id, snapshot, kind='project', decision=record)
     saved['candidate_id'] = record['candidate']['id']
     return saved
 

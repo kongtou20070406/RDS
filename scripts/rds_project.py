@@ -86,6 +86,9 @@ def require(condition, message):
         raise ValueError(message)
 
 
+UNINITIALIZED = "Project contract has not been initialized"
+
+
 class ReceiptIntegrityError(ValueError):
     """A damaged owned receipt row: a rejection of the read, never another run's admission outcome (#104)."""
 
@@ -428,6 +431,9 @@ class ProjectStore:
 
     @staticmethod
     def _contract(db):
+        # Native research records can share this database before project init.
+        require(db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='contract'").fetchone(),
+                UNINITIALIZED)
         row = db.execute("SELECT body,sha256 FROM contract WHERE id=1").fetchone()
         require(row is not None, "Project contract is missing")
         value = json.loads(row["body"])
@@ -1241,10 +1247,17 @@ class ProjectStore:
 
         Pure function of the snapshot; carries no advice beyond recorded facts.
         """
+        initialize = UNINITIALIZED + "; run: python -B scripts/rds_cli.py project init --contract <contract.json>"
         if not self.path.is_file():
-            raise ValueError("Project contract has not been initialized; run: python -B scripts/rds_cli.py project init --contract <contract.json>")
+            raise ValueError(initialize)
         command = f"python -B scripts/rds_cli.py --root {_shell_argument(self.root)}"
-        snap = self.snapshot()
+        try:
+            snap = self.snapshot()
+        except ValueError as exc:
+            # A bound native objective creates the database before project init.
+            if str(exc) != UNINITIALIZED:
+                raise
+            raise ValueError(initialize) from None
         runs = snap["runs"]
         receipts = {r["run_id"]: r for r in snap["receipts"]}
         live = [r for r in runs if r["status"] == "RUNNING"]
