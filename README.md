@@ -12,7 +12,7 @@
 [![license](https://img.shields.io/badge/license-Apache%202.0-blue.svg?style=flat-square)](LICENSE)
 [![tests](https://github.com/kongtou20070406/research-direction-selector/actions/workflows/test.yml/badge.svg?branch=main&event=push)](https://github.com/kongtou20070406/research-direction-selector/actions/workflows/test.yml)
 
-Turn a research question, existing evidence, and a limited budget into a decision-changing experiment -- driven by your agent, verified by your kernel.
+Connect a research goal, evidence and constraints to the next useful step — with Advisor guiding the decision and the kernel checking bounded execution.
 
 **English** · [Simplified Chinese](README.zh-CN.md) · [Japanese](README.ja-JP.md)
 
@@ -22,13 +22,13 @@ Turn a research question, existing evidence, and a limited budget into a decisio
 
 ## Two sides of the research loop
 
-RDS has two sides that share one research state:
+RDS is an Advisor-centered research decision system with two cooperating sides and one recorded research state:
 
-**Agent side** — the `research-direction-selector` agent skill (`SKILL.md`) teaches coding agents (Codex, Claude Code, etc.) how to understand research goals, frame falsifiable hypotheses, design fair controls, and turn gate feedback into structured next-step plans. The agent converses in plain language and plans experiments.
+**Agent side** — the `research-direction-selector` Skill (`SKILL.md`) guides agents such as Codex and Claude Code to clarify the original goal, propose hypotheses and candidate routes, check application assumptions, and interpret evidence with the researcher.
 
-**Kernel side** — the local reference engine (`scripts/rds_cli.py`) manages transactional SQLite budgets, AST and bounded declarative formal gates, baseline caching, telemetry compression, and an evidence-grounded advisor.
+**Program side** — the local CLI (`scripts/rds_cli.py`) binds supported actions to source, inputs and resources, checks admission and records results and receipts. In a project with a frozen `advisor_policy`, it updates program-owned state and uses Advisor to select the next permitted route before dispatch.
 
-Both read from and write to the same `.rds/` state store and `references/judgment-graph.yaml` causal rules.
+The loop is **goal and constraints → Advisor decision → constrained execution → results and receipts → updated research state → Advisor**. Project records live in `.rds/`; `references/judgment-graph.yaml` supplies scoped methodology rules, not an automatically rewritten collection of proven causal laws. A failed goal predicate remains `FALSE`; missing or inconclusive scientific support remains `UNKNOWN`.
 
 The [5.8 vision and collaboration plan](docs/5.8-vision.md) describes the proposed goal-linked decision loop, testable reformulation, conditional tool library and work packages. It distinguishes existing behavior from work under review; 5.8.0 remains Unreleased.
 
@@ -43,29 +43,25 @@ Organized by responsibility, RDS has **5 core components**: 3 foundational compo
 | **① Research protocol: Skill** | Guides the agent to understand goals, frame hypotheses, design controls, and plan the next step | **How should we reason about and advance this research?** |
 | **② Execution & Acceptance Kernel** | Manages experiment state, invokes execution tools, collects results, and checks budgets and evidence | **How do we run the experiment? Which predefined conditions do the results satisfy?** |
 | **③ Research State & Memory** | Preserves goals, configurations, results, failure conditions, and decision evidence across sessions | **What have we done, what do we know, and why did we reach this point?** |
-| **④ Advisor Engine** | Uses observations, history, and rules to propose diagnostic leads and candidate actions | **Given the current situation, what can we try next?** |
+| **④ Advisor Engine** | Connects the original goal, current evidence, constraints and candidate routes to a next action or an explicit blocker | **What can we execute next, and what evidence would change the decision?** |
 | **⑤ Self-Improvement Module: RSI** | Proposes rule or policy changes and evaluates them before adoption | **Which of RDS's own judgments and practices should improve?** |
 
 ```mermaid
 flowchart TD
-    subgraph Foundational_loop[Foundational loop]
-        S["① Skill (research protocol)"] --> K["② Execution & Acceptance Kernel"]
-        K --> M["③ Research State & Memory"]
-        M --> S
-    end
-    subgraph Enhancement_engines[Enhancement engines]
-        M -. History and rule graph .-> A["④ Advisor Engine"]
-        A -. Candidate exploration suggestions .-> S
-        M -. Failure records and counterexamples .-> R["⑤ RSI Self-Improvement Module"]
-        R -. Revised rules and policies .-> M
-    end
+    S["① Skill: goal, scope and candidate proposals"] --> A["④ Advisor: next action or blocker"]
+    M["③ Research State & Memory"] -->|Evidence and remaining resources| A
+    A -->|Selected permitted route in a policy-bound project| K["② Execution & Acceptance Kernel"]
+    K -->|Results, receipts and recovery state| M
+    A -->|Missing evidence or a revised proposal| S
+    M -. Failure evidence .-> R["⑤ RSI: proposed tool or policy changes"]
+    R -. Scoped evaluation and reviewed adoption .-> M
 ```
 
 ### Three relationships that are easy to confuse
 
 - **Skill and Advisor:** Skill defines research practices, such as fair controls and the distinction between metrics and mechanisms. Advisor proposes actions for the current situation, such as checking whether training is sufficient or trying another candidate route.
 - **Memory and Advisor:** Memory preserves what happened and its evidence. Advisor uses those records to suggest what is worth checking next.
-- **Advisor and RSI:** Advisor helps improve the model or experiment under study. RSI attempts to improve **RDS's own rules and decision policies**.
+- **Advisor and RSI:** Advisor supports the current research decision; a useful suggestion is not proof of task gain. RSI evaluates changes to **RDS's own rules, tools and decision policies**; engineering acceptance and improved scientific decision benefit require different evidence.
 
 ### Where do the other names belong?
 
@@ -73,7 +69,7 @@ flowchart TD
 - **`.rds/` project records, the Obelisk history interface, and the judgment graph (`judgment-graph.yaml`)** mainly belong to **③ Research State & Memory**, where other components can read them.
 - **L1–L5** are [capability levels](docs/research-autonomy.md) discussed in the research framework, not additional components.
 
-**The first 3 components support the basic research loop; Advisor adds proactive suggestions; RSI adds improvement of the tool itself.** The system has **3 foundational components + 2 enhancement components, for a total of 5**.
+The **3 foundational components + 2 enhancement components** are five responsibilities in one loop. Advisor is the decision interface between evidence and the next action; this does not make every connection autonomous or prove that the loop improves scientific outcomes. See [research workflow](docs/research-workflow.md) and [autonomy scope](docs/research-autonomy.md).
 
 ---
 
@@ -144,7 +140,7 @@ python -B scripts/rds_cli.py --root ./my-project project costs
 python -B scripts/rds_cli.py --root ./my-project project status
 ```
 
-The kernel derives the campaign's next step from recorded ledger state. Run
+For this example without `advisor_policy`, the kernel derives a procedural next step from recorded ledger state. Run
 `python -B scripts/rds_cli.py --root ./my-project project next` at any point to
 print the one action to take now (register, execute, recover, compare or record
 the decision) with its runnable command; agents can drive the whole loop by
@@ -190,7 +186,9 @@ A checked mathematical statement does not establish task performance, causal iso
 
 ## Advisor: Evidence-Grounded Suggestions
 
-[Program-owned campaigns](docs/program-owned-advisor.md) freeze the goal, permitted routes and result readers. RDS automatically collects run receipts and outputs into the current evidence graph, selects a bounded next step, and checks it before execution. This restricts caller cherry-picking within the declared workflow; it does not certify scientific correctness or control commands outside RDS.
+[Program-owned campaigns](docs/program-owned-advisor.md) freeze the goal predicates, permitted routes and result readers. `project advance` executes at most one program-selected route, settles its receipt, collects declared outputs into the current evidence graph and returns the next Advisor report. Completed routes retain evidence without occupying executable candidate slots. Collection recovery reuses retained results rather than repeating the completed experiment. Projects without `advisor_policy` retain their caller-directed behavior.
+
+Advisor connects the original goal to current facts and constraints within the available candidate space. Results can enable a route, close the declared goal, expose a blocker or motivate a reformulation proposal. Agents still supply new hypotheses, check application assumptions and work with domain-specific verifiers; the program does not silently widen a frozen policy. This restricts caller cherry-picking within declared RDS entries, not commands outside RDS.
 
 `scripts/rds_advisor.py` uses recorded evidence and the methodology graph to propose next steps:
 - **Evidence before diagnosis** — A single loss value does not support an overfitting or underfitting diagnosis. Paired curves or comparable observations provide context for candidate explanations.
@@ -200,6 +198,8 @@ A checked mathematical statement does not establish task performance, causal iso
 ```powershell
 python -B scripts/rds_cli.py --root ./my-project advise
 ```
+
+Real CLI workflows and regression tests demonstrate these engineering behaviors. A goal predicate can be `FALSE` even when both commands succeed; scientific support can remain `UNKNOWN` even when a numerical threshold is met. Better scientific decisions or RSI policy gain require a fair prospective comparison on unused cases at equal total budgets, including failures and evaluation costs; that benefit has not been established here.
 
 ---
 

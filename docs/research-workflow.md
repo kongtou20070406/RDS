@@ -6,14 +6,14 @@ RDS automates parts of research collaboration to help a human researcher choose 
 
 ## Five components and their responsibilities
 
-The first three components support the basic research loop; Advisor and RSI enhance it. This grouping describes responsibilities, not a claim that every connection is already autonomous in a released version.
+The three foundational components and two enhancement components describe responsibilities in one loop. Advisor connects evidence to the next decision; its central role does not imply that every connection is autonomous or that scientific outcomes have improved.
 
 | Group | Component | Responsibility |
 | --- | --- | --- |
 | Foundation | Research protocol Skill | Guide intent, evidence gathering, experiment design, result interpretation and resumption in collaboration with the researcher. |
 | Foundation | Execution and acceptance kernel | Bind plans and resources, check applicable constraints, execute supported experiments, and record artifacts, receipts and recovery state. |
 | Foundation | Research state and memory | Preserve goals, configurations, results, failure conditions and decision reasons through project records in `.rds`, the judgment graph and Obelisk history retrieval. |
-| Enhancement | Advisor | Use real observations, history, judgment dependencies and scoped rules to propose tests that distinguish competing explanations and change the next decision. |
+| Enhancement | Advisor | Connect the original goal, evidence, constraints and available candidate routes to a next executable action or an explicit blocker; retain the decision's reasons and unknowns. |
 | Enhancement | RSI | Propose scoped revisions to rules and work policies, evaluate them, and retain or roll back changes according to evidence. |
 
 Budget checks, probes, log handling and applicable mathematical checks belong to the execution and acceptance kernel. The judgment graph and historical sources support research state and memory. Lean-compatible cooperation concerns suitable mathematical subtasks; it does not replace experimental evidence for the broader research claim. Autonomy levels describe discovery automation across these components and are not additional components.
@@ -23,6 +23,14 @@ Budget checks, probes, log handling and applicable mathematical checks belong to
 Advisor's intended process starts with real evidence and follows the judgment graph and scoped rules to generate or combine candidates. Each candidate should identify competing explanations, a discriminating observation, and how positive or negative results would change the next decision. Screen these candidates for authorized total cost after establishing their decision value; preserve their derivation and evidence sources.
 
 The current implementation combines diagnostic hints and scoped rule retrieval with bounded graph search over source-labelled facts and explicit executable bindings. It follows `prerequisite_for` dependencies, preserves unknown conditions as evidence queries, records competing explanations and result-dependent next decisions, and compares costs only when their units are comparable. The rules and candidate bindings are authored; general automatic discovery and combination of research ideas remain development directions. Rule matching does not establish a causal diagnosis. Claims about Advisor's scientific success rate, research quality or cost savings require independent research trajectories; the [component benchmark](advisor-benchmark.md) measures narrower contract checks. RSI likewise produces candidate policy changes, whose improvement needs the independent RSI evaluation described below.
+
+## Program-owned result and decision loop
+
+In a project initialized with `advisor_policy`, the researcher freezes the goal, allowed commands, candidate routes, result readers and resources. Skill guides that preparation; the kernel and state store enforce and preserve the declared bindings. Advisor reviews program-derived facts and resources, and `project advance` selects and executes at most one eligible route. The receipt and declared outputs update the current evidence graph, which feeds the next Advisor decision automatically. [Run the CPU example](program-owned-advisor.md#run-the-public-cpu-example) to inspect this supported entry.
+
+The loop can continue on an eligible route, stop when the declared goal is met, or retain a blocker for evidence gathering or reformulation. A tested predicate `FALSE` is not execution failure or automatic scientific refutation; missing or inconclusive scientific support remains `UNKNOWN`. No eligible route is not proof of the goal. New hypotheses, application premises and independent scientific validation still require agents and domain-specific tools. Expanding the frozen candidate space needs a reviewed new policy, not a caller-written success summary.
+
+Projects without `advisor_policy` keep their existing caller-directed behavior; their receipts alone do not imply this automatic collection and selection loop. The bounded reference CLI below is a different supported execution path. Neither path is a host-wide command sandbox, and regression or replay success does not establish better scientific decisions or prospective RSI gain.
 
 ## Adopted scientific-discovery autonomy levels
 
@@ -41,7 +49,7 @@ Current public `main` provides a human-facing protocol, a bounded scalar referen
 
 ## One experiment in the reference CLI
 
-The runnable source files are in [examples/reference-run](../examples/reference-run/contract.json). The [homepage](../README.md#quick-start) contains the complete PowerShell example.
+The runnable source files are in [examples/reference-run](../examples/reference-run/contract.json). Follow the [bounded reference workflow](../references/l3-state-machine.md) for this entry; the [homepage](../README.md#deterministic-execution--acceptance-kernel) shows the external-project runner instead.
 
 ```mermaid
 flowchart TD
