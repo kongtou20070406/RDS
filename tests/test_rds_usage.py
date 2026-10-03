@@ -41,9 +41,9 @@ class SandboxUsageTests(unittest.TestCase):
         self.addCleanup(environment.stop)
         self.addCleanup(setattr, usage, '_last_error', None)
 
-    def cli(self, *argv):
+    def cli(self, *argv, cwd=None):
         return subprocess.run([sys.executable, '-B', str(ROOT / 'scripts/rds_cli.py'), *argv],
-            cwd=self.root, capture_output=True, text=True, encoding='utf-8', timeout=30)
+            cwd=cwd or self.root, capture_output=True, text=True, encoding='utf-8', timeout=30)
 
     def readonly_default(self):
         # Actual filesystem/SQLite denial, also on Windows where chmod sets
@@ -80,6 +80,51 @@ class SandboxUsageTests(unittest.TestCase):
         self.assertEqual(self.rows(self.fallback), [('advise', 'help', 0), ('usage', 'command', 0)])
         self.assertEqual(self.rows(self.default), [('status', 'command', 0)])
         self.assertFalse((self.root / '.rds/ledger.sqlite3').exists())
+
+    def test_accepted_root_spellings_share_selected_log_when_cwd_differs(self):
+        import rds_cli
+        self.readonly_default()
+        cwd = self.folder / 'different working directory'
+        cwd.mkdir()
+        prefixes = (['--root', str(self.root)], ['--roo', str(self.root)],
+                    ['-w' + str(self.root)], ['--workspace=' + str(self.root)],
+                    ['--roo=' + str(self.root)], ['-d' + str(self.root)])
+        help_stdout = None
+        for index, prefix in enumerate(prefixes):
+            with self.subTest(prefix=prefix):
+                namespace = rds_cli.parser().parse_args([*prefix, 'usage', '--json'])
+                self.assertEqual(Path(namespace.root).resolve(), self.root.resolve())
+                help_result = self.cli(*prefix, 'advise', '--help', cwd=cwd)
+                self.assertEqual(help_result.returncode, 0, help_result.stderr)
+                self.assertEqual(help_result.stderr, '')
+                if help_stdout is None:
+                    help_stdout = help_result.stdout
+                self.assertEqual(help_result.stdout, help_stdout)
+                result = self.cli(*prefix, 'usage', '--days', '1', '--json', cwd=cwd)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stderr, '')
+                report = json.loads(result.stdout)
+                self.assertEqual(Path(report['log_path']).resolve(), self.fallback.resolve())
+                self.assertEqual(report['total_calls'], (index + 1) * 2)
+                self.assertEqual(report['logging'], 'ENABLED')
+                self.assertFalse((cwd / '.rds').exists())
+        self.assertEqual(len(self.rows(self.fallback)), len(prefixes) * 2)
+        self.assertTrue(all(row[2] == 0 for row in self.rows(self.fallback)))
+
+    def test_root_spellings_normalize_without_consuming_child_arguments(self):
+        import rds_cli
+        entry = rds_cli.parser()
+        for prefix in (['--roo', str(self.root)], ['-w' + str(self.root)],
+                       ['--workspace=' + str(self.root)]):
+            for child in (['--', 'python', '--roo', 'child'], ['python', '-wchild']):
+                with self.subTest(prefix=prefix, child=child):
+                    normalized = entry.normalize_args([*prefix, 'exec', *child], quiet=True)
+                    self.assertEqual(normalized[:2], ['--root', str(self.root)])
+                    expected = child[1:] if child[:1] == ['--'] else child
+                    self.assertEqual(normalized[normalized.index('--') + 1:], expected)
+        # The same abbreviation can belong to a child command's own option.
+        parsed = entry.parse_args(['reject', '--rout', 'candidate', '--reason', 'reason', '--evidence', 'file'])
+        self.assertEqual(parsed.route, 'candidate')
 
     def test_real_readonly_default_uses_aliases_cwd_and_preserves_errors(self):
         self.readonly_default()
@@ -160,6 +205,9 @@ class SandboxUsageTests(unittest.TestCase):
         self.readonly_default()
         other = self.folder / 'unintended root'
         for argv in (['--root', str(other), '-w', str(self.root), 'advise', '--help'],
+                     ['--roo', str(other), '-w' + str(self.root), 'advise', '--help'],
+                     ['-w' + str(other), '--workspace=' + str(self.root), 'advise', '--help'],
+                     ['--roo'],
                      ['advise', '--root']):
             with self.subTest(argv=argv):
                 result = self.cli(*argv)
@@ -182,6 +230,9 @@ class SandboxUsageTests(unittest.TestCase):
                 ['-w', '--help', 'advise', '--help'],
                 ['--project-root=--help', 'advise', '--help'],
                 ['--dir', '--version', 'advise', '--help'],
+                ['--roo', '--help', 'advise', '--help'],
+                ['--roo=--help', 'advise', '--help'],
+                ['-w--help', 'advise', '--help'],
                 ['--root', '--', 'advise', '--help'])):
             with self.subTest(argv=argv):
                 cwd = self.folder / ('invalid root case ' + str(index))

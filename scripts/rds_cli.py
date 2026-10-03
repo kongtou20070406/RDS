@@ -1270,11 +1270,19 @@ class FriendlyParser(argparse.ArgumentParser):
                 result.extend(tokens[i:])
                 break
             key = token.split('=', 1)[0]
+            root_value = token.split('=', 1)[1] if '=' in token else None
+            if key not in ROOT_OPTIONS and current is self and token.startswith('-') and len(token) > 2:
+                # Match the top-level spellings argparse already accepts, including
+                # unique long prefixes and attached short-option values. Tuple
+                # layouts differ across Python versions; the explicit value is last.
+                matches = self._get_option_tuples(token)
+                if len(matches) == 1 and matches[0][0] is self._option_string_actions.get('--root'):
+                    key, root_value = matches[0][1], matches[0][-1]
             if key in ROOT_OPTIONS:
                 if globals_:
                     fail('Supply one project root')
-                if '=' in token:
-                    globals_ = ['--root', token.split('=', 1)[1]]
+                if root_value is not None:
+                    globals_ = ['--root', root_value]
                 else:
                     if i + 1 >= len(tokens):
                         fail(key + ' requires a path')
