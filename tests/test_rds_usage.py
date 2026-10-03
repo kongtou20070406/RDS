@@ -16,7 +16,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from usage_cli_fixture import count_diagnostics, dual_sqlite_wait, ledger_snapshot, paused_schema, run_cli, wait_marker
+from usage_cli_fixture import count_diagnostics, dual_sqlite_wait, ledger_snapshot, paused_schema, run_cli, slow_schema_commits, wait_marker
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -454,6 +454,27 @@ class UsageTests(unittest.TestCase):
         self.assertEqual(report['daily'][0]['successful'], 12, evidence)
         self.assertEqual(report['daily'][0]['unfinished'], 0, evidence)
         self.assertTrue(all(row["exit_code"] == 0 for row in ledger_snapshot(self.path)["calls"]), evidence)
+
+    def test_slow_schema_initialization_retains_first_concurrent_calls(self):
+        # Three separate schema commits consume the ten-second start budget
+        # under this declared slow-storage fixture. One schema transaction
+        # keeps the unchanged twelve calls within the same bounded budget.
+        self.assertFalse(self.path.exists())
+        with slow_schema_commits(self.folder, self.path) as probe:
+            environment = {**os.environ, **probe["environment"]}
+            with ThreadPoolExecutor(max_workers=8) as workers:
+                children = list(workers.map(lambda _: subprocess.run(
+                    [sys.executable, "-B", str(ROOT / "scripts/rds_cli.py"), "--version"],
+                    cwd=self.folder, env=environment, capture_output=True, text=True, timeout=60), range(12)))
+            delays = [json.loads(line) for path in probe["work"].glob("*.jsonl")
+                      for line in path.read_text(encoding="utf-8").splitlines()]
+        report = usage.summarize(days=1)
+        evidence = count_diagnostics(self.path, children, report) + " schema=" + json.dumps(delays)
+        self.assertTrue(all(child.returncode == 0 for child in children), evidence)
+        self.assertEqual(report["total_calls"], 12, evidence)
+        self.assertEqual(report["daily"][0]["successful"], 12, evidence)
+        self.assertEqual(report["daily"][0]["unfinished"], 0, evidence)
+        self.assertTrue(delays and all(row["writer_held"] for row in delays), evidence)
 
     def test_paused_schema_preparation_does_not_drop_concurrent_cli_starts(self):
         # One real warmup pauses at the schema/caller boundary. The other
