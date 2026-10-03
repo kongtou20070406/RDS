@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import re
 import rds_operators as operators
+from rds_theory_progression import InvalidProgression, load_spec, run_progression
 
 CATALOGUE = Path(__file__).resolve().parents[1] / "references" / "theory-tools.json"
 MAX_BYTES = 20 * 1024
@@ -97,6 +98,8 @@ def main():
     mode.add_argument("--list-operators", action="store_true")
     mode.add_argument("--scaffold")
     mode.add_argument("--test-operator")
+    mode.add_argument("--progression", metavar="SPEC",
+                      help="Run the bounded finite-model -> EGraph -> native Lean example")
     parser.add_argument("--limit", type=int, default=3)
     parser.add_argument("--out", help="Create a new output file; requires --scaffold")
     args = parser.parse_args()
@@ -105,6 +108,12 @@ def main():
         require(args.out is None or args.scaffold is not None, "--out requires --scaffold")
         if args.list_operators:
             result = {"status": "OK", "operators": list_operators()}
+        elif args.progression is not None:
+            try:
+                result = run_progression(load_spec(args.progression))
+            except (InvalidProgression, OSError, ValueError, TypeError) as exc:
+                result = run_progression(None)
+                result["reason"] = "Invalid progression input: " + str(exc)
         elif args.scaffold is not None:
             result = scaffold_operator(args.scaffold, args.out)
         elif args.test_operator is not None:
@@ -116,6 +125,8 @@ def main():
         print(json.dumps(result, sort_keys=True, separators=(",", ":"), allow_nan=False))
         if args.test_operator is not None:
             return {"PASS": 0, "FAIL": 1, "UNKNOWN": 2}.get(result["test_result"]["status"], 2)
+        if args.progression is not None:
+            return {"PASS": 0, "FAIL": 1, "UNKNOWN": 2}.get(result["status"], 2)
         return 0
     except (ValueError, TypeError, KeyError, OSError) as exc:
         print(json.dumps({"status": "INVALID_INPUT", "reason": str(exc)}))
