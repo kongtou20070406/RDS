@@ -90,6 +90,8 @@ Use RDS to evaluate the current contraction hypothesis and generate checked evid
 
 ### Install
 
+For Claude Code/Codex plugins and the OMP extension with compact invocation status, see [host plugin packaging](docs/host-plugins.md). The existing standalone Skill installation remains supported.
+
 #### Let your agent install it (recommended)
 
 Give this setup instruction directly to Codex, Claude Code, or any agent with shell access:

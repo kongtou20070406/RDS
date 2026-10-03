@@ -1,7 +1,10 @@
 # Native Lean library and statistical obligations
 
-The optional `formal/` Lake project fixes Lean **4.33.1** and mathlib **v4.33.1**;
-`lake-manifest.json` locks the dependency commits. Python-only installations still
+The optional `formal/` Lake project currently uses Lean **4.34.1** and mathlib **v4.34.1**.
+RDS follows matching stable releases; `lean-toolchain` and `lake-manifest.json`
+record the exact toolchain and dependency commits for each revision, rather than
+imposing a permanent version ceiling. The [paired upgrade procedure](lean-toolchain-upgrades.md)
+updates the runtime revision guard together with these files. Python-only installations still
 run RDS. Runtime verification discovers already installed native binaries and
 never installs a toolchain, resolves Lake dependencies, or downloads a cache.
 
@@ -126,9 +129,9 @@ evaluation.
 
 ## Source scope and further work
 
-The pinned [mathlib sub-Gaussian library](https://github.com/leanprover-community/mathlib4/blob/v4.33.1/Mathlib/Probability/Moments/SubGaussian.lean)
+The revision's [mathlib sub-Gaussian library](https://github.com/leanprover-community/mathlib4/blob/v4.34.1/Mathlib/Probability/Moments/SubGaussian.lean)
 supplies Hoeffding's MGF and independent-sum results. Its
-[KL data-processing library](https://github.com/leanprover-community/mathlib4/blob/v4.33.1/Mathlib/InformationTheory/KullbackLeibler/DataProcessing.lean)
+[KL data-processing library](https://github.com/leanprover-community/mathlib4/blob/v4.34.1/Mathlib/InformationTheory/KullbackLeibler/DataProcessing.lean)
 supplies common-channel contraction; the RDS mutual-information theorem also
 proves the required joint and product-law mapping identities. Ville's proof is
 adapted from [formal-martingales, fixed revision](https://github.com/Robby955/formal-martingales/blob/1e49307ce983fe472b35400a79052bb607298123/FormalMartingales/Martingale/Ville.lean),

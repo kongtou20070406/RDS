@@ -90,6 +90,8 @@ flowchart TD
 
 ### 安装
 
+Claude Code、Codex 插件及带简短调用状态的 OMP 扩展见[宿主插件打包指南](docs/host-plugins.md)。原有独立 Skill 安装方式继续支持。
+
 #### 让 Agent 安装（推荐）
 
 将以下配置指令直接交给 Codex、Claude Code 或任何具备终端访问能力的 Agent：
