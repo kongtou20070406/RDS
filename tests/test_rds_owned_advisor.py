@@ -675,6 +675,7 @@ class OwnedAdvisorCLITests(unittest.TestCase):
         self.assertEqual(self.starts(), ['baseline'])
 
     def assert_owned_checkpoint_rejected(self, corruption, expected_reason):
+        from contextlib import closing
         import sqlite3
         from rds_advisor import RDSAdvisor
         from rds_owned_advisor import review
@@ -682,7 +683,7 @@ class OwnedAdvisorCLITests(unittest.TestCase):
         self.output('advise')
         self.output('checkpoint', 'save', '--id', 'bad-owned')
         before = self.snapshot()
-        with sqlite3.connect(self.root / '.rds/project.sqlite3') as db:
+        with closing(sqlite3.connect(self.root / '.rds/project.sqlite3')) as db, db:
             db.execute('DROP TRIGGER checkpoint_no_update')
             if corruption == 'body':
                 db.execute("UPDATE checkpoints SET body='{}' WHERE id='bad-owned'")
