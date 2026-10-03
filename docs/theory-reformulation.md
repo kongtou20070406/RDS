@@ -44,6 +44,18 @@ python -B scripts/rds_theory_tools.py --scaffold state_space_refinement --out op
 - `--test-operator <card-id>`：完整运行固定合成示例诊断，输出 JSON 中的 `test_result`。退出码对应科学检查状态：`PASS=0`、`FAIL=1`、`UNKNOWN=2`。状态空间示例正常完成有限诊断后仍为 UNKNOWN、退出 2；自动化应读取报告，区分执行故障和未解决的科学断言。
 - `--scaffold <card-id> [--out <path>]`：导出独立 Python 模板。直接运行模板会执行正反例断言，输出独立的 `self_test_status`；自检成功不提升其中的科学检查状态。`--out` 仅适用于该模式，默认独占创建新文件，拒绝覆盖已有文件；省略时在 JSON 中返回代码。
 
+### 受限的有限模型、EGraph 与 Lean 组合示例
+
+现有三个检查器通过一个固定命题和真实 CLI 串联：
+
+```text
+python -B scripts/rds_theory_tools.py --progression examples/theory-reformulation/progression.json
+```
+
+该合成例子检查有限有理数域 `D={0,1}` 上的乘法交换性。它先用现有 Cayley 表检查器穷尽有限表，再用有界 EGraph 检查对应的有理多项式恒等式，最后为表内每个有序数对请求原生 Lean 闭有理数检查。claim、无附加假设的声明域、运输义务和阶段顺序都进入阶段哈希；每个 handoff 绑定前一阶段哈希。输入不能提供阶段结果、证明、方法或命题文本。结论只覆盖声明的有限域，不能据此声称 Lean 证明了任意有理数上的一般定理。
+
+每阶段单独保留 `status`、`assurance`、证据和资源上限。EGraph 只报告 `BOUNDED_REWRITE_CHECK` 且不产生证书。最终 PASS 仅表示声明有限域已穷尽且所有实例化闭有理数叶由 `LEAN_KERNEL_CHECKED` 核验；不是 EGraph 证明了 Lean 定理，也不是原研究目标的科学或应用验证。没有原生 Lean、预算耗尽或不支持的检查会保留 UNKNOWN，并列出跳过阶段。空域、重复或超限声明、不同命题、被篡改的 handoff 和失败阶段均不会被升级为 PASS。
+
 状态空间的有限 NFE 比较属于数值诊断：`diagnostic_pass=true` 可以与 `status=UNKNOWN` 同时成立，有限差值和玩具输入不能证明渐近收敛或步长不变性。收缩分析分别报告严格范数条件、工程余量、不动点数值求解与目标偏置；未知目标或求解失败不能记为零偏置。多项式区间 PASS 需要覆盖声明区间的精确有理包围界；精确点可以构成反例，只有有限采样或未得到包围证明时仍为 UNKNOWN。
 
 固定示例与导出模板自检是算子软件回归，不说明真实模型或数据已接入 RDS 执行、目标绑定或下一次选路。真实应用还需绑定输入来源、声明范围、方法与资源授权，并使用适用检查器。当前算子 CLI 没有项目任务输入契约；它不完成 V3 的目标绑定研究示例，也未提供 Lean 公理审查工作流。
