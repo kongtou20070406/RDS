@@ -1,4 +1,5 @@
 """Native research records and real tool reuse work without MRS or containers."""
+from contextlib import closing
 import hashlib
 import json
 import os
@@ -341,6 +342,62 @@ class NativeResearchTests(unittest.TestCase):
         changed = self.cli('advise', '--research-context', str(path), '--graph', str(graph))
         self.assertNotEqual(changed.returncode, 0)
         self.assertIn('frozen objective', changed.stderr)
+
+    def test_bound_goal_without_project_init_rejects_contract_reads_like_an_empty_root(self):
+        # math bind shares .rds/project.sqlite3 before any operational contract exists (#135).
+        context = {'decision': {'id': 'exact-cover', 'goal_revision': '1', 'scope': GOAL['scope']},
+                   'facts': {'x': {'value': False, 'source': 'reported-fixture.json'},
+                             'route-done': {'value': False, 'source': 'reported-fixture.json'}}}
+        graph = {'nodes': [{'id': 'route', 'sources': ['fixture'], 'executable': {
+            'decisions': ['exact-cover'], 'preconditions': [{'fact': 'x', 'value': False}],
+            'satisfied_when': [{'fact': 'route-done', 'value': True}],
+            'action': {'id': 'inspect-x', 'kind': 'PAIRED_TEST', 'description': 'Inspect a reported x', 'operation': 'inspect',
+                       'target': 'x', 'competing_explanations': ['first', 'second'], 'required_observables': ['x'],
+                       'outcomes': [{'observation': 'first', 'next_decision': 'review first'},
+                                    {'observation': 'second', 'next_decision': 'review second'}]}}}], 'edges': []}
+        context_path = self.write('context.json', json.dumps(context))
+        graph_path = self.write('graph.json', json.dumps(graph))
+        commands = {'record': ('advise', '--research-context', str(context_path), '--graph', str(graph_path),
+                               '--choose', 'route:inspect-x', '--record', 'pick-1', '--brief'),
+                    'status': ('project', 'status', '--brief'), 'next': ('project', 'next')}
+        def files():
+            # Every persisted byte under .rds, including CAS blobs; SQLite side files are transient.
+            state = self.root / '.rds'
+            return {str(p.relative_to(state)): hashlib.sha256(p.read_bytes()).hexdigest()
+                    for p in sorted(state.rglob('*')) if p.is_file() and not p.name.endswith(('-wal', '-shm', '-journal'))}
+
+        empty = {name: self.cli(*args) for name, args in commands.items()}
+        self.assertEqual(files(), {})
+        bound = self.cli('math', 'bind', '--objective', str(self.write('objective.json', self.goal)))
+        self.assertEqual(bound.returncode, 0, bound.stderr)
+        database = self.root / '.rds/project.sqlite3'
+
+        def tables():
+            with closing(sqlite3.connect(database)) as db:
+                return {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+
+        before = (tables(), assets.objective(self.root))
+        persisted = files()
+        for name, args in commands.items():
+            with self.subTest(command=name):
+                result = self.cli(*args)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn('OperationalError', result.stderr)
+                self.assertIn('[RDS-REJECT] Project contract has not been initialized', result.stderr)
+                self.assertEqual(result.stderr, empty[name].stderr)
+        self.assertEqual((tables(), assets.objective(self.root)), before)
+        self.assertEqual(files(), persisted)
+        self.assertNotIn('contract', before[0])
+        self.assertNotIn('checkpoints', before[0])
+        # A created but empty contract table keeps its distinct existing reason.
+        with closing(sqlite3.connect(database)) as db, db:
+            db.execute('CREATE TABLE contract(id INTEGER PRIMARY KEY,sha256 TEXT NOT NULL,body TEXT NOT NULL)')
+        for args in (('project', 'status', '--brief'), ('project', 'next')):
+            with self.subTest(missing=args[1]):
+                missing = self.cli(*args)
+                self.assertNotEqual(missing.returncode, 0)
+                self.assertIn('Project contract is missing', missing.stderr)
+                self.assertNotIn('project init', missing.stderr)
 
     def test_native_goal_is_visible_during_local_advisor_review(self):
         assets.bind_objective(self.root, self.goal)
