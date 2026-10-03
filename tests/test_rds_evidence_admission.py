@@ -23,7 +23,11 @@ from rds_advisor_search import _dependency_review, _goal_contribution, _mapped_p
 ANALYZER_GROUNDS = "audit_receipts_enabled" in inspect.signature(
     rds_hypergraph.analyze_hypergraph).parameters
 
-RECEIPT_SHA = hashlib.sha256(b"grounded receipt").hexdigest()
+from rds_project import digest
+
+# The writer's shape: the row and the body both carry the digest of the body without it (#118).
+RECEIPT_BODY = {"schema": 1, "run_id": "r9", "run_status": "SUCCEEDED"}
+RECEIPT_SHA = digest(RECEIPT_BODY)
 MISSING_SHA = "a" * 64
 
 
@@ -35,7 +39,7 @@ def ledger(root, sha):
         CREATE TABLE contract(id INTEGER PRIMARY KEY,sha256 TEXT NOT NULL,body TEXT NOT NULL);
         CREATE TABLE receipts(run_id TEXT PRIMARY KEY,sha256 TEXT NOT NULL,body TEXT NOT NULL);
     """)
-    body = {"schema": 1, "run_id": "r9", "sha256": sha, "run_status": "SUCCEEDED"}
+    body = {**RECEIPT_BODY, "sha256": sha}
     db.execute("INSERT INTO contract VALUES (1,'x','{}')")
     db.execute("INSERT INTO receipts VALUES ('r9',?,?)", (sha, json.dumps(body)))
     db.commit()

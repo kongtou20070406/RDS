@@ -179,31 +179,46 @@ def read_project_receipt(root_text, digest_sha):
 
     Returns ``{"status": "RECEIPT_FOUND", "body": {...}}``, ``RECEIPT_NOT_FOUND``,
     ``RECEIPT_AMBIGUOUS`` when more than one stored receipt carries the sha256,
-    ``RECEIPT_BODY_INVALID`` with the type of a stored body that is not a JSON object,
-    or ``LEDGER_UNAVAILABLE`` with the exception type; the caller judges the body.
+    ``RECEIPT_BODY_INVALID`` with the type of a stored body that is not a JSON object
+    or with the owning ledger's integrity failure (#118), or ``LEDGER_UNAVAILABLE``
+    with the exception type; the caller judges the body.
     """
     try:
-        from rds_project import ProjectStore
+        from rds_project import ProjectStore, ReceiptIntegrityError
         store = ProjectStore(root_text)
         with store._db(True) as db:
-            hits = db.execute("SELECT body FROM receipts WHERE sha256=? LIMIT 2", (digest_sha,)).fetchall()
+            hits = db.execute("SELECT run_id,sha256,body FROM receipts WHERE sha256=? LIMIT 2",
+                              (digest_sha,)).fetchall()
         if not hits:
             return {"status": "RECEIPT_NOT_FOUND"}
         if len(hits) > 1:
             # The ledger writer never repeats a sha256 (it covers the run_id key); no row order picks one.
             return {"status": "RECEIPT_AMBIGUOUS"}
-        raw = hits[0]["body"]
+        row = hits[0]
+        raw = row["body"]
         if not isinstance(raw, (str, bytes)):
             # An untyped imported column can hold NULL or a number; neither is stored JSON text.
             kind = "null" if raw is None else "integer" if isinstance(raw, int) else "real"
             return {"status": "RECEIPT_BODY_INVALID", "reason": "sqlite " + kind}
-        body = json.loads(raw)
+        try:
+            # The owner's own check: one value per key, its run, its recorded and recomputed sha256.
+            return {"status": "RECEIPT_FOUND", "body": ProjectStore._receipt(row)}
+        except ReceiptIntegrityError as exc:
+            failure = str(exc)
+        body = json.loads(raw)  # Malformed or overdeep JSON stays an unavailable ledger, as before.
         if not isinstance(body, dict):
             # An imported or corrupted row is data, not a receipt: nothing is read out of it.
             kind = ("null" if body is None else "boolean" if isinstance(body, bool) else "array"
                     if isinstance(body, list) else "string" if isinstance(body, str) else "number")
             return {"status": "RECEIPT_BODY_INVALID", "reason": kind}
-        return {"status": "RECEIPT_FOUND", "body": body}
+        # Keep only the failure: the run name in the owner's message is text from the rejected row.
+        prefix = f"Project receipt integrity failure: run {row['run_id']} body "
+        failure = failure.removeprefix(prefix).removesuffix("; inspect retained state")
+        if failure == "is not valid JSON":
+            # The plain decode accepted it, so only the owner's extra hook frame hit the recursion
+            # limit: the same too-deep body as one level deeper, never a second classification.
+            return {"status": "LEDGER_UNAVAILABLE", "reason": "RecursionError"}
+        return {"status": "RECEIPT_BODY_INVALID", "reason": failure}
     except (ValueError, FileNotFoundError, OSError, RuntimeError, sqlite3.Error) as exc:
         # RuntimeError: Path.resolve() on a symlink loop; the ledger is unreadable, not a crash.
         return {"status": "LEDGER_UNAVAILABLE", "reason": type(exc).__name__}
