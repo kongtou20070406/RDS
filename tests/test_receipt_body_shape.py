@@ -7,6 +7,7 @@ inferred from the body or written to the named ledger.
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -18,17 +19,23 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 sys.path.insert(0, str(ROOT / 'tests'))
 from rds_hypergraph import audit_receipts, read_project_receipt, receipt_reader
-from rds_project import ReceiptIntegrityError, canonical
+from rds_project import ReceiptIntegrityError, canonical, digest
 import test_rds_project  # Module import: its TestCase classes are not collected twice.
 from test_rds_capability_requirement import (DEEP_LEARNING, MATHEMATICS, SOFTWARE_TOOL, advisor_review, context,
                                              obstruction, route)
 
-SHA = 'a' * 64
 # Valid JSON bodies that are not objects, with the JSON type the status names.
 NON_OBJECT = (('[]', 'array'), ('null', 'null'), ('"SUCCEEDED"', 'string'), ('7', 'number'), ('true', 'boolean'))
 
 
-VALID = json.dumps({'schema': 1, 'run_id': 'r1', 'sha256': SHA, 'run_status': 'SUCCEEDED'})
+def writer_body(**fields):
+    """The writer's shape for row r1: the body carries the digest of itself without it (#118)."""
+    body = {'schema': 1, 'run_id': 'r1', **fields}
+    sha = digest(body)
+    return sha, json.dumps({**body, 'sha256': sha})
+
+
+SHA, VALID = writer_body(run_status='SUCCEEDED')
 
 
 def raw_ledger(root, *bodies, sha=SHA, typed=True):
@@ -288,11 +295,12 @@ class AdviseTests(unittest.TestCase):
         self.assertIn('run', review['dependency_review']['receipt_blocked_node_ids'])
         self.assertEqual(review['obstruction_review'][0]['receipt_audit']['status'], 'RECEIPT_BODY_INVALID')
 
-    def advise_cli(self, *bodies):
+    def advise_cli(self, *bodies, sha=SHA):
         with tempfile.TemporaryDirectory() as raw:
             work = Path(raw)
-            self.ledger = raw_ledger(work / 'ledger', *bodies)
-            (work / 'context.json').write_text(json.dumps(self.ctx(DEEP_LEARNING)), encoding='utf-8')
+            self.ledger = raw_ledger(work / 'ledger', *bodies, sha=sha)
+            ctx = advise_context(DEEP_LEARNING, self.ledger, sha)
+            (work / 'context.json').write_text(json.dumps(ctx), encoding='utf-8')
             (work / 'graph.json').write_text(json.dumps(route(DEEP_LEARNING[0])), encoding='utf-8')
             before = ledger_bytes(self.ledger)
             proc = cli(work, 'advise', '--research-context', str(work / 'context.json'),
@@ -305,8 +313,8 @@ class AdviseTests(unittest.TestCase):
 
     def test_duplicate_receipts_leave_the_obstruction_cause_unknown_in_either_order(self):
         # Row order must not pick the timed-out receipt and turn it into a declared execution cap (#112).
-        timed_out = json.dumps({'schema': 1, 'run_id': 'r0', 'sha256': SHA, 'run_status': 'FAILED', 'timeout': True})
-        alone = self.advise_cli(timed_out)['obstruction_review'][0]
+        timed_sha, timed_out = writer_body(run_status='FAILED', timeout=True)
+        alone = self.advise_cli(timed_out, sha=timed_sha)['obstruction_review'][0]
         self.assertEqual((alone['receipt_audit']['status'], alone['receipt_audit']['execution_cap']),
                          ('RECEIPT_FOUND', 'TIMEOUT'))
         for index, bodies in enumerate(((timed_out, VALID), (VALID, timed_out))):
@@ -387,6 +395,17 @@ class OwnedIntegrityTests(unittest.TestCase):
                 self.assertEqual(row['status'], status)
                 self.assertEqual(read_project_receipt(str(fixture.root), receipt['sha256'])['body'], receipt)
 
+    def test_an_owner_parse_failure_on_decodable_json_stays_the_overdeep_status(self):
+        # Only the owner's object_pairs_hook frame can fail a body the plain decode accepts (recursion
+        # limit), so the status must not depend on which of the two decodes reached it first.
+        root = raw_ledger(Path(tempfile.mkdtemp(prefix='rds118 depth ')), VALID)
+        self.addCleanup(shutil.rmtree, root, True)
+        failure = ReceiptIntegrityError('Project receipt integrity failure: run r1 body is not valid JSON; '
+                                        'inspect retained state')
+        with mock.patch('rds_project.ProjectStore._receipt', side_effect=failure):
+            self.assertEqual(read_project_receipt(str(root), SHA),
+                             {'status': 'LEDGER_UNAVAILABLE', 'reason': 'RecursionError'})
+
     def test_a_forged_timeout_is_not_an_execution_cap_in_advise(self):
         fixture, receipt = self.project('ok', lambda r: canonical({**r, 'timeout': True, 'run_status': 'FAILED'}))
         with tempfile.TemporaryDirectory() as raw:
@@ -409,27 +428,41 @@ class OwnedIntegrityTests(unittest.TestCase):
 
 
 class GoalLinkGuardTests(unittest.TestCase):
-    """`exec` with require_goal_link audits through the same consumer; a non-object receipt blocks the path."""
+    """`exec` with require_goal_link audits through the same consumer; an invalid receipt blocks the path."""
+
+    @staticmethod
+    def guard(ledger_root, sha):
+        from rds_advisor_search import _dependency_review, _goal_contribution
+        spec = {'schema': 1, 'goals': ['D'],
+                'nodes': [{'id': 'B', 'status': 'SUPPORTED', 'source': 'src-B',
+                           'evidence': {'receipt': {'project_root': str(ledger_root), 'sha256': sha}}},
+                          {'id': 'D', 'status': 'UNKNOWN', 'source': 'src-D'}],
+                'hyperedges': [{'id': 'e1', 'premises': ['B'], 'conclusion': 'D', 'status': 'SUPPORTED',
+                                'source': 'src-e1'}]}
+        context = {'decision': {'goal_conditions': [{'fact': 'D', 'value': True}]}, 'dependency_map': spec}
+        action = {'kind': 'OBLIGATION_CHECK', 'target': 'B',
+                  'goal_contribution': {'target': 'D', 'path': ['B', 'D'], 'source': 'fixture'}}
+        # The exact calls the exec guard makes (rds_quick: audit_receipts=True, audit_files=True).
+        dependency = _dependency_review(context, audit_receipts=True, audit_files=True)
+        return dependency, _goal_contribution(action, context, dependency)['graph_path']
+
+    def assert_refused(self, dependency, path):
+        self.assertEqual(dependency['receipt_audit']['audits'][0]['status'], 'RECEIPT_BODY_INVALID')
+        self.assertEqual(path['status'], 'UNKNOWN')
+        self.assertEqual(path['blocked_bindings'][0]['token'], 'node:B')
 
     def test_route_through_an_invalid_receipt_is_refused_with_its_repair_token(self):
-        from rds_advisor_search import _dependency_review, _goal_contribution
         with tempfile.TemporaryDirectory(prefix='rds receipt shape guard ') as raw:
-            ledger_root = raw_ledger(Path(raw) / 'ledger', '[]')
-            spec = {'schema': 1, 'goals': ['D'],
-                    'nodes': [{'id': 'B', 'status': 'SUPPORTED', 'source': 'src-B',
-                               'evidence': {'receipt': {'project_root': str(ledger_root), 'sha256': SHA}}},
-                              {'id': 'D', 'status': 'UNKNOWN', 'source': 'src-D'}],
-                    'hyperedges': [{'id': 'e1', 'premises': ['B'], 'conclusion': 'D', 'status': 'SUPPORTED',
-                                    'source': 'src-e1'}]}
-            context = {'decision': {'goal_conditions': [{'fact': 'D', 'value': True}]}, 'dependency_map': spec}
-            action = {'kind': 'OBLIGATION_CHECK', 'target': 'B',
-                      'goal_contribution': {'target': 'D', 'path': ['B', 'D'], 'source': 'fixture'}}
-            # The exact calls the exec guard makes (rds_quick: audit_receipts=True, audit_files=True).
-            dependency = _dependency_review(context, audit_receipts=True, audit_files=True)
-            self.assertEqual(dependency['receipt_audit']['audits'][0]['status'], 'RECEIPT_BODY_INVALID')
-            path = _goal_contribution(action, context, dependency)['graph_path']
-            self.assertEqual(path['status'], 'UNKNOWN')
-            self.assertEqual(path['blocked_bindings'][0]['token'], 'node:B')
+            self.assert_refused(*self.guard(raw_ledger(Path(raw) / 'ledger', '[]'), SHA))
+
+    def test_route_through_a_row_the_owner_rejects_is_refused(self):
+        # #118: a FAILED run whose stored row gained a second SUCCEEDED status.
+        rows = OwnedIntegrityTests('test_writer_receipts_keep_their_status_through_the_real_cli')
+        self.addCleanup(rows.doCleanups)
+        fixture, receipt = rows.project('nonzero', lambda r: canonical(r)[:-1] + ',"run_status":"SUCCEEDED"}')
+        dependency, path = self.guard(fixture.root, receipt['sha256'])
+        self.assert_refused(dependency, path)
+        self.assertEqual(dependency['receipt_audit']['audits'][0]['reason'], 'repeats a JSON key')
 
 
 if __name__ == '__main__':

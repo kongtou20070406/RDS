@@ -21,8 +21,11 @@ binding: the named ledger must contain a receipt with that sha256 whose
 `run_status` is `SUCCEEDED` (read-only; append-only triggers are never
 touched). Outcomes per binding land in `receipt_audit.audits`:
 `GROUNDED`, `RECEIPT_NOT_FOUND`, `RECEIPT_NOT_SUCCEEDED`,
-`RECEIPT_BODY_INVALID` (the stored body does not decode to a JSON object;
-`reason` names its type), `RECEIPT_AMBIGUOUS` (more than one stored receipt
+`RECEIPT_BODY_INVALID` (the stored body does not decode to a JSON object,
+or fails the ledger's own receipt check: a repeated key, another run, a
+sha256 that does not match the row or the recomputed digest, or a value with
+no canonical encoding; `reason` names the type or the failure),
+`RECEIPT_AMBIGUOUS` (more than one stored receipt
 carries the sha256), or `LEDGER_UNAVAILABLE`.
 
 - **Fail-closed in both modes**: declaring a binding never promotes the
