@@ -4,6 +4,7 @@ All ledgers and maps are synthetic. A corrupted or imported ledger row is data: 
 read reports it as RECEIPT_BODY_INVALID, every consumer stays fail-closed, and nothing is
 inferred from the body or written to the named ledger.
 """
+from contextlib import closing
 import hashlib
 import json
 from pathlib import Path
@@ -348,7 +349,8 @@ class OwnedIntegrityTests(unittest.TestCase):
 
     @staticmethod
     def rows(root):
-        with sqlite3.connect(root / '.rds' / 'project.sqlite3') as db:
+        # closing(): a sqlite3 connection's own context manager commits but stays open (Windows cleanup).
+        with closing(sqlite3.connect(root / '.rds' / 'project.sqlite3')) as db:
             return db.execute('SELECT run_id,sha256,body FROM receipts ORDER BY run_id').fetchall()
 
     def audit_cli(self, root, sha):
