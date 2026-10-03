@@ -20,7 +20,7 @@ PATTERNS = ["test_rds_artifacts.py", "test_rds_costs.py", "test_rds_experiments.
 PUBLIC_DIRECTORIES = {"scripts", "tests", "references", "examples", "benchmark",
                       "docs", "formal", "native", "integrations", "agents", ".github"}
 PUBLIC_ROOT_FILES = {"SKILL.md", "LICENSE", "README.md", "README.zh-CN.md", "README.ja-JP.md",
-                     "CONTRIBUTING.md", "CONTRIBUTING.zh-CN.md", "CHANGELOG.md", "requirements-formal.txt"}
+                     "CONTRIBUTING.md", "CONTRIBUTING.zh-CN.md", "requirements-formal.txt"}
 EXCLUDED_PARTS = {".rds", ".git", ".lake", "target", "__pycache__", ".venv", "node_modules",
                   ".codex", ".agents", ".env", "dist"}
 
