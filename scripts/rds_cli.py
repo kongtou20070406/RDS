@@ -1122,7 +1122,20 @@ def cmd_project(args):
         require(_owned_project(args.root) is not None,
                 'project advance requires a frozen advisor_policy; legacy projects use project next')
         from rds_owned_advisor import review
-        advice = review(store)
+        advice = None
+        for _ in range(3):
+            try:
+                advice = review(store)
+                break
+            except ValueError as exc:
+                message = str(exc)
+                if not any(token in message for token in (
+                    'Owned state changed during evidence collection',
+                    'Owned dependency snapshot changed; retry review',
+                    'Current dependency snapshot changed; review the latest map before resubmitting',
+                )):
+                    raise
+        require(advice is not None, 'Owned state changed during evidence collection; retry review')
         selected = advice.get('selected_manifest')
         if selected is None:
             return advice
