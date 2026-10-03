@@ -102,7 +102,9 @@ class ImportTests(unittest.TestCase):
         valid = {"tilde": ("~0", 0.1), "slash": ("~1", 0.2), "tilde_one": ("~01", 0.3),
                  "two_tildes_one": ("~0~01", 0.4), "three_tildes_one": ("~0~0~01", 0.5), "inner": ("a~0b", 0.6)}
         malformed = {"bare": "~", "unknown_digit": "~2", "trailing": "a~", "double": "~~", "inner_bare": "a~b",
-                     "alias_two": "~~01", "alias_three_left": "~~0~01", "alias_three_right": "~0~~01"}
+                     "alias_two": "~~01", "alias_three_left": "~~0~01", "alias_three_right": "~0~~01",
+                     # The escape is checked before reading, so a missing earlier segment cannot change the reason.
+                     "after_missing_key": "absent/~~01", "after_scalar": "~0/x/~~01"}
         facts = [{"id": k, "pointer": "/" + v} for k, (v, _) in valid.items()] + \
                 [{"id": k, "pointer": "/" + v} for k, v in malformed.items()]
         sources = [self.source("metric.json", "metric", data, facts),
