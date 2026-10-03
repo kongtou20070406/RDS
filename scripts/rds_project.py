@@ -471,6 +471,32 @@ class ProjectStore:
                   for b in contract["bindings"] if b["role"] == role]
         return values[0]["sha256"] if len(values) == 1 else digest(sorted(values, key=lambda b: b["path"]))
 
+    @classmethod
+    def _protocol_conflict(cls, contract, protocol):
+        """The rejection for the first declared identity hash that disagrees with the bindings, else None."""
+        for role in ("code", "config", "data"):
+            if role + "_sha256" not in protocol:
+                continue
+            expected = cls._role_sha(contract, role)
+            if protocol[role + "_sha256"] != expected:
+                count = sum(b["role"] == role for b in contract["bindings"])
+                return (f"Protocol identity conflicts with bindings: {role}_sha256 must be {expected} ("
+                        + (f"the SHA256 of the one '{role}' binding)" if count == 1 else
+                           f"the canonical digest of the {count} '{role}' bindings as {{path, sha256}} sorted by path)"))
+        return None
+
+    @classmethod
+    def _protocol_error(cls, contract, protocol):
+        """Registration's identity check on a run protocol: the rejection, or None."""
+        if not isinstance(protocol, dict):
+            return "Protocol must be an object"
+        missing = [k for k in IDENTITY if k not in protocol]
+        if missing:
+            return "Protocol identity fields required: " + ", ".join(missing) + "; exec can complete operational identity fields"
+        if {"path", "sha256"} & set(protocol):
+            return "Protocol identity uses reserved fields"
+        return cls._protocol_conflict(contract, protocol)
+
     def initialize(self, contract):
         require(isinstance(contract, dict) and type(contract.get("schema")) is int
                 and contract["schema"] == 1, "Project contract schema must be 1")
@@ -528,6 +554,17 @@ class ProjectStore:
             binding_roles.add((path, b["role"]))
             roles.add(b["role"])
         require(ROLES <= roles, "code/config/data/evaluator/protocol bindings required")
+        # A protocol file freezes with the contract, so a conflict here would reject every run that names it.
+        for b in contract["bindings"]:
+            if b["role"] != "protocol":
+                continue
+            try:
+                protocol = load_json(self._path(b["path"]))
+            except (ValueError, UnicodeDecodeError):
+                continue  # Not a JSON identity file; registration rejects it if a run names it.
+            conflict = self._protocol_conflict(contract, protocol) if isinstance(protocol, dict) else None
+            require(not conflict, f"{conflict} in {b['path']}; the protocol is frozen with the contract, "
+                    "so correct it and its binding SHA256 before project init")
         if 'maintenance_allowance' in contract:
             self._maintenance_context(contract)
         commands = contract.get("allowed_commands")
@@ -551,6 +588,12 @@ class ProjectStore:
         if "advisor_policy" in contract:
             from rds_owned_advisor import validate_policy
             validate_policy(self, contract)
+            # Owned routes register their frozen manifests, so each named protocol must pass registration now.
+            for route in contract["advisor_policy"]["routes"]:
+                path = route["manifest"]["protocol"]["path"]
+                error = self._protocol_error(contract, load_json(self._path(path)))
+                require(not error, f"Frozen route '{route['manifest']['id']}' cannot register with {path} ({error}). "
+                        "The protocol is frozen with the contract, so correct it and its binding SHA256 before project init")
         canonical(contract)
         self.state_dir.mkdir(exist_ok=True)
         with self._db() as db:
@@ -685,17 +728,8 @@ class ProjectStore:
             require(isinstance(protocol_ref, dict) and set(protocol_ref) == {"path", "sha256"}, "Protocol must bind a file and SHA256")
             require(any(b["role"] == "protocol" and b["path"] == protocol_ref["path"] and b["sha256"] == protocol_ref["sha256"] for b in contract["bindings"]), "Protocol is not bound by contract")
             protocol = load_json(self._path(protocol_ref["path"]))
-            require(isinstance(protocol, dict), "Protocol must be an object")
-            missing = [k for k in IDENTITY if k not in protocol]
-            require(not missing, "Protocol identity fields required: " + ", ".join(missing) + "; exec can complete operational identity fields")
-            require(not {"path", "sha256"} & set(protocol), "Protocol identity uses reserved fields")
-            for role in ("code", "config", "data"):
-                expected = self._role_sha(contract, role)
-                count = sum(b["role"] == role for b in contract["bindings"])
-                require(protocol[role + "_sha256"] == expected,
-                        f"Protocol identity conflicts with bindings: {role}_sha256 must be {expected} ("
-                        + (f"the SHA256 of the one '{role}' binding)" if count == 1 else
-                           f"the canonical digest of the {count} '{role}' bindings as {{path, sha256}} sorted by path)"))
+            error = self._protocol_error(contract, protocol)
+            require(not error, error)
             outpaths = spec.get("outpaths")
             require(isinstance(outpaths, list) and (outpaths or spec["arm"] == "tool"), "Expected output paths required")
             outputs = [self._path(p, True, contract) for p in outpaths]

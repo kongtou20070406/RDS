@@ -64,6 +64,58 @@ def count_diagnostics(ledger, results, report=None):
         ensure_ascii=True, sort_keys=True)
 
 
+@contextmanager
+def slow_schema_commits(folder, ledger):
+    """Synthetic slow schema storage, using real SQLite writer locks/commits.
+
+    Each schema-changing transaction waits 3.6 seconds while holding its
+    writer. Autocommit DDL is wrapped in its equivalent single-statement
+    transaction so the delay occurs before commit, rather than after the
+    writer is released. Explicit schema transactions retain their boundaries.
+    No SQLite error, timeout value, data write or CLI result is replaced.
+    """
+    work = Path(folder) / "usage-slow-schema"
+    work.mkdir()
+    (work / "sitecustomize.py").write_text(r'''
+import json, os, pathlib, sqlite3, time
+_connect = sqlite3.connect
+_work = pathlib.Path(os.environ["RDS_USAGE_SLOW_SCHEMA"])
+class Connection(sqlite3.Connection):
+    schema_changed = False
+    def execute(self, sql, *args, **kwargs):
+        if not sql.startswith("CREATE "):
+            return super().execute(sql, *args, **kwargs)
+        owned = not self.in_transaction
+        if owned:
+            super().execute("BEGIN IMMEDIATE")
+        before = super().execute("PRAGMA schema_version").fetchone()[0]
+        result = super().execute(sql, *args, **kwargs)
+        after = super().execute("PRAGMA schema_version").fetchone()[0]
+        self.schema_changed = self.schema_changed or before != after
+        if owned:
+            self.commit()
+        return result
+    def commit(self):
+        if self.schema_changed:
+            began = time.monotonic()
+            time.sleep(3.6)
+            with (_work / (str(os.getpid()) + ".jsonl")).open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps({"writer_held": self.in_transaction,
+                    "delay_seconds": time.monotonic() - began}) + "\n")
+            self.schema_changed = False
+        return super().commit()
+def connect(path, *args, **kwargs):
+    if pathlib.Path(path).resolve() == pathlib.Path(os.environ["RDS_USAGE_DB"]).resolve():
+        kwargs["factory"] = Connection
+    return _connect(path, *args, **kwargs)
+sqlite3.connect = connect
+''', encoding="utf-8")
+    yield {"work": work, "environment": {
+        "RDS_USAGE_SLOW_SCHEMA": str(work),
+        "PYTHONPATH": str(work) + os.pathsep + os.environ.get("PYTHONPATH", ""),
+    }}
+
+
 def wait_marker(path, *, child=None, stop=None):
     deadline = time.monotonic() + CLI_WATCHDOG_SECONDS
     while not path.exists():
@@ -86,15 +138,27 @@ import json, os, pathlib, sqlite3, time
 _connect = sqlite3.connect
 _work = pathlib.Path(os.environ["RDS_USAGE_SCHEMA_PAUSE"])
 class Connection(sqlite3.Connection):
+    schema_pause_ready = False
+    def pause(self):
+        (_work / "ready").write_text(json.dumps({"in_transaction": self.in_transaction}))
+        deadline = time.monotonic() + 60
+        while not (_work / "release").exists():
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Synthetic schema-pause gate expired")
+            time.sleep(.01)
     def execute(self, sql, *args, **kwargs):
         result = super().execute(sql, *args, **kwargs)
         if sql.startswith("CREATE INDEX") and not (_work / "ready").exists():
-            (_work / "ready").write_text(json.dumps({"in_transaction": self.in_transaction}))
-            deadline = time.monotonic() + 60
-            while not (_work / "release").exists():
-                if time.monotonic() >= deadline:
-                    raise RuntimeError("Synthetic schema-pause gate expired")
-                time.sleep(.01)
+            if self.in_transaction:
+                self.schema_pause_ready = True
+            else:
+                self.pause()
+        return result
+    def commit(self):
+        result = super().commit()
+        if self.schema_pause_ready:
+            self.schema_pause_ready = False
+            self.pause()
         return result
 def connect(path, *args, **kwargs):
     if pathlib.Path(path).resolve() == pathlib.Path(os.environ["RDS_USAGE_DB"]).resolve():

@@ -80,7 +80,7 @@ class OwnedAdvisorCLITests(unittest.TestCase):
         path.write_text(json.dumps(value, allow_nan=False), encoding='utf-8')
         return str(path)
 
-    def initialize(self, mode='negative', *, timeout=3, include_policy=True, mutate_policy=None, ok=True):
+    def initialize(self, mode='negative', *, timeout=3, include_policy=True, mutate_policy=None, mutate_protocol=None, ok=True):
         files = {'code': ('code.py', SCRIPT), 'config': ('config.json', '{}'),
                  'data': ('data.json', '[1]'), 'evaluator': ('evaluator.json', '{}')}
         for name, text in files.values():
@@ -91,6 +91,8 @@ class OwnedAdvisorCLITests(unittest.TestCase):
                     'init': 'none', 'seed': 0, 'checkpoint': 'none',
                     'schedule': 'one scalar observation', 'sample_work': {'rows': 1},
                     'numeric_protocol': 'Python integer'}
+        if mutate_protocol is not None:
+            mutate_protocol(protocol)
         self.write_json('protocol.json', protocol)
         files['protocol'] = ('protocol.json', '')
         self.manifests = {}
@@ -429,6 +431,46 @@ class OwnedAdvisorCLITests(unittest.TestCase):
                     self.assertEqual(self.starts(), [])
                 finally:
                     self.root, self.env = original_root, original_env
+
+    def test_actions_the_advisor_would_discard_are_rejected_before_the_contract_freezes(self):
+        def node(policy, run_id):
+            return next(n for n in policy['graph']['nodes'] if n['id'] == run_id)['executable']['action']
+        variants = {
+            'one-next-decision': (lambda policy: [o.update(next_decision='review the bounded repair')
+                                                  for o in node(policy, 'repair')['outcomes']],
+                                  'no outcome can distinguish next decisions'),
+            'one-explanation': (lambda policy: node(policy, 'baseline').update(competing_explanations=['positive response']),
+                                'missing competing explanations or action'),
+            'no-observables': (lambda policy: node(policy, 'baseline').update(required_observables=[]),
+                               'missing required observables'),
+        }
+        for label, (change, reason) in variants.items():
+            with self.subTest(label=label):
+                result = self.initialize(mutate_policy=change, ok=False)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn('would never be admitted by the Advisor: ' + reason, result.stderr)
+                self.assertFalse((self.root / '.rds/project.sqlite3').exists())
+                self.assertEqual(self.starts(), [])
+        # Corrected in the same root, the policy freezes and the Advisor selects a route.
+        self.initialize()
+        self.assertEqual(self.output('advise')['selected_run'], 'baseline')
+
+    def test_route_protocols_that_cannot_register_are_rejected_before_the_contract_freezes(self):
+        variants = {
+            'missing-field': (lambda protocol: protocol.pop('seed'), 'Protocol identity fields required: seed'),
+            'reserved-field': (lambda protocol: protocol.update(path='protocol.json'), 'Protocol identity uses reserved fields'),
+        }
+        for label, (change, reason) in variants.items():
+            with self.subTest(label=label):
+                result = self.initialize(mutate_protocol=change, ok=False)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn("Frozen route 'baseline' cannot register with protocol.json (" + reason, result.stderr)
+                self.assertFalse((self.root / '.rds/project.sqlite3').exists())
+                self.assertEqual(self.starts(), [])
+        # Corrected in the same root, the contract freezes and the first route registers and runs.
+        self.initialize()
+        self.assert_owned_receipt(self.output('project', 'advance')['receipt'], 'baseline', 'SUCCEEDED')
+        self.assertEqual(self.starts(), ['baseline'])
 
     def test_missing_or_changed_negative_artifact_blocks_dispatch_and_can_be_recovered(self):
         self.initialize(mutate_policy=lambda value: value['context'].update(max_candidates=1))

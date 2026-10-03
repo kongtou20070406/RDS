@@ -68,17 +68,29 @@ def _database(*, write=True):
         connection.execute(f"PRAGMA busy_timeout={milliseconds}")
 
     try:
-        # Idempotent DDL uses separate SQLite autocommit statements. Never
-        # carry a reserved writer from schema preparation into Python work.
-        # A partial first-use schema is safe to finish on the next invocation.
-        # Keep existing journal modes; no first-use existence/PRAGMA race.
-        for statement in (
-            "CREATE TABLE IF NOT EXISTS tracking (id INTEGER PRIMARY KEY CHECK(id=1), started REAL NOT NULL, day TEXT NOT NULL)",
-            "CREATE TABLE IF NOT EXISTS calls (id INTEGER PRIMARY KEY, started REAL NOT NULL, day TEXT NOT NULL, command TEXT NOT NULL, mode TEXT NOT NULL, version TEXT NOT NULL, exit_code INTEGER, elapsed_ms REAL)",
-            "CREATE INDEX IF NOT EXISTS calls_day ON calls(day)",
-        ):
+        # Read the current database, not a process cache or file-existence
+        # guess. Established logs need no DDL, including read-only queries.
+        remaining_wait()
+        objects = set(connection.execute(
+            "SELECT type,name FROM sqlite_master WHERE name IN ('tracking','calls','calls_day')"
+        ).fetchall())
+        if not {('table', 'tracking'), ('table', 'calls'), ('index', 'calls_day')} <= objects:
+            # A cold/partial schema is one short transaction, rather than
+            # three serial autocommit flushes competing with incoming calls.
+            # IF NOT EXISTS rechecks safely after another initializer wins.
             remaining_wait()
-            connection.execute(statement)
+            connection.execute('BEGIN IMMEDIATE')
+            for statement in (
+                "CREATE TABLE IF NOT EXISTS tracking (id INTEGER PRIMARY KEY CHECK(id=1), started REAL NOT NULL, day TEXT NOT NULL)",
+                "CREATE TABLE IF NOT EXISTS calls (id INTEGER PRIMARY KEY, started REAL NOT NULL, day TEXT NOT NULL, command TEXT NOT NULL, mode TEXT NOT NULL, version TEXT NOT NULL, exit_code INTEGER, elapsed_ms REAL)",
+                "CREATE INDEX IF NOT EXISTS calls_day ON calls(day)",
+            ):
+                remaining_wait()
+                connection.execute(statement)
+            remaining_wait()
+            connection.commit()
+        # Release the schema writer before entering the caller's transaction;
+        # keep journal mode and the shared ten-second phase budget unchanged.
         remaining_wait()
         # Start's tracking+call remain atomic; readers get one consistent
         # snapshot without reserving a writer or upgrading a read transaction.

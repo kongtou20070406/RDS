@@ -60,6 +60,12 @@ def validate_policy(store, contract):
             require(isinstance(action, dict) and _text(action.get('id')) and action['id'] not in actions,
                     'Owned action IDs must be unique')
             actions[action['id']] = action
+    # The context is frozen, so an action the Advisor discards now is discarded on every later review.
+    from rds_advisor_search import _action_valid
+    for action_id, action in actions.items():
+        admitted, reason = _action_valid(action, decision.get('current_choice'))
+        require(admitted, f"Owned action '{action_id}' would never be admitted by the Advisor: {reason}; "
+                "correct it before project init, because advisor_policy freezes with the contract")
     routes = policy['routes']
     require(isinstance(routes, list) and 1 <= len(routes) <= 64, 'Owned routes must contain 1..64 manifests')
     ids, candidates, output_owners = {}, set(), set()
