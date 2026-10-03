@@ -360,7 +360,14 @@ class NativeResearchTests(unittest.TestCase):
         commands = {'record': ('advise', '--research-context', str(context_path), '--graph', str(graph_path),
                                '--choose', 'route:inspect-x', '--record', 'pick-1', '--brief'),
                     'status': ('project', 'status', '--brief'), 'next': ('project', 'next')}
+        def files():
+            # Every persisted byte under .rds, including CAS blobs; SQLite side files are transient.
+            state = self.root / '.rds'
+            return {str(p.relative_to(state)): hashlib.sha256(p.read_bytes()).hexdigest()
+                    for p in sorted(state.rglob('*')) if p.is_file() and not p.name.endswith(('-wal', '-shm', '-journal'))}
+
         empty = {name: self.cli(*args) for name, args in commands.items()}
+        self.assertEqual(files(), {})
         bound = self.cli('math', 'bind', '--objective', str(self.write('objective.json', self.goal)))
         self.assertEqual(bound.returncode, 0, bound.stderr)
         database = self.root / '.rds/project.sqlite3'
@@ -370,6 +377,7 @@ class NativeResearchTests(unittest.TestCase):
                 return {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
 
         before = (tables(), assets.objective(self.root))
+        persisted = files()
         for name, args in commands.items():
             with self.subTest(command=name):
                 result = self.cli(*args)
@@ -378,14 +386,18 @@ class NativeResearchTests(unittest.TestCase):
                 self.assertIn('[RDS-REJECT] Project contract has not been initialized', result.stderr)
                 self.assertEqual(result.stderr, empty[name].stderr)
         self.assertEqual((tables(), assets.objective(self.root)), before)
+        self.assertEqual(files(), persisted)
         self.assertNotIn('contract', before[0])
         self.assertNotIn('checkpoints', before[0])
         # A created but empty contract table keeps its distinct existing reason.
         with closing(sqlite3.connect(database)) as db, db:
             db.execute('CREATE TABLE contract(id INTEGER PRIMARY KEY,sha256 TEXT NOT NULL,body TEXT NOT NULL)')
-        missing = self.cli('project', 'status', '--brief')
-        self.assertNotEqual(missing.returncode, 0)
-        self.assertIn('Project contract is missing', missing.stderr)
+        for args in (('project', 'status', '--brief'), ('project', 'next')):
+            with self.subTest(missing=args[1]):
+                missing = self.cli(*args)
+                self.assertNotEqual(missing.returncode, 0)
+                self.assertIn('Project contract is missing', missing.stderr)
+                self.assertNotIn('project init', missing.stderr)
 
     def test_native_goal_is_visible_during_local_advisor_review(self):
         assets.bind_objective(self.root, self.goal)
