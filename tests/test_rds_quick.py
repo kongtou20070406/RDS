@@ -955,8 +955,16 @@ raise SystemExit(rds_cli.main())
         # Another question's malformed record cannot block this question, and partial same-goal history is not applied.
         write('round-6', {'gain': 16, 'tau': 0.7})
         self.assertEqual(full()[2], 'REFORMULATE')
-        save_checkpoint(self.ledger, 'malformed-other', ProjectStore(self.ledger).snapshot(check_bindings=True),
-                        kind='project', decision={**rejected_obligation, 'question_id': 'other', 'outcome': 'unknown-label'})
+        # save_checkpoint now refuses this record (#153); plant it as a record saved before that check.
+        from rds_checkpoints import SCHEMA, _raw, _sha
+        snapshot = ProjectStore(self.ledger).snapshot(check_bindings=True)
+        raw = _raw({'schema': SCHEMA, 'id': 'malformed-other', 'kind': 'project', 'created_ns': 1,
+                    'contract_sha256': _sha(snapshot['contract']), 'snapshot': snapshot,
+                    'decision': {**rejected_obligation, 'question_id': 'other', 'outcome': 'unknown-label'},
+                    'decision_assurance': 'RECORDED_INPUT_NOT_SCIENTIFIC_VERIFICATION'})
+        with closing(sqlite3.connect(self.ledger / '.rds/project.sqlite3')) as db:
+            db.execute('INSERT INTO checkpoints VALUES (?,?,?)', ('malformed-other', hashlib.sha256(raw.encode('utf-8')).hexdigest(), raw))
+            db.commit()
         search, flags, move = full()
         self.assertNotIn('LOOP_HISTORY_REVIEW_ERROR', flags)
         self.assertEqual(flags['GOAL_HISTORY_SKIPPED']['checkpoint_ids'], ['malformed-other'])

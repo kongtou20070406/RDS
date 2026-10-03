@@ -882,8 +882,12 @@ def validate_checkpoint_decision(decision, checkpoint_id, directory):
         return  # Opaque contexts are never read as route decisions.
     try:
         _checkpoint_route(decision, checkpoint_id, Path(directory), set(), True)
+        if decision["outcome"] == "rejected" and "rejected_domain" in decision:
+            # Review resolves the witness from its own working directory; only an absolute path stays valid.
+            _require(Path(decision["falsification"]["path"]).is_absolute(), "Domain witness path must be absolute")
     except (ValueError, KeyError, TypeError, AttributeError, RecursionError, OSError) as exc:
-        raise ValueError("Checkpoint decision for question " + decision["question_id"] + " would block loop-history review: "
+        raise ValueError("Checkpoint decision for question " + json.dumps(decision["question_id"][:80], ensure_ascii=False)
+                         + " would block loop-history review: "
                          + str(exc) + ". Record the structured candidate from the Advisor output, "
                          "or save the note without the route fields (" + ", ".join(CHECKPOINT_ROUTE_FIELDS) + ")") from exc
 

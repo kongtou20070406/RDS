@@ -390,12 +390,27 @@ class LedgerLoopTests(unittest.TestCase):
                "outcome": (candidate, "maybe")}
         for name, (value, outcome) in bad.items():
             with self.subTest(name=name):
-                with self.assertRaisesRegex(ValueError, "Checkpoint decision for question choose would block loop-history review"):
+                with self.assertRaisesRegex(ValueError, 'Checkpoint decision for question "choose" would block loop-history review'):
                     self.record("bad-" + name, value, outcome)
                 self.assertEqual(self.checkpoint_ids(), before)
         output = self.search()["search"]
         self.assertEqual(len(output["candidates"]), 1)
         self.assertNotIn("LOOP_HISTORY_REVIEW_ERROR", [flag["kind"] for flag in output["loop_review"]["flags"]])
+
+    def test_record_review_cannot_parse_is_never_saved(self):
+        # Review parses every record with the 32-level nesting cap before filtering by question.
+        from rds_checkpoints import save_checkpoint
+        nested = []
+        for _ in range(31):
+            nested = [nested]
+        save_checkpoint(self.root, "shallow-note", self.store.snapshot(), kind="project",
+                        decision={"question_id": "unrelated", "note": [[["fine"]]]})
+        before = self.checkpoint_ids()
+        with self.assertRaisesRegex(ValueError, "unreadable by loop-history review: JSON nesting exceeds 32"):
+            save_checkpoint(self.root, "deep-note", self.store.snapshot(), kind="project",
+                            decision={"question_id": "unrelated", "note": nested})
+        self.assertEqual(self.checkpoint_ids(), before)
+        self.assertNotIn("LOOP_HISTORY_REVIEW_ERROR", [flag["kind"] for flag in self.search()["search"]["loop_review"]["flags"]])
 
     def test_cli_checkpoint_save_rejects_unreadable_route_records_and_keeps_opaque_notes(self):
         import os, subprocess

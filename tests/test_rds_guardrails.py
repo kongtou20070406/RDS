@@ -328,6 +328,32 @@ class DomainTests(unittest.TestCase):
                       result.stdout + result.stderr)
         self.assertFalse((self.root / '.rds/exec/blocked').exists())
 
+    def test_relative_domain_witness_path_is_refused_at_save(self):
+        # #153: review resolves the witness from its own working directory, so a relative path saved from the
+        # project root would later block the question from anywhere else.
+        import os, sqlite3
+        from rds_checkpoints import save_checkpoint
+        from rds_project import ProjectStore
+        self.prepare()
+        db = sqlite3.connect(self.ledger / '.rds/project.sqlite3')
+        try:
+            decision = json.loads(db.execute('SELECT body FROM checkpoints ORDER BY rowid DESC LIMIT 1').fetchone()[0])['decision']
+            count = db.execute('SELECT count(*) FROM checkpoints').fetchone()[0]
+        finally:
+            db.close()
+        witness = Path(decision['falsification']['path'])
+        decision['falsification']['path'] = str(witness.relative_to(self.ledger.resolve()))
+        previous = os.getcwd()
+        os.chdir(self.ledger)
+        self.addCleanup(os.chdir, previous)
+        with self.assertRaisesRegex(ValueError, 'Domain witness path must be absolute'):
+            save_checkpoint(self.ledger, 'relative-witness', ProjectStore(self.ledger).snapshot(), kind='project', decision=decision)
+        db = sqlite3.connect(self.ledger / '.rds/project.sqlite3')
+        try:
+            self.assertEqual(db.execute('SELECT count(*) FROM checkpoints').fetchone()[0], count)
+        finally:
+            db.close()
+
     def test_invalid_or_inferred_domains_cannot_be_recorded_as_universal_falsification(self):
         candidate = {'action': {'parameters': {'c': '21/100'}}}
         for domain in [{'parameters': {'c': {'min': '23/100'}}, 'justification': 'outside'},

@@ -129,7 +129,8 @@ def choice(advice, context, candidate_id=None):
                       'contribution': deepcopy(contribution)}
     history_errors = [str(f.get('reason', '')) for r in advice.get('recommendations', [])
                       for f in r.get('review', {}).get('flags', []) if f.get('kind') == 'LOOP_HISTORY_REVIEW_ERROR']
-    require(not history_errors, 'Repair checkpoint integrity before executing a candidate: ' + '; '.join(history_errors[:1]))
+    require(not history_errors, 'Repair checkpoint integrity before executing a candidate'
+            + (': ' + history_errors[0] if history_errors and history_errors[0] else ''))
     require(_loop_route(candidate) is not None, 'Candidate has no structured route identity')
     record = {'question_id': decision['id'], 'goal_revision': decision['goal_revision'],
               'scope': deepcopy(decision['scope']), 'candidate': deepcopy(candidate),
