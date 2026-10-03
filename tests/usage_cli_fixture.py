@@ -76,6 +76,41 @@ def wait_marker(path, *, child=None, stop=None):
         time.sleep(.01)
 
 
+@contextmanager
+def paused_schema(folder, ledger):
+    """Pause one real CLI after schema preparation, with bounded parent cleanup."""
+    work = Path(folder) / "usage-schema-pause"
+    work.mkdir()
+    (work / "sitecustomize.py").write_text(r'''
+import json, os, pathlib, sqlite3, time
+_connect = sqlite3.connect
+_work = pathlib.Path(os.environ["RDS_USAGE_SCHEMA_PAUSE"])
+class Connection(sqlite3.Connection):
+    def execute(self, sql, *args, **kwargs):
+        result = super().execute(sql, *args, **kwargs)
+        if sql.startswith("CREATE INDEX") and not (_work / "ready").exists():
+            (_work / "ready").write_text(json.dumps({"in_transaction": self.in_transaction}))
+            deadline = time.monotonic() + 60
+            while not (_work / "release").exists():
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("Synthetic schema-pause gate expired")
+                time.sleep(.01)
+        return result
+def connect(path, *args, **kwargs):
+    if pathlib.Path(path).resolve() == pathlib.Path(os.environ["RDS_USAGE_DB"]).resolve():
+        kwargs["factory"] = Connection
+    return _connect(path, *args, **kwargs)
+sqlite3.connect = connect
+''', encoding="utf-8")
+    try:
+        yield {"work": work, "environment": {
+            "RDS_USAGE_SCHEMA_PAUSE": str(work),
+            "PYTHONPATH": str(work) + os.pathsep + os.environ.get("PYTHONPATH", ""),
+        }}
+    finally:
+        (work / "release").touch()
+
+
 # Only the declared synthetic database is instrumented. Real connect/BEGIN/
 # commit/close calls run unchanged; gates let the parent hold two real writers.
 HOOK = r'''

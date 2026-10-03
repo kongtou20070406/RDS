@@ -1,6 +1,8 @@
 """Local, process-safe CLI invocation counts; no prompts or argument payloads."""
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import date, datetime, timedelta, timezone
+import errno
 import os
 from pathlib import Path
 import sqlite3
@@ -26,9 +28,13 @@ COMMAND_ALIASES = {"exec": {"execute", "test", "eval", "start", "执行", "运�
                    "math": {"assets", "数学", "资产"}, "rsi": {"tools", "evolve", "演化", "工具"},
                    "execute": {"exec", "执行"}, "save": {"record", "保存"}, "restore": {"resume", "恢复"}}
 _last_error = None
+_active_path = ContextVar('rds_usage_path', default=None)
 
 
 def log_path():
+    active = _active_path.get()
+    if active is not None:
+        return active
     override = os.environ.get("RDS_USAGE_DB")
     if override:
         return Path(override).expanduser().resolve()
@@ -37,22 +43,48 @@ def log_path():
     return base / "ResearchDirectionSelector" / "cli-usage.sqlite3"
 
 
+def _unwritable(exc):
+    # Only storage access failures justify changing the automatic location.
+    # Busy writers, damaged databases and rejected inserts remain visible.
+    if isinstance(exc, OSError):
+        return isinstance(exc, PermissionError) or exc.errno in {errno.EACCES, errno.EPERM, errno.EROFS}
+    code = getattr(exc, 'sqlite_errorcode', None)
+    return isinstance(code, int) and code & 255 in {sqlite3.SQLITE_READONLY, sqlite3.SQLITE_PERM, sqlite3.SQLITE_CANTOPEN}
+
+
 @contextmanager
-def _database():
+def _database(*, write=True):
     path = log_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     # Brief contention must not drop invocations. SQLite bounds this wait;
     # persistent storage failure still leaves the original command unaffected.
-    connection = sqlite3.connect(path, timeout=10)
+    connection = sqlite3.connect(path, timeout=10, isolation_level=None)
+    deadline = time.monotonic() + 10
+
+    def remaining_wait():
+        # All schema/transaction waits share the original phase budget. A
+        # paused process does not get a fresh ten seconds at every statement.
+        milliseconds = max(0, int((deadline - time.monotonic()) * 1000))
+        connection.execute(f"PRAGMA busy_timeout={milliseconds}")
+
     try:
-        # Serialize schema creation and the caller's write in one bounded
-        # transaction, before reading schema; no read-to-write lock upgrade.
-        connection.execute('BEGIN IMMEDIATE')
+        # Idempotent DDL uses separate SQLite autocommit statements. Never
+        # carry a reserved writer from schema preparation into Python work.
+        # A partial first-use schema is safe to finish on the next invocation.
         # Keep existing journal modes; no first-use existence/PRAGMA race.
-        connection.execute("CREATE TABLE IF NOT EXISTS tracking (id INTEGER PRIMARY KEY CHECK(id=1), started REAL NOT NULL, day TEXT NOT NULL)")
-        connection.execute("CREATE TABLE IF NOT EXISTS calls (id INTEGER PRIMARY KEY, started REAL NOT NULL, day TEXT NOT NULL, command TEXT NOT NULL, mode TEXT NOT NULL, version TEXT NOT NULL, exit_code INTEGER, elapsed_ms REAL)")
-        connection.execute("CREATE INDEX IF NOT EXISTS calls_day ON calls(day)")
+        for statement in (
+            "CREATE TABLE IF NOT EXISTS tracking (id INTEGER PRIMARY KEY CHECK(id=1), started REAL NOT NULL, day TEXT NOT NULL)",
+            "CREATE TABLE IF NOT EXISTS calls (id INTEGER PRIMARY KEY, started REAL NOT NULL, day TEXT NOT NULL, command TEXT NOT NULL, mode TEXT NOT NULL, version TEXT NOT NULL, exit_code INTEGER, elapsed_ms REAL)",
+            "CREATE INDEX IF NOT EXISTS calls_day ON calls(day)",
+        ):
+            remaining_wait()
+            connection.execute(statement)
+        remaining_wait()
+        # Start's tracking+call remain atomic; readers get one consistent
+        # snapshot without reserving a writer or upgrading a read transaction.
+        connection.execute('BEGIN IMMEDIATE' if write else 'BEGIN')
         yield connection
+        remaining_wait()
         connection.commit()
     finally:
         connection.close()
@@ -121,15 +153,34 @@ def _log_failure(phase, exc):
         pass
 
 
-def run_logged(function, argv, version):
+def run_logged(function, argv, version, *, root=None):
+    """Pin one database per invocation, including reports and exceptional exits."""
+    context = _active_path.set(None)
+    try:
+        return _run_logged(function, argv, version, root=root)
+    finally:
+        _active_path.reset(context)
+
+
+def _run_logged(function, argv, version, *, root):
     """Record starts and exits; log failures never change the command's result."""
     global _last_error
     token, code, started = None, None, time.perf_counter()
     _last_error = None
     try:
+        _active_path.set(log_path())
         token = _start(argv, version)
     except (OSError, sqlite3.Error, ValueError) as exc:
-        _log_failure("start", exc)
+        if (root is not None and _unwritable(exc)
+                and not os.environ.get('RDS_USAGE_DB')):
+            try:
+                resolved = Path(root() if callable(root) else root).resolve()
+                _active_path.set(resolved / '.rds' / 'usage' / 'cli-usage.sqlite3')
+                token = _start(argv, version)
+            except (OSError, sqlite3.Error, ValueError) as fallback_error:
+                _log_failure('start', fallback_error)
+        else:
+            _log_failure("start", exc)
     try:
         result = function()
         code = result if type(result) is int else 0
@@ -163,7 +214,7 @@ def summarize(*, days=14, since=None, until=None):
         start = end - timedelta(days=days - 1)
     if not 0 <= (end - start).days < 3660:
         raise ValueError("Date range must be ordered and span at most 3660 days")
-    with _database() as connection:
+    with _database(write=False) as connection:
         tracking = connection.execute("SELECT started,day FROM tracking WHERE id=1").fetchone()
         rows = connection.execute("SELECT day,COUNT(*),SUM(exit_code=0),SUM(exit_code!=0),SUM(exit_code IS NULL) FROM calls WHERE day BETWEEN ? AND ? GROUP BY day", (start.isoformat(), end.isoformat())).fetchall()
         commands = dict(connection.execute("SELECT command,COUNT(*) FROM calls WHERE day BETWEEN ? AND ? GROUP BY command ORDER BY command", (start.isoformat(), end.isoformat())))

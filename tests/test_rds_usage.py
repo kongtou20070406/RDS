@@ -16,11 +16,268 @@ import time
 import unittest
 from unittest.mock import patch
 
-from usage_cli_fixture import count_diagnostics, dual_sqlite_wait, ledger_snapshot, run_cli, wait_marker
+from usage_cli_fixture import count_diagnostics, dual_sqlite_wait, ledger_snapshot, paused_schema, run_cli, wait_marker
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import rds_usage as usage
+
+
+class SandboxUsageTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.folder = Path(temporary.name)
+        self.root = self.folder / 'project with spaces'
+        self.root.mkdir()
+        self.state = self.folder / 'state'
+        self.default = self.state / 'ResearchDirectionSelector' / 'cli-usage.sqlite3'
+        self.default.parent.mkdir(parents=True)
+        self.fallback = self.root / '.rds/usage/cli-usage.sqlite3'
+        env = {k: v for k, v in os.environ.items() if k not in {'RDS_USAGE_DB', 'XDG_STATE_HOME', 'LOCALAPPDATA'}}
+        env.update(LOCALAPPDATA=str(self.state))
+        environment = patch.dict(os.environ, env, clear=True)
+        environment.start()
+        self.addCleanup(environment.stop)
+        self.addCleanup(setattr, usage, '_last_error', None)
+
+    def cli(self, *argv):
+        return subprocess.run([sys.executable, '-B', str(ROOT / 'scripts/rds_cli.py'), *argv],
+            cwd=self.root, capture_output=True, text=True, encoding='utf-8', timeout=30)
+
+    def readonly_default(self):
+        # Actual filesystem/SQLite denial, also on Windows where chmod sets
+        # the read-only file attribute. No fake success or SQLite result.
+        usage.run_logged(lambda: 0, ['status'], 'test')
+        self.default.chmod(0o444)
+        self.addCleanup(self.default.chmod, 0o666)
+        try:
+            with closing(sqlite3.connect(self.default)) as db:
+                db.execute('BEGIN IMMEDIATE')
+                db.execute("INSERT INTO calls (command,mode,version,started,day) VALUES ('status','command','test',0,'2000-01-01')")
+        except sqlite3.OperationalError as exc:
+            self.assertEqual(exc.sqlite_errorcode & 255, sqlite3.SQLITE_READONLY)
+        else:
+            self.skipTest('This account bypasses filesystem read-only protection')
+
+    def rows(self, path):
+        with closing(sqlite3.connect(path)) as db:
+            return db.execute('SELECT command,mode,exit_code FROM calls ORDER BY id').fetchall()
+
+    def test_real_readonly_default_help_and_report_share_project_log(self):
+        self.readonly_default()
+        help_result = self.cli('--root', str(self.root), 'advise', '--help')
+        self.assertEqual(help_result.returncode, 0, help_result.stderr)
+        self.assertIn('usage:', help_result.stdout)
+        self.assertNotIn('RDS-USAGE-DEGRADED', help_result.stderr)
+        self.assertEqual(self.rows(self.fallback), [('advise', 'help', 0)])
+        report_result = self.cli('usage', '--root=' + str(self.root), '--days', '1', '--json')
+        self.assertEqual(report_result.returncode, 0, report_result.stderr)
+        report = json.loads(report_result.stdout)
+        self.assertEqual(Path(report['log_path']).resolve(), self.fallback.resolve())
+        self.assertEqual(report['logging'], 'ENABLED')
+        self.assertEqual(report['total_calls'], 2)
+        self.assertEqual(self.rows(self.fallback), [('advise', 'help', 0), ('usage', 'command', 0)])
+        self.assertEqual(self.rows(self.default), [('status', 'command', 0)])
+        self.assertFalse((self.root / '.rds/ledger.sqlite3').exists())
+
+    def test_real_readonly_default_uses_aliases_cwd_and_preserves_errors(self):
+        self.readonly_default()
+        for alias in ('--workspace', '--project-root', '-w', '-d', '--dir'):
+            with self.subTest(alias=alias):
+                result = self.cli('advise', alias, str(self.root), '--help')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn('RDS-USAGE-DEGRADED', result.stderr)
+        result = self.cli('usage', '--days', '0')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('--days', result.stderr)
+        self.assertNotIn('RDS-USAGE-DEGRADED', result.stderr)
+        rows = self.rows(self.fallback)
+        self.assertEqual(len(rows), 6)
+        self.assertEqual(rows[-1], ('usage', 'command', 1))
+        self.assertTrue(all(row[2] is not None for row in rows))
+
+    def test_root_inspection_respects_explicit_and_implicit_child_boundaries(self):
+        import rds_cli
+        other = str(self.folder / 'child-root')
+        parser = rds_cli.parser()
+        for tail in (['--', 'python', '--root', other], ['python', '--root', other]):
+            with self.subTest(tail=tail):
+                tokens = parser.normalize_args(['exec', '-w', str(self.root), *tail], quiet=True)
+                self.assertEqual(tokens[:2], ['--root', str(self.root)])
+                self.assertEqual(tokens[tokens.index('--') + 1:], ['python', '--root', other])
+        # A root-looking option value is data, even before the child boundary.
+        tokens = parser.normalize_args(['exec', '--name', '--root', '--', 'python'], quiet=True)
+        self.assertNotEqual(tokens[:1], ['--root'])
+        self.assertFalse((self.folder / 'child-root').exists())
+
+    def test_permission_denied_home_falls_back_and_keeps_exception(self):
+        environment = dict(os.environ)
+        environment.pop('LOCALAPPDATA')
+        mkdir = Path.mkdir
+        denied = self.folder / 'home/.local/state/ResearchDirectionSelector'
+        def restricted(path, *args, **kwargs):
+            if path == denied:
+                raise PermissionError('synthetic workspace-write HOME denial')
+            return mkdir(path, *args, **kwargs)
+        stderr = io.StringIO()
+        with patch.dict(os.environ, environment, clear=True), patch.object(Path, 'home', return_value=self.folder / 'home'), \
+                patch.object(Path, 'mkdir', restricted), redirect_stderr(stderr):
+            self.assertEqual(usage.run_logged(lambda: 7, ['status'], 'test', root=self.root), 7)
+            with self.assertRaisesRegex(RuntimeError, 'original failure'):
+                usage.run_logged(lambda: (_ for _ in ()).throw(RuntimeError('original failure')),
+                    ['status'], 'test', root=self.root)
+        self.assertEqual(stderr.getvalue(), '')
+        self.assertEqual(self.rows(self.fallback), [('status', 'command', 7), ('status', 'command', 1)])
+        self.assertEqual(usage.log_path(), self.default)  # Invocation context restored.
+
+    def test_explicit_locations_and_nonpermission_failures_do_not_fallback(self):
+        self.readonly_default()
+        for settings in ({'RDS_USAGE_DB': str(self.default)},):
+            with self.subTest(settings=settings), patch.dict(os.environ, settings):
+                result = self.cli('-w', str(self.root), 'advise', '--help')
+                self.assertEqual(result.returncode, 0)
+                self.assertIn('RDS-USAGE-DEGRADED', result.stderr)
+                self.assertFalse(self.fallback.exists())
+        self.default.chmod(0o666)
+        self.default.write_bytes(b'not a sqlite database')
+        result = self.cli('-w', str(self.root), 'advise', '--help')
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('SQLITE_NOTADB', result.stderr)
+        self.assertFalse(self.fallback.exists())
+
+    def test_unrecognized_xdg_setting_keeps_existing_default_semantics(self):
+        with patch.dict(os.environ, {'XDG_STATE_HOME': str(self.folder / 'xdg')}):
+            self.assertEqual(usage.log_path(), self.default)
+            self.readonly_default()
+            result = self.cli('-w', str(self.root), 'advise', '--help')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn('RDS-USAGE-DEGRADED', result.stderr)
+            self.assertEqual(self.rows(self.fallback), [('advise', 'help', 0)])
+            self.assertFalse((self.folder / 'xdg').exists())
+
+    def test_invalid_or_duplicate_root_does_not_create_unintended_directories(self):
+        self.readonly_default()
+        other = self.folder / 'unintended root'
+        for argv in (['--root', str(other), '-w', str(self.root), 'advise', '--help'],
+                     ['advise', '--root']):
+            with self.subTest(argv=argv):
+                result = self.cli(*argv)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn('RDS-USAGE-DEGRADED', result.stderr)
+                self.assertFalse(other.exists())
+                self.assertFalse(self.fallback.exists())
+
+    def test_option_looking_root_value_does_not_create_usage_files(self):
+        self.readonly_default()
+        result = self.cli('--root', '--help', 'advise', '--help')
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn('expected one argument', result.stderr)
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_option_looking_root_aliases_and_placements_leave_cwd_untouched(self):
+        self.readonly_default()
+        for index, argv in enumerate((
+                ['advise', '--workspace', '--help', '--help'],
+                ['-w', '--help', 'advise', '--help'],
+                ['--project-root=--help', 'advise', '--help'],
+                ['--dir', '--version', 'advise', '--help'],
+                ['--root', '--', 'advise', '--help'])):
+            with self.subTest(argv=argv):
+                cwd = self.folder / ('invalid root case ' + str(index))
+                cwd.mkdir()
+                result = subprocess.run([sys.executable, '-B', str(ROOT / 'scripts/rds_cli.py'), *argv],
+                    cwd=cwd, capture_output=True, text=True, encoding='utf-8', timeout=30)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertEqual(list(cwd.iterdir()), [])
+
+    def test_explicit_path_named_like_an_option_remains_a_valid_root(self):
+        self.readonly_default()
+        target = self.root / '--help'
+        result = self.cli('--root', str(target), 'advise', '--help')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('RDS-USAGE-DEGRADED', result.stderr)
+        self.assertEqual(self.rows(target / '.rds/usage/cli-usage.sqlite3'), [('advise', 'help', 0)])
+
+    def test_real_exec_help_does_not_use_child_root_options(self):
+        self.readonly_default()
+        other = str(self.folder / 'child root')
+        for child in (['--', 'python', '--root', other], ['python', '--root', other]):
+            with self.subTest(child=child):
+                result = self.cli('exec', '-w', str(self.root), '--help', *child)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn('RDS-USAGE-DEGRADED', result.stderr)
+                self.assertFalse(Path(other).exists())
+        self.assertEqual(self.rows(self.fallback), [('exec', 'help', 0), ('exec', 'help', 0)])
+
+    def test_unavailable_fallback_keeps_degraded_result(self):
+        self.readonly_default()
+        (self.root / '.rds').write_text('synthetic unavailable root output')
+        result = self.cli('-w', str(self.root), 'advise', '--help')
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('RDS-USAGE-DEGRADED', result.stderr)
+        self.assertIn('start record not confirmed', result.stderr)
+        self.assertIn('usage:', result.stdout)
+
+    def test_writable_default_stays_shared_and_explicit_file_wins(self):
+        result = self.cli('-w', str(self.root), 'advise', '--help')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.rows(self.default), [('advise', 'help', 0)])
+        self.assertFalse(self.fallback.exists())
+        override = self.folder / 'explicit.sqlite3'
+        with patch.dict(os.environ, {'RDS_USAGE_DB': str(override), 'XDG_STATE_HOME': str(self.folder / 'xdg')}):
+            result = self.cli('-w', str(self.root), 'advise', '--help')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(self.rows(override), [('advise', 'help', 0)])
+        self.assertFalse((self.folder / 'xdg').exists())
+
+    def test_invocation_pins_database_even_if_command_changes_environment(self):
+        other = self.folder / 'changed.sqlite3'
+        def command():
+            os.environ['RDS_USAGE_DB'] = str(other)
+            report = usage.summarize(days=1)
+            self.assertEqual(report['log_path'], str(self.default))
+            self.assertEqual(report['total_calls'], 1)
+            return 7
+        self.assertEqual(usage.run_logged(command, ['usage'], 'test', root=self.root), 7)
+        self.assertEqual(self.rows(self.default), [('usage', 'command', 7)])
+        self.assertFalse(other.exists())
+        self.assertEqual(usage.log_path().resolve(), other.resolve())
+
+    def test_finish_denial_never_updates_matching_row_in_fallback_database(self):
+        with patch.dict(os.environ, {'RDS_USAGE_DB': str(self.fallback)}):
+            usage.run_logged(lambda: 7, ['status'], 'test')
+        warning = io.StringIO()
+        def command():
+            self.default.chmod(0o444)
+            self.addCleanup(self.default.chmod, 0o666)
+            return 9
+        with redirect_stderr(warning):
+            self.assertEqual(usage.run_logged(command, ['status'], 'test', root=self.root), 9)
+        if 'finish logging failed' not in warning.getvalue():
+            self.skipTest('This account bypasses filesystem read-only protection')
+        self.assertEqual(self.rows(self.default), [('status', 'command', None)])
+        self.assertEqual(self.rows(self.fallback), [('status', 'command', 7)])
+
+    def test_busy_default_does_not_split_history_into_project_fallback(self):
+        usage.run_logged(lambda: 0, ['status'], 'test')
+        warning = io.StringIO()
+        with closing(sqlite3.connect(self.default)) as db:
+            db.execute('BEGIN IMMEDIATE')
+            with redirect_stderr(warning):
+                self.assertEqual(usage.run_logged(lambda: 7, ['status'], 'test', root=self.root), 7)
+            db.rollback()
+        self.assertIn('SQLITE_BUSY', warning.getvalue())
+        self.assertFalse(self.fallback.exists())
+        self.assertEqual(self.rows(self.default), [('status', 'command', 0)])
+
+    def test_concurrent_fallback_cli_calls_keep_all_finished_records(self):
+        self.readonly_default()
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(lambda _: self.cli('-w', str(self.root), 'advise', '--help'), range(12)))
+        self.assertTrue(all(result.returncode == 0 for result in results), results)
+        self.assertTrue(all('RDS-USAGE-DEGRADED' not in result.stderr for result in results), results)
+        self.assertEqual(self.rows(self.fallback), [('advise', 'help', 0)] * 12)
 
 
 class UsageTests(unittest.TestCase):
@@ -146,6 +403,23 @@ class UsageTests(unittest.TestCase):
                 usage.run_logged(lambda: (_ for _ in ()).throw(RuntimeError("original error")), ["status"], "test")
         self.assertIsNotNone(usage._last_error)
 
+    def test_rejected_start_rolls_back_tracking_with_call_and_recovers(self):
+        with usage._database() as db:
+            db.execute("CREATE TRIGGER reject_call BEFORE INSERT ON calls "
+                       "BEGIN SELECT RAISE(ABORT, 'synthetic rejection'); END")
+        warning = io.StringIO()
+        with redirect_stderr(warning):
+            self.assertEqual(usage.run_logged(lambda: 7, ["status"], "test"), 7)
+        self.assertIn("start record not confirmed", warning.getvalue())
+        with closing(sqlite3.connect(self.path)) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM tracking").fetchone()[0], 0)
+            self.assertEqual(db.execute("SELECT count(*) FROM calls").fetchone()[0], 0)
+            db.execute("DROP TRIGGER reject_call")
+        self.assertEqual(usage.run_logged(lambda: 0, ["status"], "test"), 0)
+        report = usage.summarize(days=2)
+        self.assertEqual(report["total_calls"], 1)
+        self.assertEqual(sum(r["unfinished"] for r in report["daily"]), 0)
+
     def test_concurrent_cli_processes_retain_all_calls(self):
         warmup = self.cli("--version")
         self.assertEqual(warmup.returncode, 0, count_diagnostics(self.path, [warmup]))
@@ -162,6 +436,8 @@ class UsageTests(unittest.TestCase):
         self.assertEqual(result["total_calls"], 13, evidence)
         self.assertEqual(result["modes"], {"version": 13}, evidence)
         self.assertEqual(result["daily"][0]["successful"], 13, evidence)
+        self.assertEqual(result["daily"][0]["unfinished"], 0, evidence)
+        self.assertTrue(all(row["exit_code"] == 0 for row in ledger_snapshot(self.path)["calls"]), evidence)
 
     def test_first_concurrent_invocations_retain_all_calls(self):
         self.assertFalse(self.path.exists())
@@ -176,6 +452,37 @@ class UsageTests(unittest.TestCase):
         evidence = count_diagnostics(self.path, results, report)
         self.assertEqual(report['total_calls'], 12, evidence)
         self.assertEqual(report['daily'][0]['successful'], 12, evidence)
+        self.assertEqual(report['daily'][0]['unfinished'], 0, evidence)
+        self.assertTrue(all(row["exit_code"] == 0 for row in ledger_snapshot(self.path)["calls"]), evidence)
+
+    def test_paused_schema_preparation_does_not_drop_concurrent_cli_starts(self):
+        # One real warmup pauses at the schema/caller boundary. The other
+        # twelve real invocations must complete while it is still paused;
+        # schema preparation must not reserve their writer for Python work.
+        with paused_schema(self.folder, self.path) as probe:
+            environment = {**os.environ, **probe["environment"]}
+            with ThreadPoolExecutor(max_workers=1) as warmup_pool:
+                warmup_future = warmup_pool.submit(
+                    subprocess.run,
+                    [sys.executable, "-B", str(ROOT / "scripts/rds_cli.py"), "--version"],
+                    cwd=self.folder, env=environment, capture_output=True, text=True, timeout=60)
+                try:
+                    wait_marker(probe["work"] / "ready")
+                    with ThreadPoolExecutor(max_workers=8) as workers:
+                        results = list(workers.map(lambda _: self.cli("--version"), range(12)))
+                    paused = json.loads((probe["work"] / "ready").read_text())
+                finally:
+                    (probe["work"] / "release").touch()
+                warmup = warmup_future.result(timeout=60)
+        children = [warmup, *results]
+        report = usage.summarize(days=2)
+        evidence = count_diagnostics(self.path, children, report)
+        self.assertTrue(all(r.returncode == 0 for r in children), evidence)
+        self.assertEqual(report["total_calls"], 13, evidence)
+        self.assertEqual(sum(r["successful"] for r in report["daily"]), 13, evidence)
+        self.assertEqual(sum(r["unfinished"] for r in report["daily"]), 0, evidence)
+        self.assertTrue(all(r["exit_code"] == 0 for r in ledger_snapshot(self.path)["calls"]), evidence)
+        self.assertFalse(paused["in_transaction"])
 
     def test_persistent_start_lock_reports_loss_but_preserves_real_cli_result(self):
         warmup = self.cli("--version")

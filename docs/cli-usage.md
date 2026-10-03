@@ -1,13 +1,20 @@
 # Local CLI usage log
 
 Every `rds_cli.py` invocation attempts to record its start and exit in a local SQLite log,
-automatically. All updated checkouts share one log for the current user. Calls
-include help, version, invalid arguments, failed commands and statistics queries.
+automatically. Updated checkouts share the current user's default log when that
+location is writable. Calls include help, version, invalid arguments, failed
+commands and statistics queries.
 
-SQLite waits up to ten seconds per logging transaction for temporary contention;
+SQLite lock waits share a ten-second budget per logging phase for temporary contention;
 persistent failures leave the command's original result unchanged. Existing journal
 modes are retained, and fresh logs use SQLite's default mode without a first-use
-existence/PRAGMA race. The invocation reports a logging failure to stderr as
+existence/PRAGMA race. Idempotent schema preparation commits each statement before
+the call's write transaction, so a process paused between schema setup and logging
+does not hold a writer reserved for other calls. Tracking and the start row are
+still written atomically; reports read one consistent snapshot without reserving
+a writer. A writer stalled inside a data transaction can still exhaust another
+call's bounded wait; complete recording is not guaranteed during persistent contention.
+The invocation reports a logging failure to stderr as
 [RDS-USAGE-DEGRADED], naming the start/finish phase, exception type and available
 SQLite error code without printing paths or argument payloads. Its original result
 or exception remains unchanged even if the diagnostic stream is unavailable.
@@ -41,6 +48,26 @@ On Windows the log is `%LOCALAPPDATA%/ResearchDirectionSelector/cli-usage.sqlite
 Other platforms use `~/.local/state/ResearchDirectionSelector/cli-usage.sqlite3`.
 `RDS_USAGE_DB` can select a different file, including an isolated test log. The
 log is independent of project budget/evidence ledgers and is never uploaded.
+
+In a workspace-write sandbox, the default user-state directory may be outside
+the agent's writable roots. If that automatic location cannot be opened or
+written because of permissions or read-only storage, the CLI falls back to
+`<root>/.rds/usage/cli-usage.sqlite3`, including for `--help`. The existing CLI
+resolves the root, using the current directory when omitted; options belonging
+to a wrapped child command do not select it. Start, report and finish use the
+same file. `usage --json` reports the selected `log_path`. Fallback counts
+describe that project-local file only and are not merged with the user-wide log.
+
+An explicit `RDS_USAGE_DB` remains authoritative, even if that selected file is
+unavailable: it does not trigger automatic fallback. The current CLI does not
+recognize `XDG_STATE_HOME`. Busy writers (`SQLITE_BUSY`) and damaged databases
+do not cause fallback. If the automatic location and fallback both fail, the
+`RDS-USAGE-DEGRADED` diagnostic and original command-result preservation still
+apply. Help may create the usage directory, but does not initialize a research
+project or its budget/evidence ledger. Pass the intended `--root`; a successful
+automatic fallback needs no environment-variable workaround.
+
 SQLite transactions support concurrent CLI processes. Storage failures preserve
 the original command's return/exception; usage queries expose unavailable or
-degraded logging. Usage reports can run without creating project state.
+degraded logging. Usage reports can run without initializing project budget or
+evidence state.
