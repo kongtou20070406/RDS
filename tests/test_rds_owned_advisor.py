@@ -631,6 +631,97 @@ class OwnedAdvisorCLITests(unittest.TestCase):
         self.assertEqual(before['budget']['cpu_seconds']['charged_estimate'], 2)
         self.assertEqual(before['budget']['cpu_seconds']['reserved'], 0)
 
+    def test_first_valid_checkpoint_keeps_owned_advice_and_advance_usable(self):
+        self.initialize()
+        before = self.output('advise')
+        self.assertEqual(before['selected_run'], 'baseline')
+        saved = self.output('checkpoint', 'save', '--id', 'first-owned')
+        self.assertEqual(saved['status'], 'SAVED')
+        after = self.output('advise')
+        self.assertEqual(after['status'], 'REVIEWED')
+        self.assertEqual(after['selected_run'], 'baseline')
+        search = next(row['search'] for row in after['recommendations']
+                      if row.get('type') == 'EXECUTABLE_DIRECTION_SEARCH')
+        self.assertEqual(search['loop_review']['flags'], [])
+        completed = self.output('project', 'advance')
+        self.assert_owned_receipt(completed['receipt'], 'baseline', 'SUCCEEDED')
+        self.assertEqual(self.starts(), ['baseline'])
+        self.output('checkpoint', 'save', '--id', 'after-baseline')
+        self.assertEqual(self.output('advise')['selected_run'], 'repair')
+        repaired = self.output('project', 'advance')
+        self.assert_owned_receipt(repaired['receipt'], 'repair', 'SUCCEEDED')
+        self.assertEqual(self.starts(), ['baseline', 'repair'])
+        self.assertEqual(len(self.snapshot()['receipts']), 2)
+        self.assertEqual(self.snapshot()['budget']['cpu_seconds']['charged_estimate'], 2)
+
+    def test_matching_structured_checkpoint_is_reviewed_without_blocking_dispatch(self):
+        self.initialize()
+        advice = self.output('advise')
+        context = advice['context']
+        search = next(row['search'] for row in advice['recommendations']
+                      if row.get('type') == 'EXECUTABLE_DIRECTION_SEARCH')
+        decision = {'question_id': context['decision']['id'],
+                    'goal_revision': context['decision']['goal_revision'],
+                    'scope': context['decision']['scope'], 'candidate': search['candidates'][0],
+                    'outcome': 'deferred', 'evidence': context['facts']}
+        path = self.write_json('owned-decision.json', decision)
+        self.output('checkpoint', 'save', '--id', 'matching-owned', '--decision', path)
+        after = self.output('advise')
+        search = next(row['search'] for row in after['recommendations']
+                      if row.get('type') == 'EXECUTABLE_DIRECTION_SEARCH')
+        self.assertEqual(search['loop_review']['flags'], [])
+        self.assertEqual(after['selected_run'], 'baseline')
+        self.assert_owned_receipt(self.output('project', 'advance')['receipt'], 'baseline', 'SUCCEEDED')
+        self.assertEqual(self.starts(), ['baseline'])
+
+    def assert_owned_checkpoint_rejected(self, corruption, expected_reason):
+        import sqlite3
+        from rds_advisor import RDSAdvisor
+        from rds_owned_advisor import review
+        self.initialize()
+        self.output('advise')
+        self.output('checkpoint', 'save', '--id', 'bad-owned')
+        before = self.snapshot()
+        with sqlite3.connect(self.root / '.rds/project.sqlite3') as db:
+            db.execute('DROP TRIGGER checkpoint_no_update')
+            if corruption == 'body':
+                db.execute("UPDATE checkpoints SET body='{}' WHERE id='bad-owned'")
+            else:
+                record = json.loads(db.execute("SELECT body FROM checkpoints WHERE id='bad-owned'").fetchone()[0])
+                record['contract_sha256'] = '0' * 64
+                # A correctly hashed body with a foreign contract is still invalid.
+                raw = json.dumps(record, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
+                db.execute("UPDATE checkpoints SET body=?,sha=? WHERE id='bad-owned'",
+                           (raw, hashlib.sha256(raw.encode('utf-8')).hexdigest()))
+        observed = []
+        original = RDSAdvisor._review_loop_history
+
+        def observe_history(advisor, state, context, search):
+            result = original(advisor, state, context, search)
+            observed.append(deepcopy(result))
+            return result
+
+        # Observe the original checker in the owned chain; do not replace its
+        # result or bypass the later candidate-admission rejection.
+        with patch.object(RDSAdvisor, '_review_loop_history', new=observe_history):
+            with self.assertRaisesRegex(ValueError, 'Repair checkpoint integrity'):
+                review(ProjectStore(self.root))
+        flag = next(flag for result in observed for flag in result['flags']
+                    if flag['kind'] == 'LOOP_HISTORY_REVIEW_ERROR')
+        self.assertIn(expected_reason, flag['reason'])
+        for args in (('advise',), ('project', 'advance')):
+            rejected = self.call(*args, ok=False)
+            self.assertEqual(rejected.returncode, 1, rejected.stdout + rejected.stderr)
+            self.assertIn('Repair checkpoint integrity', rejected.stderr)
+        self.assert_uncharged(before)
+        self.assertEqual(self.snapshot()['receipts'], [])
+
+    def test_tampered_owned_checkpoint_still_rejects_without_launch_or_charge(self):
+        self.assert_owned_checkpoint_rejected('body', 'Checkpoint integrity failure')
+
+    def test_nonmatching_owned_checkpoint_still_rejects_without_launch_or_charge(self):
+        self.assert_owned_checkpoint_rejected('contract', 'Checkpoint contract mismatch')
+
     def test_concurrent_advance_cannot_launch_the_same_attempt_twice(self):
         self.initialize('slownegative', mutate_policy=lambda value: value['context'].update(max_candidates=1))
         with ThreadPoolExecutor(max_workers=2) as pool:
